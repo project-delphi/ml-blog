@@ -4,9 +4,9 @@ title: About Me
 permalink: /about/
 ---
 
-This is where you put the contents of your *About* page. Like all your pages, it's in [Markdown](https://guides.github.com/features/mastering-markdown/) format.
+You can find more about me [here](http://project-delphi.github.io/).
 
-This website is powered by **[fastpages](https://github.com/fastai/fastpages)** [^1].
+This blog powered by **[fastpages](https://github.com/fastai/fastpages)** [^1].
 
 
 
