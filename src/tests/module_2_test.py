@@ -1,4 +1,5 @@
 """Placeholder for module 2 tests docstring."""
+
 from utils.module_2 import bye
 
 
