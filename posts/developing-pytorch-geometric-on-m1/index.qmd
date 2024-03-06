@@ -13,9 +13,9 @@ format:
         toc-depth: 2
 ---
 
-TLDR: ~~From my investigations, it seems that apple silicon (and with higher probability M1) is not supported for development of `pyg`. Current blocker is dependence of PyTorch dependency that make use of `oneMKL`, Intel's Math Kernel Library. By contrast Apple uses `mps` Metal Performance Shaders natively, which is not fully implemented in all PyTorch modules.~~
+**TLDR**: ~~From my investigations, it seems that apple silicon (and with higher probability M1) is not supported for development of `pyg`. Current blocker is dependence of PyTorch dependency that make use of `oneMKL`, Intel's Math Kernel Library. By contrast Apple uses `mps` Metal Performance Shaders natively, which is not fully implemented in all PyTorch modules.~~
 
-A pull request made everything easier. Standard developer install should now work with PyTorch with Apple `mps`.
+A pull request made everything easier. Standard developer install and testing should now work with PyTorch with Apple's native GPU compute framework (including BLAS) `mps`.
 
 # Developing Pytorch Geometric on M1 Apple Silicon
 
@@ -24,6 +24,12 @@ A pull request made everything easier. Standard developer install should now wor
 Photo by <a href="https://unsplash.com/@theregisti?utm_content=creditCopyText&utm_medium=referral&utm_source=unsplash">TheRegisti</a> on <a href="https://unsplash.com/photos/a-close-up-of-a-laptop-on-a-table-M_DMDRj0IuQ?utm_content=creditCopyText&utm_medium=referral&utm_source=unsplash">Unsplash</a>
 
 I've started contributing to a Python open source project. Specifically the interesting graph machine learning package [pytorch geometric](https://github.com/pyg-team/pytorch_geometric/) (or pyg). I've forked the repo, and would like to develop code contributions.
+
+As we will see below, the installation process can get involved for Apple Silicon, specifically M1 due to dependencies including C++, MKL, and MPS. We'll go through:
+
+* User Install
+* Non M1 Install
+* M1 Install
 
 ## User Installation
 
@@ -160,7 +166,7 @@ These dependencies are being subsumed into other packages (for example `torch.sc
 
 #### Why is M1 a Problem?
 
-To develop locally, I need a an editable install version of pytorch geometric. This editable install needs additional dependencies (for fuller developer functionality such as testing, type checking, compiling, linting and documentation) some of which depend on `C++` extensions that are not compiled for the M1 architecture. The project founder (@rusty1s) has noted that M1 was not supported from the onset - when github didn't support M1, and there are no plans to support it now. Later Apple Silicon is supported.
+To develop locally, I need a an editable install version of pytorch geometric. This editable install needs additional dependencies (for fuller developer functionality such as testing, type checking, compiling, linting and documentation) some of which depend on `C++` extensions that are not compiled for the M1 architecture. The project founder (@rusty1s) has noted that M1 was not supported from the onset - when github didn't support M1, and there are no plans to support it now. Later Apple Silicon is supported. (As we will see, the differences between MKL and MPS can also cause issues for testing.)
 
 #### The Solution
 
@@ -198,6 +204,8 @@ echo "Chipset: $(sysctl -n machdep.cpu.brand_string)"
 DIR="$HOME/Code/throwaway/pytorch-geometric-developer-install"
 RECENT_TORCH_VERSION=2.2.0
 YOUR_USERNAME="project-delphi"
+MIN_MACOSX_DEPLOYMENT_TARGET=14.2.1
+
 
 mkdir -p "$DIR"
 cd "$DIR"
@@ -221,21 +229,21 @@ else
     sh Miniconda3-latest-MacOSX-arm64.sh -b -u
 fi
 ###### install pytorch ######
-pip install -q --pre torch==$RECENT_TORCH_VERSION torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cpu
+pip install -q --pre torch==$RECENT_TORCH_VERSION torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cpu  > /dev/null 2>&1
 
 
 # install dependencies
 pip install cmake
 pip install ninja wheel
-pip install -q git+https://github.com/pyg-team/pyg-lib.git
-MACOSX_DEPLOYMENT_TARGET=13.1 CC=clang CXX=clang++ python -m pip --no-cache-dir  install  torch-scatter
-MACOSX_DEPLOYMENT_TARGET=13.1 CC=clang CXX=clang++ python -m pip --no-cache-dir  install  torch-sparse
-MACOSX_DEPLOYMENT_TARGET=13.1 CC=clang CXX=clang++ python -m pip --no-cache-dir  install  torch-cluster
-MACOSX_DEPLOYMENT_TARGET=13.1 CC=clang CXX=clang++ python -m pip --no-cache-dir  install  torch-spline-conv
+pip install -q git+https://github.com/pyg-team/pyg-lib.git  > /dev/null 2>&1
+MACOSX_DEPLOYMENT_TARGET=MIN_MACOSX_DEPLOYMENT_TARGET CC=clang CXX=clang++ python -m pip --no-cache-dir  install  torch-scatter
+MACOSX_DEPLOYMENT_TARGET=MIN_MACOSX_DEPLOYMENT_TARGET CC=clang CXX=clang++ python -m pip --no-cache-dir  install  torch-sparse
+MACOSX_DEPLOYMENT_TARGET=MIN_MACOSX_DEPLOYMENT_TARGET CC=clang CXX=clang++ python -m pip --no-cache-dir  install  torch-cluster
+MACOSX_DEPLOYMENT_TARGET=MIN_MACOSX_DEPLOYMENT_TARGET CC=clang CXX=clang++ python -m pip --no-cache-dir  install  torch-spline-conv
 # clone the forked repository
 git clone "https://github.com/pyg-team/pytorch_geometric.git"  2>/dev/null
 cd pytorch_geometric
-MACOSX_DEPLOYMENT_TARGET=13.1 CC=clang CXX=clang++ python -m pip install -q --no-cache-dir -e ".[dev,full]"
+MACOSX_DEPLOYMENT_TARGET=MIN_MACOSX_DEPLOYMENT_TARGET CC=clang CXX=clang++ python -m pip install -q --no-cache-dir -e ".[dev,full]"
 # check
 python --version
 python -c "import torch; print(f'torch version: {torch.__version__}')"
@@ -268,17 +276,78 @@ FAILED test/transforms/test_two_hop.py::test_two_hop - RuntimeError: addmm: comp
 
 Close! It's an issue with the MKL (Intel's Math Kernel Library) and Apple Silicon partial compatibility. So this problem likely persists on all Apple Silicon, and not just `M1`.
 
-Apple has chosen to launch it's own framework called Metal Performance Shaders (`mps`) and unfortunately the `BLAS` support with that is only partial.
+Apple has chosen to launch it's GPU framework called Metal Performance Shaders (`mps`) and unfortunately the `BLAS` support with that is only partial.
 
-## Conclusion
+## Takeaways
 
 Checking with @rusty1s, this is a problem with the type of tensors used in tests. ~~I'm going to work on replacing COO tensors with CSR tensors for testing. A conversation with [chatGPT](https://chat.openai.com/share/999b7857-40bc-41ee-8b50-b3c10ee46283) helped to explain the differences between the two types of tensors.~~
 
-UPDATE: @rusty1s made a pull request that updates testing, accounting for `MKL`.
-
 Also, `MKL` is part of Intel's oneAPI project. It [seems](https://community.intel.com/t5/Intel-oneAPI-Math-Kernel-Library/How-to-use-mkl-on-M2-mac/m-p/1482549) that supporting apple silicon is out of scope at this time.
 
-So, developing `pyg` on recent Apple devices may just not be possible, but running on Apple Silicon is. Well if that is true, there's always the cloud for Apple based developers who want to contribute.
+So, ~~developing `pyg` on recent Apple devices may just not be possible~~, but running on Apple Silicon is. Well if that is true, there's always the cloud for Apple based developers who want to contribute.
+
+**UPDATE**: @rusty1s made a pull request that updates testing, accounting for `MKL`. pytorch-geometric as of now works great.
+
+```{python}
+#| eval: true
+
+%%bash
+# set variables here
+DIR="$HOME/Code/throwaway/pytorch-geometric-developer-install"
+RECENT_TORCH_VERSION=2.2.0
+GITHUB_USERNAME="project-delphi"
+MIN_MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)
+
+mkdir -p "$DIR"
+cd "$DIR"
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -q --upgrade pip
+
+##### TORCH BUILD AND INSTALL ON M1, to use GPUs #####
+pip install -q numpy # to remove user warning with torch install
+pip install -q mpmath==1.3.0 # bugfix
+xcode-select --install  > /dev/null 2>&1 # if xcode not installed
+# install miniconda for apple silicon, if not already installed
+if [ ! -d "$HOME/anaconda3" ] && [ ! -d "$HOME/miniconda3" ]
+then
+    echo "installing conda..."
+    curl -O https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-arm64.sh
+    sh Miniconda3-latest-MacOSX-arm64.sh -b -u
+fi
+###### install pytorch ######
+pip install -q --pre torch==$RECENT_TORCH_VERSION torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cpu
+
+
+# install dev build dependencies
+pip install -q cmake
+pip install -q ninja wheel
+pip install -q git+https://github.com/pyg-team/pyg-lib.git
+MACOSX_DEPLOYMENT_TARGET=$MIN_MACOSX_DEPLOYMENT_TARGET CC=clang CXX=clang++ python -m pip -q --no-cache-dir  install  torch-scatter
+MACOSX_DEPLOYMENT_TARGET=$MIN_MACOSX_DEPLOYMENT_TARGET CC=clang CXX=clang++ python -m pip -q --no-cache-dir  install  torch-sparse
+MACOSX_DEPLOYMENT_TARGET=$MIN_MACOSX_DEPLOYMENT_TARGET CC=clang CXX=clang++ python -m pip -q --no-cache-dir  install  torch-cluster
+MACOSX_DEPLOYMENT_TARGET=$MIN_MACOSX_DEPLOYMENT_TARGET CC=clang CXX=clang++ python -m pip -q --no-cache-dir  install  torch-spline-conv
+
+# clone the forked repository and rebase to original
+git clone "https://github.com/$GITHUB_USERNAME/pytorch_geometric.git"  2>/dev/null
+cd pytorch_geometric
+git remote add upstream "https://github.com/pyg-team/pytorch_geometric"
+git fetch upstream  -q
+git rebase upstream/master
+
+# build dev install
+MACOSX_DEPLOYMENT_TARGET=$MIN_MACOSX_DEPLOYMENT_TARGET CC=clang CXX=clang++ python -m pip install -q --no-cache-dir -e ".[dev,full]"  > /dev/null 2>&1
+
+# check
+python --version
+python -c "import torch; print(f'torch version: {torch.__version__}')"
+python -c "import torch_geometric as pyg; print(f'torch geometric version: {pyg.__version__}')"
+# install missing packages
+pip install -q matplotlib-inline ipython
+pytest -q --tb=no | tail -n 1
+```
+
+Success! As of now it works.
 
 ## References
 
