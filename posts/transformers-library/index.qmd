@@ -1,0 +1,127 @@
+---
+title: "Getting Started with Hugging Face Transformers"
+format: html
+date: "2025-04-06"
+authr: "Ravi Kalia"
+categories: [Machine Learning, NLP]
+---
+
+The Hugging Face `transformers` library is a powerful toolkit for using pretrained models across NLP tasks like classification, summarization, translation, and more.
+
+This post shows how to:
+
+- Run inference using `pipeline()`
+- Fine-tune a model using the `Trainer` API
+
+## Installation
+
+```bash
+pip install transformers datasets evaluate
+```
+
+## Inference Examples
+
+```{python}
+#1. Sentiment Analysis
+
+from transformers import pipeline
+
+classifier = pipeline("sentiment-analysis")
+print(classifier("I love this library!"))
+# [{'label': 'POSITIVE', 'score': 0.999...}]
+
+#2. Text Generation
+generator = pipeline("text-generation", model="gpt2")
+print(generator("The future of AI is", max_length=30, num_return_sequences=1))
+
+#3. Summarization
+summarizer = pipeline("summarization")
+text = "Hugging Face’s Transformers library lets you use powerful pre-trained models for a wide range of NLP tasks with minimal setup."
+print(summarizer(text))
+
+#4. Translation
+translator = pipeline("translation_en_to_fr")
+print(translator("I like pizza.", max_length=40))
+
+#5. Named Entity Recognition (NER)
+ner = pipeline("ner", grouped_entities=True)
+print(ner("Hugging Face is based in New York City."))
+
+#6. Zero-Shot Classification
+
+classifier = pipeline("zero-shot-classification")
+print(classifier("I want to book a flight.", candidate_labels=["travel", "finance", "education"]))
+```
+
+## Fine-Tuning a Transformer for Binary Classification
+
+Let’s fine-tune `distilbert-base-uncased` on the IMDb dataset using the Trainer API.
+
+```{python}
+from datasets import load_dataset
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    TrainingArguments,
+    Trainer,
+)
+import evaluate
+
+# Load a small IMDb split
+dataset = load_dataset("imdb", split="train[:1%]").train_test_split(test_size=0.2)
+
+# Tokenization
+tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+
+
+def tokenize(example):
+    return tokenizer(example["text"], truncation=True, padding=True)
+
+
+tokenized = dataset.map(tokenize, batched=True)
+
+# Load model
+model = AutoModelForSequenceClassification.from_pretrained(
+    "distilbert-base-uncased", num_labels=2
+)
+
+# Evaluation metric
+accuracy = evaluate.load("accuracy")
+
+
+def compute_metrics(eval_pred):
+    logits, labels = eval_pred
+    preds = logits.argmax(axis=1)
+    return accuracy.compute(predictions=preds, references=labels)
+
+
+# Training setup
+args = TrainingArguments(
+    output_dir="./results",
+    evaluation_strategy="epoch",
+    per_device_train_batch_size=4,
+    num_train_epochs=3,
+    logging_steps=10,
+)
+
+# Initialize Trainer
+trainer = Trainer(
+    model=model,
+    args=args,
+    train_dataset=tokenized["train"],
+    eval_dataset=tokenized["test"],
+    compute_metrics=compute_metrics,
+)
+
+# Train the model
+trainer.train()
+```
+
+
+## Summary
+
+*	`pipeline()` is the easiest way to use transformers for inference.
+*	For training, Trainer makes fine-tuning on datasets like IMDb accessible with minimal code.
+*	All models are backed by Hugging Face’s hub: https://huggingface.co/models
+
+Let me know if you’d like a version for text generation or token classification!

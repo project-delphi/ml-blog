@@ -1,0 +1,110 @@
+---
+title: "Parameter-Efficient Fine-Tuning with Hugging Face's peft Library"
+format: html
+date: "2025-04-06"
+author: "Ravi Kalia"
+---
+
+The `peft` library from Hugging Face enables efficient fine-tuning of large language models by updating only a small subset of parameters. This is essential for working with billion-parameter models on limited compute. 
+
+## Motivation
+
+Full fine-tuning of large models is expensive in terms of memory and compute. `peft` provides efficient alternatives by freezing the majority of model parameters and introducing a small number of trainable components.
+
+## Overview of Methods
+
+The library implements several parameter-efficient fine-tuning (PEFT) techniques:
+
+| Method           | Description                                                                 |
+|------------------|-----------------------------------------------------------------------------|
+| LoRA             | Injects trainable low-rank matrices into attention and feedforward layers. |
+| Prefix Tuning    | Prepends learnable vectors to the hidden states inside each transformer layer. |
+| Prompt Tuning    | Adds learned embeddings to the input embedding sequence.                   |
+| IA³              | Scales keys, values, and FFN outputs with learned vectors.                 |
+
+All methods aim to reduce the number of trainable parameters while maintaining or improving downstream task performance.
+
+## Architecture and Usage
+
+`peft` wraps Hugging Face `transformers` models. A common usage pattern:
+
+```{python}
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import get_peft_model, LoraConfig, TaskType
+
+model = AutoModelForCausalLM.from_pretrained("gpt2")
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+
+peft_config = LoraConfig(
+    task_type=TaskType.CAUSAL_LM,
+    inference_mode=False,
+    r=8,
+    lora_alpha=16,
+    lora_dropout=0.1
+)
+
+model = get_peft_model(model, peft_config)
+model.print_trainable_parameters()
+```
+
+This only trains the LoRA adapters while freezing the rest of the model.
+
+Comparison with Soft Prompting
+
+Soft prompting, also known as prompt tuning, optimizes a set of continuous embeddings that are prepended to the input sequence. These embeddings are learned while the base model remains frozen.
+
+In peft, soft prompts are implemented via `PromptTuningConfig`:
+
+```{python}
+from peft import PromptTuningConfig
+
+config = PromptTuningConfig(
+    task_type=TaskType.CAUSAL_LM,
+    num_virtual_tokens=10,
+    tokenizer_name_or_path="gpt2"
+)
+```
+
+The learned prompt embeddings are concatenated with the input embeddings before being passed into the frozen model.
+
+LoRA and prompt tuning can be viewed as operating at different points in the model:
+	•	Prompt tuning: Adds trainable embeddings to the input.
+	•	LoRA: Adds low-rank parameter updates inside the transformer blocks, modifying key, value, and projection matrices during the forward pass.
+
+Comparison Table
+
+Feature	Soft Prompting	LoRA
+Trainable	Prompt embeddings	Low-rank adapters
+Model layers	Input embeddings	Attention and FFN layers
+Memory usage	Extremely low	Still efficient, but larger than prompts
+Implementation	Prepends embeddings	Modifies linear layers during forward
+
+Object Interactions
+
+`peft` wraps a pretrained model and modifies its behavior through:
+	•	Configuration objects like LoraConfig or PromptTuningConfig
+	•	Wrappers inserted by get_peft_model() that modify the model’s forward pass
+	•	New trainable parameters (lora_A, lora_B, or prompt_embeddings) added to the model
+
+In LoRA, each modified layer behaves like:
+
+```{.python}
+W_eff = W + ΔW
+ΔW = lora_B @ lora_A  # trainable
+```
+
+Only lora_A and lora_B are optimized during training.
+
+Installation
+
+To install the library:
+
+```bash
+pip install peft
+```
+
+Final Notes
+
+The `peft` library abstracts away much of the complexity of integrating PEFT methods into standard Hugging Face workflows. Whether using prompt tuning for simple adapters or LoRA for deeper changes, the interface remains consistent and efficient.
+
+Let me know if you want to add plots or show how to visualize the number of trainable parameters.

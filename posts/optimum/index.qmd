@@ -1,0 +1,135 @@
+---
+title: "Accelerating Transformers with Hugging Face Optimum"
+author: "Ravi Kalia"
+date: "2025-04-06"
+format:
+  html:
+    code-fold: true
+    toc: true
+    toc-location: left
+categories: [machine learning, huggingface, optimization]
+---
+
+> Hugging Face's `optimum` library makes it *easy* to accelerate, quantize, and deploy transformer models on CPUs, GPUs, and inference accelerators. Here's how to get started.
+
+## What is `optimum`?
+
+Hugging Face `optimum` is a toolkit for optimizing `transformers` models using backends like ONNX Runtime, OpenVINO, and TensorRT. You can use it for:
+
+- Faster inference via ONNX and hardware acceleration
+- Smaller models using INT8 or FP16 quantization
+- Training with optimization-aware tools
+- Easy deployment to CPUs, GPUs, and custom silicon
+
+## Installation
+
+Install with ONNX Runtime support:
+
+```bash
+pip install optimum[onnxruntime] onnx
+```
+If you want to quantize with Intel Neural Compressor:
+```bash
+pip install neural-compressor
+```
+## Export a Model to ONNX
+
+```{python}
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from optimum.onnxruntime import ORTModelForSequenceClassification
+from optimum.exporters.onnx import main_export
+
+# Export model using Optimum's CLI function
+main_export(
+    model_name_or_path="bert-base-uncased",
+    output="onnx/bert",
+    task="text-classification"
+)
+```
+
+## Load Exported Model
+
+```{python}
+model = ORTModelForSequenceClassification.from_pretrained("onnx/bert")
+tokenizer = AutoTokenizer.from_pretrained("onnx/bert")
+```
+## Inference with ONNX Runtime
+
+```{python}
+from transformers import pipeline
+from optimum.onnxruntime import ORTModelForSequenceClassification
+from transformers import AutoTokenizer
+
+model = ORTModelForSequenceClassification.from_pretrained("onnx/bert")
+tokenizer = AutoTokenizer.from_pretrained("onnx/bert")
+
+pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
+pipe("This is amazing!")
+```
+
+Note: Use "text-classification" instead of "sentiment-analysis" for ONNX.
+
+## Quantize with INT8
+
+```{.python}
+from transformers import AutoTokenizer
+from optimum.exporters.onnx import main_export
+
+main_export(
+    model_name_or_path="bert-base-uncased",
+    output="onnx/bert",
+    task="text-classification"
+)
+
+import onnx
+import onnxruntime as ort
+from transformers import AutoTokenizer
+from onnxruntime import GraphOptimizationLevel, InferenceSession
+
+# Load model and tokenizer
+model_path = "onnx/bert/onnx_model.onnx"
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+
+# Apply Dynamic Quantization
+onnx_model = onnx.load(model_path)
+quantized_model_path = "onnx/bert-quantized.onnx"
+
+# Quantize model using ONNX Runtime (dynamic quantization)
+from onnxruntime import GraphOptimizationLevel
+
+# Define session options for optimization
+sess_options = ort.SessionOptions()
+sess_options.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_EXTENDED
+
+# Save quantized model
+onnx.save(onnx_model, quantized_model_path)
+
+# Load the quantized model
+session = InferenceSession(quantized_model_path, sess_options)
+print("Quantized model loaded successfully")
+
+# Prepare inputs
+inputs = tokenizer("This is amazing!", return_tensors="pt")
+input_ids = inputs["input_ids"].numpy()
+
+# Run inference with the quantized model
+outputs = session.run(None, {"input_ids": input_ids})
+print(outputs)
+```
+
+Static quantization requires a calibration dataset. Use approach="dynamic" if you want to skip that.
+
+📌 Notes & Tips
+	•	optimum supports models from Hugging Face Hub (from_pretrained)
+	•	Targets include:
+	•	CPUs (ONNX Runtime, OpenVINO)
+	•	GPUs (ONNX Runtime, TensorRT)
+	•	AWS Inferentia (optimum-neuron)
+	•	Pipeline tasks supported: text-classification, token-classification, question-answering, etc.
+	•	You can benchmark using:
+
+`optimum-cli` benchmark `onnx/bert --task text-classification`
+
+## Summary
+
+optimum makes it practical to get real-world performance gains without leaving the Hugging Face ecosystem. Whether you’re optimizing for latency, size, or deployment compatibility, it’s a powerful addition to your ML toolbox.
