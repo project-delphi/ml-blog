@@ -18,6 +18,8 @@ A personal ML/data blog ("Synthetic Musings") built with [Quarto](https://quarto
 
 **Posts are independent, dependency-isolated documents.** `pyproject.toml`'s dependencies are only dev/lint tooling (black, ruff, mypy, jupyter, etc.) — no numpy/sklearn/torch/etc. Any post with real compute dependencies gets its own dedicated virtualenv at the repo root (gitignored, e.g. `.venv-tda`, `.venv-tda-svm`), registered as a **named Jupyter kernel** (`python -m ipykernel install --user --name <kernel-name>`), and the post's frontmatter pins execution to it via `jupyter: <kernel-name>`. When adding a new code-heavy post: create `.venv-<slug>`, `pip install` only what that post needs, register the kernel, set `jupyter: <kernel-name>` in frontmatter, and render/execute through that venv specifically.
 
+For posts that only *display* code (all cells `#| eval: false`, nothing actually executes — e.g. `posts/langgraph-vs-llamaindex`), a dedicated venv is unnecessary; they pin `jupyter: blog-base`, a shared kernel over the base `.venv` (`make venv && make install`, then `python -m ipykernel install --user --name blog-base`). Quarto still needs *some* working kernel to structurally process `{python}` cells even when nothing runs, so register `blog-base` once before rendering this kind of post on a fresh clone.
+
 **Frontmatter conventions** (see any existing post for a template):
 ```yaml
 title: "..."
