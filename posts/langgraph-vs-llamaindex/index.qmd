@@ -27,37 +27,58 @@ This post builds the router twice — once in each framework — then raises the
 
 ## What an LLM Agent Actually Is
 
-Before comparing two concrete frameworks, it's worth being precise about what "agent" means, because the LLM itself does surprisingly little. A language model is a **stateless, text-in/text-out function**: give it a prompt, it gives back a completion, and it has no memory of having done so a moment ago.
+Before comparing two concrete frameworks, it's worth being precise about what "agent" means, because the LLM itself does surprisingly little. A language model is a **stateless function from a message sequence to one new message**: hand it the conversation so far, it returns the next assistant message — which is either a final answer or a request to call a tool. It has no memory of having been called a moment ago, and it never *executes* anything; it only ever emits text.
 
 ```{python}
 #| eval: false
-class LLM:
-    """A stateless model call. No memory between invocations."""
+@dataclass
+class Message:
+    role: str        # "system" | "user" | "assistant" | "tool"
+    content: str
+    tool_call: dict | None = None   # e.g. {"name": "lookup_refund", "args": {...}}
 
-    def complete(self, prompt: str) -> str:
-        ...  # one forward pass, one string back
+
+class LLM:
+    """Stateless: a sequence of messages in, ONE new message out."""
+
+    def chat(self, messages: list[Message]) -> Message:
+        ...  # one forward pass; the model never executes anything itself
 ```
 
-Everything that makes a system feel like an "agent" — deciding what to do next, remembering earlier turns, calling a tool, retrying, escalating — is orchestration code sitting *around* that one function. Stripped to its essence, an agent is a loop with three moving parts: something that builds a prompt from the model's current context, something that interprets the model's output as a decision, and something that carries state from one call to the next so the next prompt can be built with full context.
+An **agent** is the deterministic machinery wrapped around that stochastic call. Concretely, it's a class holding four things — a growing **message sequence** (the conversation transcript, which *is* the model's only memory), any extra **state** the task needs, a registry of **tools** the model is allowed to request, and a **stop condition** with a max-turn cap so the loop provably terminates. Its `run` method is a plain deterministic loop: the only nondeterminism anywhere is inside `llm.chat`; everything else — append, dispatch, check, repeat — is ordinary code you could unit-test with a mocked model.
 
 ```{python}
 #| eval: false
 class Agent:
-    """The orchestration loop wrapped around a stateless LLM."""
+    """Deterministic loop around a stochastic LLM call."""
 
-    def __init__(self, llm: LLM):
+    def __init__(self, llm: LLM, tools: dict[str, Callable], max_turns: int = 10):
         self.llm = llm
-        self.state: dict = {}
+        self.tools = tools                  # name -> callable the agent may run
+        self.messages: list[Message] = []   # the transcript IS the memory
+        self.state: dict = {}               # task state beyond the transcript
+        self.max_turns = max_turns
 
-    def step(self, observation: str) -> str:
-        prompt = self.build_prompt(observation, self.state)
-        raw = self.llm.complete(prompt)
-        action = self.interpret(raw)           # e.g. "route to billing"
-        self.state = self.update_state(self.state, action)
-        return action
+    def run(self, user_input: str) -> Message:
+        self.messages.append(Message(role="user", content=user_input))
+
+        for _ in range(self.max_turns):
+            reply = self.llm.chat(self.messages)   # the ONLY stochastic step
+            self.messages.append(reply)
+
+            if self.is_done(reply):                # stop condition: no tool
+                return reply                       # requested -> final answer
+
+            result = self.tools[reply.tool_call["name"]](**reply.tool_call["args"])
+            self.messages.append(Message(role="tool", content=str(result)))
+
+        return self.escalate()                     # max turns hit: fail safely
+
+    def is_done(self, reply: Message) -> bool:
+        return reply.tool_call is None
 ```
 
-Nothing in that sketch is specific to LangGraph or LlamaIndex — it's the shape underneath a hand-rolled `while` loop, a single `if/else` chain, or a full graph framework alike. What actually differs between frameworks is how `self.state` is modeled (one shared dict vs. typed messages passed between handlers) and how the "what happens next" decision is structured (declared edges vs. inferred from types). That's precisely the axis the rest of this post walks through, on one concrete agent.
+Nothing in that sketch is specific to LangGraph or LlamaIndex — every agent framework is selling you some arrangement of those same four ingredients plus that same loop. Where they genuinely differ is in how each ingredient is modeled: is the message sequence one shared mutable list or typed payloads passed between handlers? Is "what happens next" a declared edge in a graph or inferred from type annotations? Is the stop condition a special `END` node or a sentinel event? That's precisely the axis the rest of this post walks through, on one concrete agent — and the reply-cap requirement added halfway down is nothing more than `max_turns` showing up as a business rule.
 
 ## The Agent, Stated Once
 
