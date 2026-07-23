@@ -240,37 +240,58 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </section>
 <section id="what-an-llm-agent-actually-is" class="level2">
 <h2 class="anchored" data-anchor-id="what-an-llm-agent-actually-is">What an LLM Agent Actually Is</h2>
-<p>Before comparing two concrete frameworks, it’s worth being precise about what “agent” means, because the LLM itself does surprisingly little. A language model is a <strong>stateless, text-in/text-out function</strong>: give it a prompt, it gives back a completion, and it has no memory of having done so a moment ago.</p>
-<div id="cfd4b06f" class="cell" data-execution_count="1">
+<p>Before comparing two concrete frameworks, it’s worth being precise about what “agent” means, because the LLM itself does surprisingly little. A language model is a <strong>stateless function from a message sequence to one new message</strong>: hand it the conversation so far, it returns the next assistant message — which is either a final answer or a request to call a tool. It has no memory of having been called a moment ago, and it never <em>executes</em> anything; it only ever emits text.</p>
+<div id="e9fc6c96" class="cell" data-execution_count="1">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> LLM:</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""A stateless model call. No memory between invocations."""</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> complete(<span class="va">self</span>, prompt: <span class="bu">str</span>) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>        ...  <span class="co"># one forward pass, one string back</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="at">@dataclass</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Message:</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    role: <span class="bu">str</span>        <span class="co"># "system" | "user" | "assistant" | "tool"</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>    content: <span class="bu">str</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    tool_call: <span class="bu">dict</span> <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span>   <span class="co"># e.g. {"name": "lookup_refund", "args": {...}}</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> LLM:</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""Stateless: a sequence of messages in, ONE new message out."""</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> chat(<span class="va">self</span>, messages: <span class="bu">list</span>[Message]) <span class="op">-&gt;</span> Message:</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>        ...  <span class="co"># one forward pass; the model never executes anything itself</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 </div>
-<p>Everything that makes a system feel like an “agent” — deciding what to do next, remembering earlier turns, calling a tool, retrying, escalating — is orchestration code sitting <em>around</em> that one function. Stripped to its essence, an agent is a loop with three moving parts: something that builds a prompt from the model’s current context, something that interprets the model’s output as a decision, and something that carries state from one call to the next so the next prompt can be built with full context.</p>
-<div id="050026dc" class="cell" data-execution_count="2">
+<p>An <strong>agent</strong> is the deterministic machinery wrapped around that stochastic call. Concretely, it’s a class holding four things — a growing <strong>message sequence</strong> (the conversation transcript, which <em>is</em> the model’s only memory), any extra <strong>state</strong> the task needs, a registry of <strong>tools</strong> the model is allowed to request, and a <strong>stop condition</strong> with a max-turn cap so the loop provably terminates. Its <code>run</code> method is a plain deterministic loop: the only nondeterminism anywhere is inside <code>llm.chat</code>; everything else — append, dispatch, check, repeat — is ordinary code you could unit-test with a mocked model.</p>
+<div id="cc8dce97" class="cell" data-execution_count="2">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Agent:</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""The orchestration loop wrapped around a stateless LLM."""</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""Deterministic loop around a stochastic LLM call."""</span></span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, llm: LLM):</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, llm: LLM, tools: <span class="bu">dict</span>[<span class="bu">str</span>, Callable], max_turns: <span class="bu">int</span> <span class="op">=</span> <span class="dv">10</span>):</span>
 <span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.llm <span class="op">=</span> llm</span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.state: <span class="bu">dict</span> <span class="op">=</span> {}</span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> step(<span class="va">self</span>, observation: <span class="bu">str</span>) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
-<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>        prompt <span class="op">=</span> <span class="va">self</span>.build_prompt(observation, <span class="va">self</span>.state)</span>
-<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>        raw <span class="op">=</span> <span class="va">self</span>.llm.complete(prompt)</span>
-<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>        action <span class="op">=</span> <span class="va">self</span>.interpret(raw)           <span class="co"># e.g. "route to billing"</span></span>
-<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.state <span class="op">=</span> <span class="va">self</span>.update_state(<span class="va">self</span>.state, action)</span>
-<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> action</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.tools <span class="op">=</span> tools                  <span class="co"># name -&gt; callable the agent may run</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.messages: <span class="bu">list</span>[Message] <span class="op">=</span> []   <span class="co"># the transcript IS the memory</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.state: <span class="bu">dict</span> <span class="op">=</span> {}               <span class="co"># task state beyond the transcript</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.max_turns <span class="op">=</span> max_turns</span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> run(<span class="va">self</span>, user_input: <span class="bu">str</span>) <span class="op">-&gt;</span> Message:</span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.messages.append(Message(role<span class="op">=</span><span class="st">"user"</span>, content<span class="op">=</span>user_input))</span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> _ <span class="kw">in</span> <span class="bu">range</span>(<span class="va">self</span>.max_turns):</span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>            reply <span class="op">=</span> <span class="va">self</span>.llm.chat(<span class="va">self</span>.messages)   <span class="co"># the ONLY stochastic step</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>            <span class="va">self</span>.messages.append(reply)</span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="va">self</span>.is_done(reply):                <span class="co"># stop condition: no tool</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>                <span class="cf">return</span> reply                       <span class="co"># requested -&gt; final answer</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>            result <span class="op">=</span> <span class="va">self</span>.tools[reply.tool_call[<span class="st">"name"</span>]](<span class="op">**</span>reply.tool_call[<span class="st">"args"</span>])</span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>            <span class="va">self</span>.messages.append(Message(role<span class="op">=</span><span class="st">"tool"</span>, content<span class="op">=</span><span class="bu">str</span>(result)))</span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="va">self</span>.escalate()                     <span class="co"># max turns hit: fail safely</span></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> is_done(<span class="va">self</span>, reply: Message) <span class="op">-&gt;</span> <span class="bu">bool</span>:</span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> reply.tool_call <span class="kw">is</span> <span class="va">None</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 </div>
-<p>Nothing in that sketch is specific to LangGraph or LlamaIndex — it’s the shape underneath a hand-rolled <code>while</code> loop, a single <code>if/else</code> chain, or a full graph framework alike. What actually differs between frameworks is how <code>self.state</code> is modeled (one shared dict vs.&nbsp;typed messages passed between handlers) and how the “what happens next” decision is structured (declared edges vs.&nbsp;inferred from types). That’s precisely the axis the rest of this post walks through, on one concrete agent.</p>
+<p>Nothing in that sketch is specific to LangGraph or LlamaIndex — every agent framework is selling you some arrangement of those same four ingredients plus that same loop. Where they genuinely differ is in how each ingredient is modeled: is the message sequence one shared mutable list or typed payloads passed between handlers? Is “what happens next” a declared edge in a graph or inferred from type annotations? Is the stop condition a special <code>END</code> node or a sentinel event? That’s precisely the axis the rest of this post walks through, on one concrete agent — and the reply-cap requirement added halfway down is nothing more than <code>max_turns</code> showing up as a business rule.</p>
 </section>
 <section id="the-agent-stated-once" class="level2">
 <h2 class="anchored" data-anchor-id="the-agent-stated-once">The Agent, Stated Once</h2>
@@ -287,7 +308,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="the-state-schema" class="level3">
 <h3 class="anchored" data-anchor-id="the-state-schema">The state schema</h3>
 <p>LangGraph starts by declaring a <code>TypedDict</code> — the single object every node reads from and writes a partial update to:</p>
-<div id="0d361392" class="cell" data-execution_count="3">
+<div id="ef48f0c7" class="cell" data-execution_count="3">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> State(TypedDict):</span>
@@ -305,7 +326,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </details>
 </div>
 <p>Every node signature is the same shape: <code>State in, partial-dict update out</code>. There’s no separate concept of “what does this node need” beyond “which keys of <code>State</code> does it read” — the whole graph shares one namespace.</p>
-<div id="dd1b1f4b" class="cell" data-execution_count="4">
+<div id="543ea08b" class="cell" data-execution_count="4">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> classify(state: State) <span class="op">-&gt;</span> <span class="bu">dict</span>:</span>
@@ -331,7 +352,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="conditional-edges" class="level3">
 <h3 class="anchored" data-anchor-id="conditional-edges">Conditional edges</h3>
 <p>Routing is declared, not written as an <code>if/else</code> inside a node:</p>
-<div id="99a95fcd" class="cell" data-execution_count="5">
+<div id="68f75f64" class="cell" data-execution_count="5">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>builder.add_conditional_edges(</span>
@@ -370,7 +391,7 @@ flowchart LR
 <section id="events-as-the-wires-between-steps" class="level3">
 <h3 class="anchored" data-anchor-id="events-as-the-wires-between-steps">Events as the wires between steps</h3>
 <p>LlamaIndex has no graph object to build. Instead, custom <code>Event</code> subclasses describe the payloads that move between steps:</p>
-<div id="42f9d047" class="cell" data-execution_count="6">
+<div id="616f5ec2" class="cell" data-execution_count="6">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> RoutedEvent(Event):</span>
@@ -383,7 +404,7 @@ flowchart LR
 </details>
 </div>
 <p>A <code>@step</code> method declares what it consumes and what it returns in its type signature — that’s the entire wiring mechanism. There’s no separate <code>builder.add_edge(...)</code> call anywhere; the framework infers the graph from which steps consume which event types.</p>
-<div id="de56891d" class="cell" data-execution_count="7">
+<div id="dcc20dc9" class="cell" data-execution_count="7">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> EmailRouterWorkflow(Workflow):</span>
@@ -418,7 +439,7 @@ flowchart LR
 <section id="the-context-store" class="level3">
 <h3 class="anchored" data-anchor-id="the-context-store">The Context store</h3>
 <p><code>email</code> has to survive from <code>classify</code> to <code>retrieve</code> to <code>draft</code>, but it isn’t part of any event payload after <code>classify</code> emits <code>RoutedEvent</code>. <code>ctx.store</code> is the escape hatch — a plain async key-value store scoped to the running workflow, for exactly this kind of “not really an event, just some state I need later” data:</p>
-<div id="ff8260e7" class="cell" data-execution_count="8">
+<div id="8a156559" class="cell" data-execution_count="8">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="at">@step</span></span>
@@ -471,7 +492,7 @@ flowchart LR
 <section id="langgraph-v2-a-new-node-in-front-of-the-old-one" class="level3">
 <h3 class="anchored" data-anchor-id="langgraph-v2-a-new-node-in-front-of-the-old-one">LangGraph v2: a new node in front of the old one</h3>
 <p>The state schema grows a message list (with a reducer), a reply counter, and escalation fields:</p>
-<div id="534ccb8c" class="cell" data-execution_count="9">
+<div id="65a44535" class="cell" data-execution_count="9">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> State(TypedDict, total<span class="op">=</span><span class="va">False</span>):</span>
@@ -485,7 +506,7 @@ flowchart LR
 </div>
 <p><code>Annotated[list[BaseMessage], add_messages]</code> is a <strong>reducer</strong>: instead of a node’s return value replacing <code>state["messages"]</code>, LangGraph appends to it. That’s the graph declaring, once, how updates to this field should merge — every node can just return <code>{"messages": [new_message]}</code> without knowing or caring about the existing list.</p>
 <p>The reply-cap check becomes a new node, <code>gate</code>, wired in <em>before</em> the original entry point:</p>
-<div id="54c31a82" class="cell" data-execution_count="10">
+<div id="eb070d2c" class="cell" data-execution_count="10">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> gate(state: State) <span class="op">-&gt;</span> <span class="bu">dict</span>:</span>
@@ -500,7 +521,7 @@ flowchart LR
 </details>
 </div>
 <p><code>gate</code> does no work — its only job is to give <code>route_gate</code>’s conditional edge a node to attach to. The original <code>classify</code> node is otherwise untouched, aside from one guard so it doesn’t re-classify a thread that’s already been routed:</p>
-<div id="60fda39a" class="cell" data-execution_count="11">
+<div id="57895927" class="cell" data-execution_count="11">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> classify(state: State) <span class="op">-&gt;</span> <span class="bu">dict</span>:</span>
@@ -511,7 +532,7 @@ flowchart LR
 </details>
 </div>
 <p>Cross-invocation persistence — remembering <code>reply_count</code> and <code>department</code> from one <code>graph.invoke()</code> to the next — is handled by compiling with a checkpointer and passing a <code>thread_id</code>:</p>
-<div id="b7498b52" class="cell" data-execution_count="12">
+<div id="0070aafd" class="cell" data-execution_count="12">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>graph <span class="op">=</span> builder.<span class="bu">compile</span>(checkpointer<span class="op">=</span>MemorySaver())</span>
@@ -549,7 +570,7 @@ flowchart LR
 <section id="llamaindex-v2-the-old-step-absorbs-the-new-logic" class="level3">
 <h3 class="anchored" data-anchor-id="llamaindex-v2-the-old-step-absorbs-the-new-logic">LlamaIndex v2: the old step absorbs the new logic</h3>
 <p>LlamaIndex has no separate “graph” to insert a node into. The natural entry point for a workflow is whichever step consumes <code>StartEvent</code> — and there was already exactly one of those (<code>classify</code>). So the reply-cap logic doesn’t get a new node in front; it gets folded into the entry step itself, renamed <code>intake</code>:</p>
-<div id="5ab98dad" class="cell" data-execution_count="13">
+<div id="246deade" class="cell" data-execution_count="13">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> EmailThreadWorkflow(Workflow):</span>
@@ -582,7 +603,7 @@ flowchart LR
 </div>
 <p>The return type <code>RoutedEvent | EscalateEvent</code> — a plain Python union — is what makes this a branching step: LlamaIndex infers from the annotation that <code>intake</code> can lead to either <code>retrieve</code> (which consumes <code>RoutedEvent</code>) or a new <code>escalate</code> step (which consumes <code>EscalateEvent</code>). No separate branch table to populate; the type checker’s union <em>is</em> the branch declaration.</p>
 <p>Persistence across <code>wf.run()</code> calls needs no framework-level concept like a checkpointer at all — it’s just Python object reuse. The same <code>Context</code> instance is passed into every call for a given customer:</p>
-<div id="903da4c3" class="cell" data-execution_count="14">
+<div id="44c4073f" class="cell" data-execution_count="14">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>wf <span class="op">=</span> EmailThreadWorkflow(timeout<span class="op">=</span><span class="dv">120</span>, verbose<span class="op">=</span><span class="va">False</span>)</span>
