@@ -1,0 +1,906 @@
+---
+title: "Training vs. Calibrating Epidemiological Models: A First-Principles Guide"
+subtitle: "Why fitting curves isn't enough when forecasting disease dynamics"
+author: "Ravi Kalia"
+date: "2026-07-23"
+categories: [Epidemiology, Machine Learning, Mathematical Modeling, SIR Models, Calibration, Python]
+image: "./cover.png"
+tags: [SIR, calibration, maximum-likelihood, uncertainty, forecasting, negative-binomial]
+jupyter: sir-blog
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: show
+    self-contained: true
+    number-sections: true
+    theme: cosmo
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+![Training vs. Calibrating Epidemiological Models](./cover.png)
+
+If you come from machine learning, "fit the model to the data" is second nature: pick a loss, run an optimizer, check the validation score. Mechanistic epidemiology quietly breaks that reflex. You can fit an epidemic curve almost perfectly and still produce a forecast that is not just inaccurate but *wrong about the underlying disease* — wrong reproduction number, wrong peak, wrong final size — while reporting no uncertainty at all.
+
+This post builds the distinction between **training** and **calibration** from first principles, using the classic Susceptible–Infected–Recovered (SIR) model. Everything runs top to bottom; the only dependencies are `numpy`, `scipy`, `pandas`, `matplotlib`, and `seaborn`.
+
+::: {.callout-note}
+## What you'll take away
+
+- Why parameter estimation ("training") is *not* sufficient for reliable epidemic forecasting.
+- What **calibration** actually means for a mechanistic model — and why it's a different task, not a fancier fit.
+- Why modeling **uncertainty** matters as much as fitting the mean trajectory.
+- Why **temporal** validation is the only honest validation for forecasting, and why k-fold cross-validation quietly cheats.
+- How training and calibration **complement** each other in real epidemic forecasting.
+:::
+
+```{python}
+#| label: setup
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.integrate import solve_ivp
+from scipy.optimize import minimize
+from scipy.stats import nbinom, norm
+
+sns.set_theme(style="whitegrid", context="notebook")
+plt.rcParams.update({
+    "figure.dpi": 140,
+    "savefig.dpi": 140,
+    "font.size": 11,
+    "axes.titlesize": 13,
+    "axes.titleweight": "bold",
+    "axes.labelsize": 11,
+    "legend.frameon": True,
+    "figure.autolayout": True,
+})
+
+# A single random generator so every stochastic step is reproducible.
+RNG = np.random.default_rng(7)
+
+# Consistent colours across every figure.
+C_TRUTH = "#111111"      # latent (unobservable) epidemic
+C_OBS = "#4A3AA7"        # observed surveillance data
+C_TRAIN = "#D1495B"      # trained (MSE) model
+C_CALIB = "#2A9D8F"      # calibrated (MLE) model
+```
+
+# Why "good fit" doesn't mean good forecasts
+
+Imagine two teams handed the same 35 days of case counts from a new outbreak. Team A fits a flexible curve — a spline, a gradient-boosted regressor, whatever minimizes error. Team B fits a mechanistic SIR model. Both match the historical data beautifully. Then you ask the only question that matters: *when does this peak, and how big does it get?*
+
+The two forecasts diverge wildly. Worse, **two mechanistic fits can agree on the past and still disagree on the future**, because early epidemic data is dominated by exponential growth, and during exponential growth many different disease parameters produce nearly identical curves. The data you have simply doesn't pin down the parameters you need.
+
+That is the crux. Fitting is about *reproducing observed data*. Forecasting a mechanistic system is about *recovering the process that generated it* — including the messy layer of how cases get counted, and how much you should trust any single number. Those are different jobs. In this post:
+
+- **Training** means finding point estimates of the dynamical parameters that minimize a prediction error (here, mean squared error). It answers "*what curve fits?*"
+- **Calibration** means fitting the *full generative model* — the dynamics *and* the observation process *and* its noise — by maximum likelihood, so predictions arrive as **distributions** with quantifiable uncertainty. It answers "*what process, with what plausible variation, could have produced this?*"
+
+::: {.callout-note}
+## The difference, at three lengths
+
+**Paragraph.** Calibration and training are both loops that adjust numbers until a model matches data; they differ in how much of the data-generating story you build in. In calibration you commit to the SIR equations up front on epidemiological grounds and estimate a few interpretable quantities — β, γ, maybe I₀, plus how cases get reported and how noisy the counts are — by repeatedly solving the ODEs and comparing to observations; success means plausible, identifiable parameters *with honest uncertainty*, and because the mechanism is real you can extrapolate past what you've seen. Training is the machine-learning reflex pointed at the same data: pick a loss, minimize prediction error, guard against overfitting with validation splits, and judge success purely by out-of-sample accuracy — at its purest the functional form itself is learned, and even when you aim it at the SIR parameters it skips the reporting model and the uncertainty and just fits the curve. The clean way to say it: calibration fits the *whole generative process* you already believe in, while training fits the *relationship* that best reproduces the numbers.
+
+**Sentence.** Calibration tunes a few meaningful knobs on a data-generating process you've already committed to; training minimizes prediction error and lets accuracy be the judge.
+
+**Word.** *Generative.*
+:::
+
+We'll make both concrete, then show — with numbers — how a great-looking trained fit can hide a badly wrong mechanism, and how calibration recovers it.
+
+# First principles: the SIR model
+
+Compartmental models split a population into buckets ("compartments") and write down the *rates* at which people flow between them. The SIR model is the simplest useful one: everyone is either **S**usceptible (can catch it), **I**nfected (has it and can transmit), or **R**ecovered (immune, or removed).
+
+```{python}
+#| label: fig-compartments
+#| fig-cap: "Flow of individuals through the SIR compartments. Infection moves people S→I at a rate driven by contact between susceptibles and infecteds; recovery moves them I→R at a constant per-capita rate."
+#| fig-align: center
+from matplotlib.patches import FancyBboxPatch
+
+fig, ax = plt.subplots(figsize=(9, 2.8))
+ax.set_xlim(0, 9); ax.set_ylim(0, 3); ax.set_aspect("equal"); ax.axis("off")
+
+compartments = [(1.5, C_OBS, "S", "Susceptible"),
+                (4.5, C_TRAIN, "I", "Infected"),
+                (7.5, C_CALIB, "R", "Recovered")]
+w, h = 1.7, 1.3
+for cx, color, letter, name in compartments:
+    ax.add_patch(FancyBboxPatch((cx - w / 2, 1.5 - h / 2), w, h,
+                                boxstyle="round,pad=0.02,rounding_size=0.22",
+                                facecolor=color, edgecolor="none"))
+    ax.text(cx, 1.5, letter, color="white", fontsize=30, fontweight="bold", ha="center", va="center")
+    ax.text(cx, 0.45, name, color="#333333", fontsize=12, ha="center", va="center")
+
+arrow_kw = dict(arrowprops=dict(arrowstyle="-|>", lw=2.2, color="#333333"))
+ax.annotate("", xy=(3.55, 1.5), xytext=(2.45, 1.5), **arrow_kw)
+ax.annotate("", xy=(6.55, 1.5), xytext=(5.45, 1.5), **arrow_kw)
+ax.text(3.0, 2.15, r"$\beta\,S I / N$", ha="center", fontsize=14)
+ax.text(6.0, 2.15, r"$\gamma\,I$", ha="center", fontsize=14)
+ax.text(3.0, 1.72, "infection", ha="center", fontsize=9, color="#666666")
+ax.text(6.0, 1.72, "recovery", ha="center", fontsize=9, color="#666666")
+plt.show()
+```
+
+**Intuition first.** New infections happen when a susceptible person meets an infected one. The *number* of such encounters per day scales with how many susceptibles there are ($S$) times the fraction of contacts that are infectious ($I/N$), tuned by a transmission rate $\beta$. Meanwhile, infected people recover at some steady per-person rate $\gamma$, so a fraction $\gamma$ of the infected pool leaves for $R$ each day. Everything that leaves $S$ arrives in $I$; everything that leaves $I$ arrives in $R$. Nobody is created or destroyed.
+
+**Now the equations.** Writing those flows as differential equations:
+
+$$
+\frac{dS}{dt} = -\beta \frac{S I}{N}, \qquad
+\frac{dI}{dt} = \beta \frac{S I}{N} - \gamma I, \qquad
+\frac{dR}{dt} = \gamma I .
+$$
+
+**Interpreting each symbol:**
+
+| Symbol | Meaning | Why it matters |
+|---|---|---|
+| $S, I, R$ | Count in each compartment | The state of the epidemic at time $t$ |
+| $N = S+I+R$ | Total population (constant) | Sets the scale; $I/N$ is the infectious fraction |
+| $\beta$ | Transmission rate (per day) | How fast the disease spreads on contact |
+| $\gamma$ | Recovery rate (per day) | $1/\gamma$ is the average infectious period |
+| $R_0 = \beta/\gamma$ | Basic reproduction number | Expected secondary cases from one case in a fully susceptible population |
+
+The single most important derived quantity is $R_0 = \beta/\gamma$. If $R_0 > 1$ the epidemic grows; if $R_0 < 1$ it fizzles. The epidemic turns over (the peak) exactly when the susceptible fraction has fallen to $S/N = 1/R_0$ — susceptibles become too scarce to sustain growth. Getting $R_0$ wrong means getting the entire shape of the future wrong, *even if you nailed the past*. Hold onto that.
+
+# Generating synthetic epidemic data
+
+We'll simulate a "ground truth" epidemic so that later we can check whether our methods recover parameters we actually know. Real outbreaks never hand you the answer key; synthetic data does.
+
+```{python}
+#| label: constants
+N = 10_000.0          # population size
+N_DAYS = 100          # length of the simulation (days)
+t = np.arange(0, N_DAYS + 1)
+
+# The true data-generating parameters (unknown to our estimators later).
+TRUE = dict(
+    beta=0.30,   # transmission rate  -> R0 = 3.0
+    gamma=0.10,  # recovery rate      -> 10-day infectious period
+    I0=10.0,     # initially infected
+    rho=0.65,    # reporting rate: only 65% of infections get counted
+    k=10.0,      # negative-binomial dispersion of the reporting noise
+)
+
+
+def sir_rhs(_t: float, y: np.ndarray, beta: float, gamma: float) -> list[float]:
+    """Right-hand side of the SIR ODE system."""
+    S, I, R = y
+    new_infections = beta * S * I / N
+    return [-new_infections, new_infections - gamma * I, gamma * I]
+
+
+def solve_sir(beta: float, gamma: float, I0: float) -> np.ndarray:
+    """Integrate the SIR system on the daily grid; returns array of shape (3, T)."""
+    sol = solve_ivp(
+        sir_rhs, [0, N_DAYS], [N - I0, I0, 0.0],
+        args=(beta, gamma), t_eval=t, rtol=1e-8, atol=1e-8,
+    )
+    return sol.y
+
+
+def daily_incidence(beta: float, gamma: float, I0: float) -> np.ndarray:
+    """New infections per day = the S->I flow, which is what surveillance tries to count."""
+    S, I, _R = solve_sir(beta, gamma, I0)
+    return beta * S * I / N
+```
+
+A crucial modeling choice: **what do we actually observe?** Surveillance systems don't see the compartments $S$, $I$, $R$. They see *reported new cases* — a fraction of the true daily incidence (the S→I flow), corrupted by counting noise. We model that observation layer explicitly:
+
+1. **Under-reporting.** Only a fraction $\rho = 0.65$ of new infections are ever recorded (asymptomatics, limited testing, reporting lags).
+2. **Over-dispersed noise.** Case counts are noisier than a Poisson process — weekend effects, batch reporting, clustering. A **Negative Binomial** captures this: for a mean $\mu$ and dispersion $k$, the variance is $\mu + \mu^2/k$, which exceeds the Poisson variance $\mu$.
+
+```{python}
+#| label: generate-data
+latent_incidence = daily_incidence(TRUE["beta"], TRUE["gamma"], TRUE["I0"])
+
+
+def nb_sample(mean: np.ndarray, k: float, rng: np.random.Generator) -> np.ndarray:
+    """Draw Negative-Binomial counts with given mean and dispersion k (NumPy's n=k, p param)."""
+    mean = np.asarray(mean, dtype=float)
+    p = k / (k + mean)          # so that E[counts] = k*(1-p)/p = mean
+    return rng.negative_binomial(k, p)
+
+
+observed = nb_sample(TRUE["rho"] * latent_incidence, TRUE["k"], RNG).astype(float)
+
+S_true, I_true, R_true = solve_sir(TRUE["beta"], TRUE["gamma"], TRUE["I0"])
+```
+
+```{python}
+#| label: fig-latent-vs-observed
+#| fig-cap: "Left: the latent SIR epidemic in each compartment. Right: the true daily incidence (black) versus what surveillance actually records — under-reported, noisy case counts (purple). We only ever get to fit the purple dots."
+#| fig-align: center
+fig, (axL, axR) = plt.subplots(1, 2, figsize=(11, 4.2))
+
+axL.plot(t, S_true, label="Susceptible", color=C_OBS, lw=2)
+axL.plot(t, I_true, label="Infected", color=C_TRAIN, lw=2)
+axL.plot(t, R_true, label="Recovered", color=C_CALIB, lw=2)
+axL.set_title("Latent epidemic (the true SIR state)")
+axL.set_xlabel("Day"); axL.set_ylabel("Individuals")
+axL.legend()
+
+axR.plot(t, latent_incidence, color=C_TRUTH, lw=2, label="True daily incidence")
+axR.plot(t, TRUE["rho"] * latent_incidence, color=C_OBS, lw=1.5, ls="--",
+         label=f"Expected reported (×{TRUE['rho']})")
+axR.scatter(t, observed, s=18, color=C_OBS, alpha=0.7, label="Observed cases (noisy)")
+axR.set_title("What we observe ≠ the epidemic")
+axR.set_xlabel("Day"); axR.set_ylabel("Cases per day")
+axR.legend()
+plt.show()
+```
+
+The gap between the black curve and the purple dots is the whole problem in one picture. If you fit a model *as if the dots were the epidemic*, you will systematically misread its scale — and, as we'll see, its $R_0$.
+
+# Proper temporal validation
+
+In standard supervised learning we shuffle rows and split randomly, or use k-fold cross-validation. For a **forecasting** problem driven by an ODE, both are quietly invalid:
+
+- **Random splits leak the future into the past.** If day 60 is in your training set and day 40 in your test set, you've used post-peak information to "predict" the growth phase. The whole point of a forecast is that the future is unavailable; a random split pretends otherwise.
+- **K-fold cross-validation assumes exchangeable samples.** Epidemic days are anything but — each day is the deterministic consequence of the days before it. Folding across time destroys the causal ordering that the model is supposed to respect.
+
+The only honest protocol is a **chronological split**: train on the earliest data, validate on a later contiguous block, test on the latest.
+
+```{python}
+#| label: splits
+train_idx = np.arange(0, 36)    # days 0-35   : early growth, what you'd have "now"
+val_idx = np.arange(36, 66)     # days 36-65  : spans the turnover / peak
+test_idx = np.arange(66, 101)   # days 66-100 : the genuine out-of-sample future
+```
+
+```{python}
+#| label: fig-splits
+#| fig-cap: "Chronological train / validation / test split. Each stage only ever sees data to its left; the test block is never touched until the final evaluation."
+#| fig-align: center
+fig, ax = plt.subplots(figsize=(10, 4))
+ax.scatter(t, observed, s=16, color=C_OBS, alpha=0.7, zorder=3)
+spans = [(0, 35, "#8ecae6", "Train (0–35)"),
+         (35, 65, "#ffd166", "Validation (36–65)"),
+         (65, 100, "#ef9a9a", "Test (66–100)")]
+for x0, x1, color, label in spans:
+    ax.axvspan(x0, x1, color=color, alpha=0.30, label=label)
+for boundary in (35, 65):
+    ax.axvline(boundary, color="#444444", ls="--", lw=1)
+ax.set_title("Temporal validation: information available at each stage")
+ax.set_xlabel("Day"); ax.set_ylabel("Observed cases per day")
+ax.legend(loc="upper right")
+plt.show()
+```
+
+At training time you'd have only the blue block — the early, exponential-looking growth. The peak lives at the boundary of the yellow block, and the long tail (the epidemic burning out as susceptibles run low) is the red block. A model that looks flawless on blue can still be lost on red.
+
+# Training the mechanistic model
+
+We train exactly as an ML engineer would: pick a loss, minimize it over the parameters, using **only** the training window. The natural default is **mean squared error** between the model's predicted daily cases and the observed counts. Because a naive fitter has no notion of a reporting rate, it implicitly assumes every infection is counted ($\rho = 1$) — a subtle but consequential misspecification.
+
+We optimize in log-space so $\beta$ and $\gamma$ stay positive, and use derivative-free Nelder–Mead because each evaluation runs an ODE solve.
+
+```{python}
+#| label: train-model
+def mse_loss(log_theta: np.ndarray) -> float:
+    beta, gamma = np.exp(log_theta)
+    model = daily_incidence(beta, gamma, TRUE["I0"])   # assumes rho = 1
+    return float(np.mean((model[train_idx] - observed[train_idx]) ** 2))
+
+
+train_res = minimize(
+    mse_loss, np.log([0.4, 0.2]), method="Nelder-Mead",
+    options=dict(xatol=1e-6, fatol=1e-6, maxiter=2000),
+)
+beta_hat, gamma_hat = np.exp(train_res.x)
+trained_R0 = beta_hat / gamma_hat
+trained_curve = daily_incidence(beta_hat, gamma_hat, TRUE["I0"])
+
+# Give the point-forecast a minimal (Gaussian, homoscedastic) noise model so we can
+# later score it probabilistically. Its spread is the training residual scale.
+sigma_hat = float(np.sqrt(np.mean((observed[train_idx] - trained_curve[train_idx]) ** 2)))
+
+# Final attack rate = fraction of the population ever infected = (N - S_end) / N.
+# This is what the model believes about the *latent* epidemic, not the reported cases.
+true_attack = float((N - solve_sir(TRUE["beta"], TRUE["gamma"], TRUE["I0"])[0][-1]) / N * 100)
+trained_attack = float((N - solve_sir(beta_hat, gamma_hat, TRUE["I0"])[0][-1]) / N * 100)
+
+print(f"trained beta = {beta_hat:.3f}   gamma = {gamma_hat:.3f}   R0 = {trained_R0:.2f}")
+print(f"true    beta = {TRUE['beta']:.3f}   gamma = {TRUE['gamma']:.3f}   R0 = {TRUE['beta']/TRUE['gamma']:.2f}")
+print(f"implied final attack rate:  trained {trained_attack:.0f}%   vs true {true_attack:.0f}%")
+```
+
+```{python}
+#| label: fig-trained
+#| fig-cap: "Left: the trained model fits the reported case counts almost perfectly — nothing in this panel looks wrong. Right: the *same* fit implies a latent epidemic that infected only a fraction of the population it truly did. The failure is invisible in the data you can see and dramatic in the mechanism you can't."
+#| fig-align: center
+S_hat, _I_hat, _R_hat = solve_sir(beta_hat, gamma_hat, TRUE["I0"])
+cum_true = (N - S_true) / N * 100          # % ever infected, truth
+cum_trained = (N - S_hat) / N * 100        # % ever infected, as the trained model believes
+
+fig, (axL, axR) = plt.subplots(1, 2, figsize=(11.5, 4.4))
+
+axL.scatter(t, observed, s=16, color=C_OBS, alpha=0.55, label="Observed cases", zorder=3)
+axL.plot(t, trained_curve, color=C_TRAIN, lw=2.4, label="Trained model (MSE)")
+axL.axvspan(0, 35, color="#8ecae6", alpha=0.22)
+axL.axvline(35, color="#666666", ls="--", lw=1)
+axL.text(17, axL.get_ylim()[1] * 0.86, "training window", ha="center", color="#2a6f8e", fontsize=10)
+axL.set_title("What you see: a great fit to reported cases")
+axL.set_xlabel("Day"); axL.set_ylabel("Reported cases per day")
+axL.legend(loc="upper right")
+
+axR.plot(t, cum_true, color=C_TRUTH, lw=2.4, label="True infections")
+axR.plot(t, cum_trained, color=C_TRAIN, lw=2.4, label="Trained model believes")
+axR.fill_between(t, cum_trained, cum_true, color=C_TRAIN, alpha=0.10)
+axR.annotate(f"{true_attack:.0f}% infected", xy=(100, true_attack), xytext=(60, true_attack - 15),
+             color=C_TRUTH, fontsize=11, fontweight="bold",
+             arrowprops=dict(arrowstyle="->", color=C_TRUTH))
+axR.annotate(f"only {trained_attack:.0f}%", xy=(100, trained_attack), xytext=(60, trained_attack + 9),
+             color=C_TRAIN, fontsize=11, fontweight="bold",
+             arrowprops=dict(arrowstyle="->", color=C_TRAIN))
+axR.set_title(rf"What you don't: a wrong epidemic ($R_0$ = {trained_R0:.2f} vs 3.0)")
+axR.set_xlabel("Day"); axR.set_ylabel("Cumulative % ever infected")
+axR.set_ylim(0, 100); axR.legend(loc="center right")
+plt.show()
+```
+
+Here is the trap in one figure. On the left, the trained model is indistinguishable from a great model — it threads the observed dots across the entire horizon. On the right is the epidemic that same fit actually implies: it recovered $R_0 \approx$ `{python} f"{trained_R0:.2f}"` against a true $3.00$, and believes only about `{python} f"{trained_attack:.0f}"`% of the population was ever infected when the truth is `{python} f"{true_attack:.0f}"`%.
+
+Why does a good fit hide such a wrong mechanism? Because the model assumes every infection is reported ($\rho = 1$). Confronted with counts that are really only 65% of true incidence, the optimizer has one lever to explain "fewer cases than a full epidemic would produce": make the disease *milder*. A lower $R_0$ reproduces the observed curve while quietly halving the implied outbreak. The reporting rate and the epidemic's severity are **confounded**, and MSE — which never models reporting — silently resolves that confounding the wrong way. Worse, there is **no uncertainty anywhere**: a single confident line with nothing to say when a decision-maker asks how sure it is about the peak, the final size, or the effect of an intervention.
+
+# Calibration
+
+Calibration is not "training with a better optimizer." It is a change of *target*: instead of minimizing an error against a point prediction, we fit the **entire generative model** by **maximum likelihood**, so that the output is a *predictive distribution*. Concretely, calibration takes on the parts of the problem that MSE training ignored:
+
+- the **observation model** — the reporting rate $\rho$ that connects true incidence to counted cases,
+- the **initial condition** $I_0$, treated as unknown rather than assumed,
+- the **dispersion** $k$ of the noise, which sets how wide our predictive intervals should be,
+- and, jointly, the **dynamics** $\beta, \gamma$ — now estimated *through* a correct observation model rather than against a misspecified one.
+
+The likelihood is Negative Binomial: given parameters, the model predicts a mean number of reported cases $\mu_t = \rho \cdot \text{incidence}_t$, and each observation is $y_t \sim \text{NB}(\mu_t, k)$. We minimize the negative log-likelihood on train **and** validation (the validation block is where the peak lives, so it carries the curvature that separates $\rho$ from $R_0$).
+
+```{python}
+#| label: calibrate
+FIT_idx = np.arange(0, 66)   # train + validation
+
+
+def neg_log_lik(log_theta: np.ndarray) -> float:
+    beta, gamma, I0, rho, k = np.exp(log_theta)
+    mean = rho * daily_incidence(beta, gamma, I0) + 1e-6
+    p = k / (k + mean[FIT_idx])
+    ll = nbinom.logpmf(observed[FIT_idx], k, p)
+    if not np.all(np.isfinite(ll)):
+        return 1e12
+    return float(-np.sum(ll))
+
+
+x0 = np.log([0.35, 0.12, 8.0, 0.5, 8.0])
+calib_res = minimize(
+    neg_log_lik, x0, method="Nelder-Mead",
+    options=dict(xatol=1e-7, fatol=1e-7, maxiter=8000),
+)
+cb, cg, cI0, crho, ck = np.exp(calib_res.x)
+calib_R0 = cb / cg
+
+summary = pd.DataFrame({
+    "parameter": ["beta", "gamma", "R0", "I0", "reporting rho", "dispersion k"],
+    "true": [TRUE["beta"], TRUE["gamma"], TRUE["beta"]/TRUE["gamma"], TRUE["I0"], TRUE["rho"], TRUE["k"]],
+    "trained (MSE)": [beta_hat, gamma_hat, trained_R0, TRUE["I0"], np.nan, np.nan],
+    "calibrated (MLE)": [cb, cg, calib_R0, cI0, crho, ck],
+}).round(3)
+summary
+```
+
+By modeling *how the data were generated*, calibration recovers $R_0 \approx$ `{python} f"{calib_R0:.2f}"` — essentially the truth — along with the reporting rate and dispersion that MSE training could not even represent. Note the `NaN`s in the trained column: those parameters don't exist in that model. That's the point. **You cannot calibrate what you refuse to model.**
+
+## MSE versus negative log-likelihood
+
+Why does the objective matter so much? Compare the two losses for a mean prediction $\mu_t$ and observation $y_t$:
+
+$$
+\underbrace{\mathcal{L}_{\text{MSE}} = \frac{1}{T}\sum_t (y_t - \mu_t)^2}_{\text{implicit constant-variance Gaussian}}
+\qquad\text{vs.}\qquad
+\underbrace{\mathcal{L}_{\text{NLL}} = -\sum_t \log \text{NB}(y_t \mid \mu_t, k)}_{\text{explicit over-dispersed count model}} .
+$$
+
+MSE is (up to a constant) the negative log-likelihood of a Gaussian with the *same variance everywhere*. That is a terrible assumption for epidemic counts: the noise at the peak (hundreds of cases) dwarfs the noise in the tail (single digits). MSE therefore lets the peak dominate the fit and treats a miss of 5 cases on day 3 as identically important to a miss of 5 cases on day 40. The Negative Binomial NLL, by contrast, *scales its expected error with the mean* — exactly the heteroscedastic structure real counts have. **Use MSE when you only need a mean and the noise is roughly constant; use a likelihood when the noise structure carries information and you need honest intervals.**
+
+## Turning point estimates into a predictive distribution
+
+Maximum likelihood gives a best-fit point in parameter space; its **uncertainty** is encoded in the curvature of the likelihood there. A **Laplace approximation** treats the parameter posterior as Gaussian, centered at the MLE with covariance equal to the inverse Hessian of the NLL. We sample parameters from that Gaussian, run each through the model, and draw Negative Binomial counts — folding together *parameter* uncertainty and *observation* noise into one predictive distribution.
+
+```{python}
+#| label: uncertainty
+def numeric_hessian(f, x: np.ndarray, eps: float = 1e-4) -> np.ndarray:
+    """Central finite-difference Hessian of scalar f at x."""
+    n = len(x)
+    H = np.zeros((n, n))
+    for i in range(n):
+        for j in range(n):
+            xpp, xpm, xmp, xmm = (x.copy() for _ in range(4))
+            xpp[i] += eps; xpp[j] += eps
+            xpm[i] += eps; xpm[j] -= eps
+            xmp[i] -= eps; xmp[j] += eps
+            xmm[i] -= eps; xmm[j] -= eps
+            H[i, j] = (f(xpp) - f(xpm) - f(xmp) + f(xmm)) / (4 * eps * eps)
+    return 0.5 * (H + H.T)   # symmetrize away round-off
+
+
+H = numeric_hessian(neg_log_lik, calib_res.x)
+cov = np.linalg.inv(H)                       # Laplace covariance in log-parameter space
+
+# Draw many parameter sets (parameter uncertainty), and for each draw several
+# Negative-Binomial count replicates (observation noise). More draws => a smoother band.
+N_SAMPLES, N_REPS = 1500, 12
+param_samples = RNG.multivariate_normal(calib_res.x, cov, size=N_SAMPLES)
+
+pred_draws = np.empty((N_SAMPLES * N_REPS, len(t)))
+for m, s in enumerate(param_samples):
+    beta, gamma, I0, rho, k = np.exp(s)
+    mean = rho * daily_incidence(beta, gamma, I0)
+    p = k / (k + mean + 1e-6)
+    pred_draws[m * N_REPS:(m + 1) * N_REPS] = nbinom.rvs(k, p, size=(N_REPS, len(t)), random_state=RNG)
+
+calib_median = np.median(pred_draws, axis=0)
+calib_lo = np.percentile(pred_draws, 2.5, axis=0)
+calib_hi = np.percentile(pred_draws, 97.5, axis=0)
+calib_mean_curve = crho * daily_incidence(cb, cg, cI0)   # expected reported cases
+```
+
+# Comparing the models
+
+Now we score both models on all three splits with three metrics: **RMSE** and **MAE** (point accuracy), and **negative log-likelihood** (probabilistic accuracy — does the model place probability where the data actually fall?). Each model is scored under its *own* predictive distribution: Gaussian for the trained point-forecast, Negative Binomial for the calibrated model.
+
+```{python}
+#| label: metrics
+def rmse(y, mu): return float(np.sqrt(np.mean((y - mu) ** 2)))
+def mae(y, mu): return float(np.mean(np.abs(y - mu)))
+def gaussian_nll(y, mu, sigma): return float(-np.mean(norm.logpdf(y, loc=mu, scale=sigma)))
+def nb_nll(y, mu, k):
+    p = k / (k + mu + 1e-9)
+    return float(-np.mean(nbinom.logpmf(y, k, p)))
+
+splits = {"Train": train_idx, "Validation": val_idx, "Test": test_idx}
+rows = []
+for name, idx in splits.items():
+    y = observed[idx]
+    rows.append({
+        "split": name, "model": "Trained (MSE)",
+        "RMSE": rmse(y, trained_curve[idx]),
+        "MAE": mae(y, trained_curve[idx]),
+        "NLL": gaussian_nll(y, trained_curve[idx], sigma_hat),
+    })
+    rows.append({
+        "split": name, "model": "Calibrated (MLE)",
+        "RMSE": rmse(y, calib_mean_curve[idx]),
+        "MAE": mae(y, calib_mean_curve[idx]),
+        "NLL": nb_nll(y, calib_mean_curve[idx], ck),
+    })
+metrics = pd.DataFrame(rows).set_index(["split", "model"]).round(3)
+metrics
+```
+
+```{python}
+#| label: coverage
+cov_rows = []
+for name, idx in splits.items():
+    inside = (observed[idx] >= calib_lo[idx]) & (observed[idx] <= calib_hi[idx])
+    cov_rows.append({"split": name, "nominal": 0.95, "empirical coverage": float(np.mean(inside))})
+coverage_tbl = pd.DataFrame(cov_rows).round(3)
+coverage_tbl
+```
+
+The calibrated model's 95% predictive interval covers close to 95% of the held-out points — it is **honest about what it doesn't know**. The trained model has no interval to check; its confident line is either right or wrong, with no gradation in between.
+
+```{python}
+#| label: fig-final
+#| fig-cap: "The full comparison. Observed data (dots), the latent truth (black), the trained point-forecast (red), and the calibrated model with its 95% predictive band (green). The calibrated band widens where the model is genuinely less certain and contains the data across the out-of-sample horizon."
+#| fig-align: center
+fig, ax = plt.subplots(figsize=(11, 5))
+for x0, x1, color in [(0, 35, "#8ecae6"), (35, 65, "#ffd166"), (65, 100, "#ef9a9a")]:
+    ax.axvspan(x0, x1, color=color, alpha=0.12)
+ax.fill_between(t, calib_lo, calib_hi, color=C_CALIB, alpha=0.20, label="Calibrated 95% interval")
+ax.plot(t, calib_mean_curve, color=C_CALIB, lw=2.4, label="Calibrated model (MLE)")
+ax.plot(t, trained_curve, color=C_TRAIN, lw=2.0, label="Trained model (MSE)")
+ax.plot(t, TRUE["rho"] * latent_incidence, color=C_TRUTH, lw=1.6, ls="--", label="Truth (expected reported)")
+ax.scatter(t, observed, s=15, color=C_OBS, alpha=0.55, label="Observed cases", zorder=3)
+ymax = ax.get_ylim()[1]
+for boundary in (35, 65):
+    ax.axvline(boundary, color="#888888", ls=":", lw=1)
+for x, label in [(17.5, "train"), (50, "validation"), (83, "test")]:
+    ax.text(x, ymax * 0.03, label, ha="center", color="#555555", fontsize=10)
+ax.set_title("Trained point forecast vs. calibrated predictive distribution")
+ax.set_xlabel("Day"); ax.set_ylabel("Cases per day")
+ax.legend(loc="upper right", framealpha=0.95)
+plt.show()
+```
+
+Reading the figure rather than the metrics: the red line commits to a single, mechanistically wrong story about the epidemic. The green model recovers the true curve, and — just as importantly — draws a band that is *narrow where it should be confident and wide where it shouldn't*. In a real outbreak, that band is what a public-health team plans around.
+
+# Training vs. calibration
+
+| Aspect | Training | Calibration |
+|---|---|---|
+| **Goal** | Reproduce observed data | Recover the generating process *and* quantify uncertainty |
+| **Parameters** | Dynamical rates only ($\beta, \gamma$) | Full generative model ($\beta, \gamma, I_0$, reporting $\rho$, dispersion $k$) |
+| **Loss** | MSE (implicit constant-variance Gaussian) | Negative log-likelihood (explicit count model) |
+| **Data used** | Training window only | Train + validation (peak curvature identifies the observation model) |
+| **Output** | A single point forecast | A predictive **distribution** with intervals |
+| **Interpretation** | "What curve fits the past?" | "What process, with what plausible variation, produced this?" |
+
+The two are **complementary, not competing**. Training gives you a fast, cheap point estimate and a sanity check that the dynamics can fit at all. Calibration is what makes the forecast *usable*: it corrects the observation model, recovers interpretable epidemiological quantities like $R_0$, and — decisively — attaches uncertainty you can act on.
+
+## Statistically, what's the difference?
+
+Strip away the epidemiology and the two tasks are *estimating different things*.
+
+**Training** chooses parameters to make good predictions. It fits a conditional distribution of outcomes given inputs by minimizing an expected loss,
+
+$$
+\hat{\theta} = \arg\min_{\theta}\; \mathbb{E}_{(x,y)}\!\left[\mathcal{L}\big(y,\, f_\theta(x)\big)\right],
+\qquad \text{modelling } P(y \mid x;\theta),
+$$
+
+where $\theta$ can be enormous — a neural surrogate carries millions of weights — and success is measured by **generalization**: accuracy on inputs you have not seen. In its purest form the model's functional form is itself learned from the data.
+
+**Calibration** holds the model form fixed — here, the SIR equations — and infers the handful of parameters that make the simulated epidemic match reality,
+
+$$
+\theta^{*} = \arg\min_{\theta}\; D\big(y_{\text{obs}},\, y_{\text{model}}(\theta)\big),
+$$
+
+where $D$ is a discrepancy — least squares, or a negative log-likelihood — and $\theta$ is **low-dimensional and physically meaningful**: $\beta$, $\gamma$, a reporting rate, an initial count. Success is measured by **inference** — did you recover parameters that are true and interpretable, ideally with honest uncertainty? Because the mechanism already exists, epidemiologists say *calibration*, not *training*: you are solving an inverse problem for parameters, not learning a functional form.
+
+That is exactly why this whole post could pin the SIR skeleton for *both* the "trained" and "calibrated" models. With the structure fixed and the parameter set small in both, the generalization-versus-inference and high-versus-low-dimensional contrasts fall away, leaving the differences we actually care about isolated and visible: a prediction-error objective versus a likelihood, a point estimate versus a full distribution, and whether the observation process is part of what you estimate at all.
+
+# Reusing a model across outbreaks: Mexico → Colombia
+
+Everything so far fit one epidemic in isolation. But the reason mechanistic models are worth the trouble is that their parameters *mean something*, and meaning travels. A recovery rate is a fact about the pathogen; a transmission rate is a fact about a place and its behaviour. That distinction is exactly what lets you carry a model from one outbreak to the next — *if* you respect which parameters transfer and which don't.
+
+Here is the scenario. **Last year** an epidemic ran its full course in a city in **Mexico**; we have the whole curve and can calibrate it cleanly. **This year** a related pathogen is spreading in **Colombia**, and we are standing on day 22 — still climbing, no peak in sight — with a decision to make about hospital capacity. Can last year's Mexican model help?
+
+::: {.callout-note}
+## The data here is synthetic
+
+The "Mexico" and "Colombia" epidemics below are **simulated** — the parameters, populations, and case counts are invented so the transfer mechanics are visible and the whole thing runs reproducibly. Nothing here describes a real outbreak in either country. What's real is the *method*: which parameters should transfer, and how to combine a prior with local data.
+:::
+
+**What transfers, and what doesn't:**
+
+- **Recovery rate $\gamma$** — one over the infectious period — is set by the pathogen's biology. To a first approximation this is the *same disease*, so $\gamma$ should carry over. This is the parameter we transfer.
+- **Transmission $\beta$** — contacts × per-contact risk — depends on density, mobility, and behaviour. Bogotá is not Mexico City; $\beta$ must be re-estimated locally.
+- **Reporting rate $\rho$ and the noise scale** are properties of a health system: different country, re-estimate (though borrowing the dispersion is reasonable).
+
+```{python}
+#| label: xfer-mexico
+def sigmoid(x: float) -> float:
+    return 1.0 / (1.0 + np.exp(-x))
+
+def logit(p: float) -> float:
+    return np.log(p / (1.0 - p))
+
+def simulate_incidence(beta: float, gamma: float, I0: float,
+                       N_pop: float, t_grid: np.ndarray) -> np.ndarray:
+    """Daily new infections (the S->I flow) for a population of size N_pop."""
+    def rhs(_t, y):
+        S, I, R = y
+        new = beta * S * I / N_pop
+        return [-new, new - gamma * I, gamma * I]
+    S, I, R = solve_ivp(rhs, [t_grid[0], t_grid[-1]], [N_pop - I0, I0, 0.0],
+                        t_eval=t_grid, rtol=1e-7, atol=1e-7).y
+    return beta * S * I / N_pop
+
+def nb_counts(mean: np.ndarray, k: float, rng: np.random.Generator) -> np.ndarray:
+    mean = np.asarray(mean, dtype=float)
+    return rng.negative_binomial(k, k / (k + mean)).astype(float)
+
+rng_x = np.random.default_rng(11)
+GAMMA_BIO = 0.10   # recovery rate = disease biology, shared across both countries
+
+# --- Mexico, last year: a full epidemic we can calibrate cleanly ---
+N_MX = 20_000.0
+days_mx = np.arange(0, 141)
+mx_true = dict(beta=0.28, gamma=GAMMA_BIO, I0=20.0, rho=0.60, k=20.0)
+mx_cases = nb_counts(mx_true["rho"] * simulate_incidence(mx_true["beta"], mx_true["gamma"],
+                                                         mx_true["I0"], N_MX, days_mx),
+                     mx_true["k"], rng_x)
+
+def mx_neg_log_lik(z: np.ndarray) -> float:
+    beta, gamma, I0 = np.exp(z[:3]); rho = sigmoid(z[3]); k = np.exp(z[4])
+    mean = rho * simulate_incidence(beta, gamma, I0, N_MX, days_mx) + 1e-6
+    ll = nbinom.logpmf(mx_cases, k, k / (k + mean))
+    return 1e12 if not np.all(np.isfinite(ll)) else float(-ll.sum())
+
+mx_fit = minimize(mx_neg_log_lik, [np.log(0.3), np.log(0.1), np.log(20), 0.0, np.log(15)],
+                  method="Nelder-Mead", options=dict(xatol=1e-8, fatol=1e-8, maxiter=12000))
+mx_beta, mx_gamma, mx_I0 = np.exp(mx_fit.x[:3]); mx_rho = sigmoid(mx_fit.x[3]); mx_k = np.exp(mx_fit.x[4])
+mx_R0 = mx_beta / mx_gamma
+
+# The transferred prior on gamma: the Mexican Laplace uncertainty, *inflated* to allow
+# for the fact that Colombia is a different country (biology transfers, but not perfectly).
+def _gamma_nll(g):
+    z = mx_fit.x.copy(); z[1] = np.log(g); return mx_neg_log_lik(z)
+_eps = 1e-3
+gamma_laplace_sd = 1.0 / np.sqrt((_gamma_nll(mx_gamma + _eps) - 2 * _gamma_nll(mx_gamma)
+                                  + _gamma_nll(mx_gamma - _eps)) / _eps ** 2)
+gamma_prior_mu = mx_gamma
+gamma_prior_sd = max(6 * gamma_laplace_sd, 0.012)
+
+print(f"Mexico calibrated:  R0 = {mx_R0:.2f},  gamma = {mx_gamma:.3f}  "
+      f"(infectious period ~{1/mx_gamma:.0f} days)")
+print(f"transferred prior on gamma:  N({gamma_prior_mu:.3f}, {gamma_prior_sd:.3f})  "
+      f"[Mexican Laplace sd was {gamma_laplace_sd:.4f}]")
+```
+
+Calibrating last year's Mexican epidemic recovers $R_0 \approx$ `{python} f"{mx_R0:.2f}"` and a recovery rate $\gamma \approx$ `{python} f"{mx_gamma:.3f}"` — an infectious period of about `{python} f"{1/mx_gamma:.0f}"` days. Because we have Mexico's *entire* curve, that $\gamma$ is pinned down tightly. Widened to allow for a different country, it becomes our **prior**.
+
+```{python}
+#| label: xfer-colombia
+# --- Colombia, this year: we only get to see the first stretch ---
+N_CO = 15_000.0
+days_co = np.arange(0, 151)
+co_true = dict(beta=0.34, gamma=GAMMA_BIO, I0=8.0, rho=0.50, k=8.0)
+co_R0 = co_true["beta"] / co_true["gamma"]
+co_latent = simulate_incidence(co_true["beta"], co_true["gamma"], co_true["I0"], N_CO, days_co)
+co_cases_full = nb_counts(co_true["rho"] * co_latent, co_true["k"], rng_x)
+
+T_NOW = 22
+seen, future = days_co <= T_NOW, days_co > T_NOW
+t_seen, y_seen = days_co[seen], co_cases_full[seen]
+k_obs = int(round(mx_k))   # borrow Mexico's surveillance dispersion
+
+# Strategy 1: transplant Mexico's calibrated parameters onto Colombia's population.
+naive_forecast = mx_rho * simulate_incidence(mx_beta, mx_gamma, co_true["I0"], N_CO, days_co)
+co_peak_day = int(days_co[np.argmax(co_latent)])
+print(f"Colombia true R0 = {co_R0:.1f}, peak on day {co_peak_day}; today is day {T_NOW}")
+```
+
+```{python}
+#| label: fig-xfer-setup
+#| fig-cap: "Left: last year's Mexican epidemic, observed to completion and cleanly calibrated. Right: this year in Colombia, we stand on day 22 — only the growth phase is visible (blue), while the true peak (day 30) and everything after (grey) are still in the future."
+#| fig-align: center
+C_MX = "#E8A03D"
+mx_fit_curve = mx_rho * simulate_incidence(mx_beta, mx_gamma, mx_I0, N_MX, days_mx)
+
+fig, (axL, axR) = plt.subplots(1, 2, figsize=(11.5, 4.2))
+axL.scatter(days_mx, mx_cases, s=12, color=C_MX, alpha=0.5, label="Mexico cases (last year)")
+axL.plot(days_mx, mx_fit_curve, color="#9c6b16", lw=2, label="Mexico calibrated fit")
+axL.set_title(rf"Last year — Mexico (calibrated, $R_0$={mx_R0:.2f})")
+axL.set_xlabel("Day"); axL.set_ylabel("Reported cases/day"); axL.legend()
+
+axR.plot(days_co, co_true["rho"] * co_latent, color=C_TRUTH, ls="--", lw=1.6, label="Colombia truth (hidden)")
+axR.scatter(t_seen, y_seen, s=20, color=C_OBS, alpha=0.75, label=f"Observed so far (day ≤ {T_NOW})")
+axR.scatter(days_co[future], co_cases_full[future], s=10, color="#bbbbbb", alpha=0.5, label="Future (not yet seen)")
+axR.axvline(T_NOW, color="#444444", ls=":", lw=1)
+axR.axvline(co_peak_day, color=C_TRAIN, ls=":", lw=1)
+axR.text(co_peak_day + 2, axR.get_ylim()[1] * 0.85, "true peak", color=C_TRAIN, fontsize=9)
+axR.set_title(rf"This year — Colombia, mid-growth (true $R_0$={co_R0:.1f})")
+axR.set_xlabel("Day"); axR.set_ylabel("Reported cases/day"); axR.legend(loc="upper right", fontsize=8)
+plt.show()
+```
+
+On day `{python} T_NOW` the Colombian data is all growth — an exponential-looking climb that, as the [identifiability discussion](#first-principles-the-sir-model) warned, barely distinguishes $\beta$ from $\gamma$ on its own. The true epidemic (dashed) will peak on day `{python} co_peak_day`, but nothing in the observed dots forces that conclusion. We have three ways to forecast it:
+
+1. **Transplant** Mexico's parameters wholesale — fast, and wrong, because Colombia transmits faster.
+2. **Fit Colombia alone** with vague priors — honest, but mid-growth the likelihood is a long $\beta$–$\gamma$ ridge, so the forecast is barely constrained.
+3. **Bayesian calibration** — keep a flexible local $\beta$, but pin $\gamma$ with the Mexican prior, which supplies exactly the information the growth phase lacks.
+
+## Why go Bayesian?
+
+Training gave a point estimate; the calibration of Section 6 added a likelihood and a Laplace-approximated band. Going *fully* Bayesian — sampling the posterior rather than approximating it — buys three things that matter precisely in a spot like Colombia-on-day-22:
+
+- **Priors are how outside knowledge enters.** There is no other principled slot in the machinery to say "the infectious period is about ten days, because we measured it in Mexico last year." A prior is exactly that sentence written as a distribution, uncertainty included. Transfer across outbreaks *is* a prior.
+- **Priors regularize the unidentifiable.** Mid-growth, the likelihood alone is a flat ridge in $(\beta, \gamma)$ — the data cannot separate transmission from recovery. A point estimator just picks a spot on that ridge; a Laplace approximation draws a tidy Gaussian blob that misrepresents a long, curved, open-ended one. Multiplying the ridge by the prior returns something both identified and honest.
+- **You get the real posterior, not a Gaussian cartoon.** Sampling captures the *actual* shape — skewed, correlated, bounded — and pushes all of it through the ODE into the forecast, so the predictive band inherits the true parameter correlations instead of assuming them away.
+
+The cost is compute (thousands of ODE solves) and the chore of checking convergence. When parameters are well-identified and roughly Gaussian, the cheap Laplace calibration is a fine stand-in. When they are correlated, constrained, or informed by outside knowledge — as here — the Bayesian treatment is the one that stays honest.
+
+We do the inference the first-principles way: a hand-written **Metropolis–Hastings** sampler. Each step proposes a small random move in $(\beta, \gamma, \rho, I_0)$, solves the SIR ODEs, and accepts or rejects by comparing the log-posterior (Negative-Binomial likelihood + prior) against the current point.
+
+```{python}
+#| label: xfer-mcmc
+def log_likelihood(beta: float, gamma: float, rho: float, I0: float) -> float:
+    mean = rho * simulate_incidence(beta, gamma, I0, N_CO, t_seen) + 1e-6
+    ll = nbinom.logpmf(y_seen, k_obs, k_obs / (k_obs + mean))
+    return -1e12 if not np.all(np.isfinite(ll)) else float(ll.sum())
+
+def make_log_posterior(gamma_mu: float, gamma_sd: float):
+    def log_posterior(theta: np.ndarray) -> float:
+        beta, gamma, rho, I0 = theta
+        if beta <= 0 or gamma <= 0 or I0 <= 0 or not 0 < rho < 1:
+            return -np.inf
+        log_prior = (norm.logpdf(np.log(beta), np.log(0.3), 0.6)   # weak on transmission
+                     + norm.logpdf(gamma, gamma_mu, gamma_sd)       # <- transferred from Mexico
+                     + norm.logpdf(logit(rho), logit(0.5), 1.2)     # weak on reporting
+                     + norm.logpdf(np.log(I0), np.log(10), 1.0))    # weak on seeding
+        return log_prior + log_likelihood(beta, gamma, rho, I0)
+    return log_posterior
+
+def metropolis(log_posterior, n_steps: int, proposal_sd: np.ndarray,
+               start, rng: np.random.Generator):
+    theta = np.array(start, dtype=float)
+    lp = log_posterior(theta)
+    chain = np.empty((n_steps, 4))
+    n_accept = 0
+    for i in range(n_steps):
+        proposal = theta + rng.normal(0.0, proposal_sd)
+        lp_prop = log_posterior(proposal)
+        if np.log(rng.random()) < lp_prop - lp:      # Metropolis acceptance
+            theta, lp = proposal, lp_prop
+            n_accept += 1
+        chain[i] = theta
+    return chain, n_accept / n_steps
+
+PROPOSAL_SD = np.array([0.018, 0.006, 0.03, 1.2])
+BURN = 5000
+start = [0.34, mx_gamma, 0.5, 10.0]
+
+# Strategy 3: informative Mexican prior on gamma. Strategy 2: a deliberately vague prior.
+chain_prior, acc_prior = metropolis(make_log_posterior(gamma_prior_mu, gamma_prior_sd),
+                                    16000, PROPOSAL_SD, start, rng_x)
+chain_vague, acc_vague = metropolis(make_log_posterior(0.10, 0.08),
+                                    16000, PROPOSAL_SD, start, rng_x)
+post_prior = chain_prior[BURN::5]
+post_vague = chain_vague[BURN::5]
+prior_R0 = float(post_prior[:, 0].mean() / post_prior[:, 1].mean())
+
+print(f"acceptance rate:  informative {acc_prior:.2f},  vague {acc_vague:.2f}")
+print(f"Colombia R0 recovered with the Mexican prior: {prior_R0:.2f}   (true {co_R0:.1f})")
+```
+
+```{python}
+#| label: fig-xfer-posterior
+#| fig-cap: "Left: the joint posterior over transmission and recovery. Colombia's growth-only data leaves a long β–γ ridge (grey); the Mexican prior on γ collapses it onto the truth (star). Right: the recovery rate itself — the transferred prior (gold) anchors the posterior near the true γ = 0.10, while the vague fit wanders across implausible infectious periods."
+#| fig-align: center
+fig, (axL, axR) = plt.subplots(1, 2, figsize=(11.5, 4.4))
+
+axL.scatter(post_vague[:, 0], post_vague[:, 1], s=6, alpha=0.25, color="#bbbbbb", label="Colombia-only (vague prior)")
+axL.scatter(post_prior[:, 0], post_prior[:, 1], s=6, alpha=0.35, color=C_CALIB, label="Mexican prior on γ")
+axL.scatter([co_true["beta"]], [co_true["gamma"]], marker="*", s=260, color=C_TRAIN,
+            edgecolor="k", zorder=5, label="truth")
+axL.set_xlabel(r"$\beta$ (transmission)"); axL.set_ylabel(r"$\gamma$ (recovery)")
+axL.set_title("Joint posterior: the prior breaks the β–γ ridge"); axL.legend(fontsize=8)
+
+gs = np.linspace(0.03, 0.20, 300)
+axR.hist(post_vague[:, 1], bins=40, density=True, alpha=0.4, color="#bbbbbb", label="posterior (vague)")
+axR.hist(post_prior[:, 1], bins=40, density=True, alpha=0.5, color=C_CALIB, label="posterior (Mexican prior)")
+axR.plot(gs, norm.pdf(gs, gamma_prior_mu, gamma_prior_sd), color="#9c6b16", lw=2, label="Mexican prior")
+axR.axvline(co_true["gamma"], color=C_TRAIN, lw=2, ls="--", label="truth γ = 0.10")
+axR.set_xlabel(r"$\gamma$"); axR.set_ylabel("density")
+axR.set_title("Recovery rate γ: transferred, then updated"); axR.legend(fontsize=8)
+plt.show()
+```
+
+The left panel is the whole story in one picture. Fit Colombia alone (grey) and the posterior smears along the $\beta$–$\gamma$ ridge — transmission and recovery are confounded by growth-only data, exactly as warned earlier. Add the Mexican prior on $\gamma$ (teal) and the cloud collapses onto the truth (star). The right panel shows $\gamma$ directly: the transferred prior anchors the posterior near the true $0.10$, while the vague version drifts across infectious periods from 5 to 30 days.
+
+```{python}
+#| label: xfer-forecast
+def posterior_predictive(posterior: np.ndarray, n_draws: int = 400):
+    idx = rng_x.choice(len(posterior), min(n_draws, len(posterior)), replace=False)
+    draws = np.empty((len(idx), len(days_co)))
+    for j, (beta, gamma, rho, I0) in enumerate(posterior[idx]):
+        mean = rho * simulate_incidence(beta, gamma, I0, N_CO, days_co)
+        draws[j] = nbinom.rvs(k_obs, k_obs / (k_obs + mean + 1e-6), random_state=rng_x)
+    return np.percentile(draws, [2.5, 50, 97.5], axis=0)
+
+lo_prior, med_prior, hi_prior = posterior_predictive(post_prior)
+lo_vague, med_vague, hi_vague = posterior_predictive(post_vague)
+
+def rmse(a, b): return float(np.sqrt(np.mean((a - b) ** 2)))
+naive_rmse = rmse(naive_forecast[future], co_cases_full[future])
+vague_rmse = rmse(med_vague[future], co_cases_full[future])
+prior_rmse = rmse(med_prior[future], co_cases_full[future])
+prior_cov = float(np.mean((co_cases_full[future] >= lo_prior[future]) &
+                          (co_cases_full[future] <= hi_prior[future])))
+
+pd.DataFrame({
+    "strategy": ["Naive transfer (Mexico params)", "Colombia-only (vague prior)", "Bayesian + Mexican prior"],
+    "prior knowledge used": ["all of it, blindly", "none", "just γ (biology)"],
+    "future RMSE": [naive_rmse, vague_rmse, prior_rmse],
+}).round(1)
+```
+
+```{python}
+#| label: fig-xfer-forecast
+#| fig-cap: "Forecasting Colombia from day 22. The naive transplant (orange) peaks late and low; the Colombia-only median (grey) undershoots; the Bayesian forecast with the Mexican prior (teal) tracks the true peak and decline, and its 95% band brackets the data we had not yet seen."
+#| fig-align: center
+fig, ax = plt.subplots(figsize=(11, 5))
+ax.axvspan(0, T_NOW, color="#8ecae6", alpha=0.12)
+ax.fill_between(days_co, lo_prior, hi_prior, color=C_CALIB, alpha=0.22, label="Bayesian 95% (Mexican prior)")
+ax.plot(days_co, med_prior, color=C_CALIB, lw=2.4, label="Bayesian median")
+ax.plot(days_co, naive_forecast, color=C_MX, lw=2.2, label="Naive transfer (Mexico params)")
+ax.plot(days_co, med_vague, color="#9a9a9a", lw=1.8, label="Colombia-only median")
+ax.plot(days_co, co_true["rho"] * co_latent, color=C_TRUTH, lw=1.6, ls="--", label="Colombia truth")
+ax.scatter(t_seen, y_seen, s=18, color=C_OBS, alpha=0.75, zorder=4, label=f"Observed (≤ day {T_NOW})")
+ax.scatter(days_co[future], co_cases_full[future], s=9, color="#bbbbbb", alpha=0.5, zorder=3)
+ax.axvline(T_NOW, color="#444444", ls=":", lw=1)
+ax.text(T_NOW / 2, ax.get_ylim()[1] * 0.04, "observed", ha="center", color="#555555", fontsize=9)
+ax.set_title("Forecasting Colombia mid-epidemic, from day 22")
+ax.set_xlabel("Day"); ax.set_ylabel("Reported cases/day"); ax.legend(loc="upper right", fontsize=9)
+plt.show()
+```
+
+The payoff is the forecast. The naive transplant peaks days late and far too low — Colombia simply spreads faster than Mexico did. The Colombia-only median gets the timing closer but still undershoots the peak. The Bayesian forecast with the Mexican prior tracks the true trajectory through the unseen peak and decline: its median error over the *future* is about `{python} f"{prior_rmse:.0f}"` cases/day versus `{python} f"{naive_rmse:.0f}"` for the transplant, and its 95% band contains roughly `{python} f"{prior_cov:.0%}"` of the days we had not yet observed when the call was made. The band is wide — on day 22, honest uncertainty about the peak is genuinely large — but it *brackets* the truth rather than hiding it.
+
+```{python}
+#| label: fig-xfer-trace
+#| fig-cap: "Metropolis chains for the Mexican-prior run (thinned). β and γ mix well and are stationary after the burn-in cutoff (dotted); ρ and I₀ wander more slowly — mid-epidemic, reporting and seeding are only weakly identified, and the chain says so honestly."
+#| fig-align: center
+fig, axes = plt.subplots(2, 2, figsize=(11, 5))
+names = [r"$\beta$", r"$\gamma$", r"$\rho$", r"$I_0$"]
+for i, ax in enumerate(axes.ravel()):
+    ax.plot(chain_prior[::5, i], lw=0.6, color=C_CALIB)
+    ax.axvline(BURN // 5, color="#444444", ls=":", lw=1)
+    ax.set_title(names[i], fontsize=11)
+fig.suptitle("Metropolis chains (dotted = burn-in cutoff)", fontweight="bold")
+plt.show()
+```
+
+The traces are a quick honesty check on the sampler: $\beta$ and $\gamma$ mix well, while $\rho$ and $I_0$ drift more — a faithful signal that mid-growth data constrains transmission and recovery far better than it constrains reporting or the initial seed.
+
+The practitioner's lesson: transfer learning in mechanistic models is *not* "reuse the fitted object." It is deciding which parameters are **facts about the disease** (transfer them as priors) and which are **facts about the place** (re-estimate them locally), then letting Bayesian calibration combine the two with the right amount of confidence in each.
+
+## The three approaches at a glance
+
+We have now used all three on the same SIR skeleton. They form a ladder — each keeps what the previous one had and adds a layer of honesty about what it doesn't know:
+
+| Aspect | Training | Calibration | Bayesian |
+|---|---|---|---|
+| **Goal** | Fit the observed curve | Fit the generative process + quantify uncertainty | Infer the full posterior and propagate it |
+| **Estimates** | $\beta, \gamma$ (a point) | $\beta, \gamma, I_0, \rho, k$ (a point, by MLE) | A joint *distribution* over all of them |
+| **Objective** | Mean squared error | Negative log-likelihood | Posterior $\propto$ likelihood $\times$ prior |
+| **Prior knowledge** | none | none (flat) | encoded explicitly (e.g. transferred $\gamma$) |
+| **Uncertainty** | none | Gaussian (Laplace) approximation | full posterior, any shape (MCMC) |
+| **Output** | one curve | curve + approximate band | calibrated predictive distribution |
+| **Unidentifiable params** | picks an arbitrary point | reports a misleading blob | regularized by the prior |
+| **Cost** | lowest | low | highest (sampling + convergence checks) |
+| **Reach for it when** | a quick check, with clean and plentiful data | you need honest intervals and the params are identifiable | data is partial or correlated, or you have outside knowledge to inject |
+
+# Beyond classical SIR
+
+Everything above uses deterministic ODEs, simple likelihoods, and posteriors we approximated by hand (Laplace, then Metropolis). Real forecasting pipelines reach for heavier machinery when the problem demands it:
+
+- **Bayesian calibration / MCMC.** We hand-rolled a Metropolis sampler above; production work replaces it with more efficient posterior sampling (e.g. Hamiltonian Monte Carlo in Stan or PyMC). Worth it when the posterior is skewed or multimodal, parameters are correlated, or you want to encode prior knowledge — a known infectious period, or a neighbouring outbreak — rigorously.
+- **Sequential Monte Carlo / particle filters.** When data arrive in a stream and you need to update the state *and* parameters day by day, particle filters propagate a cloud of hypotheses forward and reweight them against each new observation — natural for nowcasting.
+- **Ensemble Kalman filters.** A scalable middle ground for high-dimensional compartmental models (many age groups, regions), trading exact inference for Gaussian approximations that stay tractable at scale.
+- **Neural ODEs and Physics-Informed Neural Networks.** When the mechanism is partly unknown, let a neural network learn residual dynamics or embed the ODE as a soft constraint in the loss — mechanistic structure where you trust it, flexibility where you don't.
+- **Probabilistic / ensemble forecasting.** Operational systems (e.g. collaborative forecasting hubs) combine many models into calibrated ensemble predictive distributions, because no single model is reliably best across phases of an epidemic.
+
+The through-line: each of these is a richer way to do **calibration** — to represent uncertainty and the observation process — not a fancier way to fit a curve.
+
+# Key takeaways
+
+::: {.callout-tip}
+## Six lessons
+
+1. **A good fit is not a good forecast.** Our trained model matched the data and still recovered $R_0 \approx 1.6$ against a true $3.0$ — a completely different epidemic.
+2. **Calibration is a different task, not a better optimizer.** It fits the observation process and noise, not just the dynamics, and returns distributions instead of points.
+3. **Uncertainty is a deliverable.** A forecast without an interval can't be planned around; the calibrated 95% band achieved near-nominal coverage on held-out data.
+4. **Validate along the arrow of time.** Random splits and k-fold cross-validation leak the future into the past for ODE-driven data.
+5. **Model how the data were made.** Under-reporting and over-dispersion aren't nuisances to smooth over — ignoring them is exactly what corrupted the trained model's $R_0$.
+6. **Meaningful parameters travel.** A Mexican prior on the recovery rate turned an unidentifiable Colombian growth curve into a usable forecast — because we transferred the *biology* ($\gamma$) and re-estimated the *place* ($\beta$, reporting).
+:::
+
+**Common mistakes to avoid**
+
+- Fitting case counts as if they were true infections (ignoring the reporting rate $\rho$).
+- Assuming constant-variance noise (MSE) when counts are strongly heteroscedastic.
+- Reporting a single trajectory with no uncertainty band.
+- Estimating parameters only during the exponential-growth phase, where $\beta$ and $\gamma$ are barely separable and $R_0$ is nearly unidentifiable.
+- Using shuffled or k-fold splits and mistaking leaked information for skill.
+- Transplanting a whole fitted model to a new place or season instead of re-estimating the parameters that are local to it.
+
+**Practical recommendations**
+
+- Always write down an explicit observation model; make $\rho$ and the noise distribution parameters you estimate, not assumptions you bury.
+- Prefer a likelihood over squared error whenever you need intervals or the noise scales with the signal.
+- Score forecasts probabilistically (log-likelihood, CRPS, empirical coverage), not just by RMSE.
+- When adapting a model across regions or seasons, split parameters into *transferable* (biology) and *local* (place and behaviour): carry the first as priors, re-fit the second.
+- Treat point estimates as a starting point and calibration as the finish line.
+
+## Where to go next
+
+- **SEIR models**, adding an Exposed (latent, not-yet-infectious) compartment for diseases with an incubation period.
+- **Bayesian inference** with PyMC or Stan to get full posteriors and principled priors over epidemiological parameters.
+- **Hierarchical / multi-region models** that pool information across outbreaks (partial pooling) — the principled version of the Mexico → Colombia transfer we did by hand.
+- **Stochastic epidemic models** (chain-binomial, Gillespie simulations) for small populations where individual-level randomness — not just observation noise — drives the dynamics.
