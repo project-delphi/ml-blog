@@ -13,6 +13,12 @@ description: "Rubin's Dirichlet weights, Efron's multinomial counts, fifteen law
 resources:
   - cover.png
 engine: knitr
+# Rendered here on ggplot2 3.3.5, where `size` is still the line-width aesthetic.
+# On ggplot2 >= 3.4 every `size =` in this post (and `element_line`/`element_rect`)
+# raises a deprecation warning; without this, the next re-render on a newer
+# toolchain prints ~60 of them into the published page.
+execute:
+  warning: false
 format:
   html:
     toc: true
@@ -325,14 +331,21 @@ The four intervals, numerically: percentile $[`r fmt(perc_ci[1])`, `r fmt(perc_c
 
 `law` is a sample of 15 from a known population of 82, so unusually, we do not have to take anyone's word for anything. The population correlation is computable, and by drawing many size-15 subsamples from the 82 schools we get the *actual* sampling distribution of $\hat\rho$ — the thing every method above is trying to imitate — plus honest empirical coverage for each interval.
 
+One caveat to bank before reading the table, because it is the kind of thing that quietly flatters whoever cites it. The subsamples are drawn *without* replacement, 15 from 82, so the sampling fraction is 18% and the truth we are measuring against carries a finite-population correction of $\sqrt{1 - 15/82} \approx 0.90$ on its spread — while all four interval constructions target the i.i.d.-from-an-infinite-population law instead. The mismatch runs in the conservative direction: a narrower truth means intervals built for i.i.d. sampling should, if anything, *over*-cover, so the under-coverage reported below is if anything understated. Read the numbers as a ranking of the four methods against a common target, which is what they are, rather than as exact coverage against the estimand each one nominally claims.
+
 ```{r}
 #| label: fig-law82
 #| column: page
-#| cache: true
 #| fig-width: 11
 #| fig-height: 4.8
 #| fig-cap: "The actual sampling distribution of the correlation across 500 size-15 subsamples of the 82-school population (ink), against the single-sample distributions from the figure above. The vertical line is the population truth. The bootstrap distributions are centred on the sample, not the truth — that is by design; their job is spread and shape, not location."
 #| fig-alt: "Density plot showing the true sampling distribution of the correlation estimate over subsamples of the full 82-school population as a filled ink-coloured curve, with the Efron bootstrap and Bayesian bootstrap densities from the single original sample overlaid in red and blue, and a vertical line marking the population correlation of about 0.76."
+# Deliberately NOT knitr-cached, though it is the slowest chunk in the post. It
+# reads dens_df and n_law from fig-law, and knitr's autodep is off by default, so
+# a chunk cache here keeps serving stale figures, covtab, and inline numbers
+# after any upstream edit — while the prose below compares those numbers against
+# freshly-computed ones. `freeze: auto` (posts/_metadata.yml) already caches at
+# document level and invalidates on any source change, which is what we want.
 set.seed(82)    # the population size, what else
 rho_pop <- cor(law82$LSAT, law82$GPA)
 S    <- 500     # subsamples of size 15
@@ -402,7 +415,13 @@ knitr::kable(covtab, digits = 3)
 
 The population truth is $\rho_{82} = `r fmt(rho_pop)`$ — so the original sample's $\hat\rho = `r fmt(rhohat)`$ was, for once, close. The coverage table is the part most posts skip, and it does not flatter everyone equally. All four run under the nominal 95% (small-sample correlation is hard, and `r if (n_failed > 0) sprintf("%d of %d BCa fits failed and were excluded, which itself flatters BCa slightly", n_failed, S) else "no BCa fit failed"`), but the ordering is the interesting part. The two second-order-correct constructions land closest: BCa at `r fmt(covtab$Coverage[2], 3)` and the Fisher-$z$ posterior at `r fmt(covtab$Coverage[4], 3)`. The raw percentile interval manages `r fmt(covtab$Coverage[1], 3)`. And the Bayesian bootstrap comes last, at `r fmt(covtab$Coverage[3], 3)`, on the shortest average interval of the four.
 
-That last number is worth sitting with, because it is this post's thesis arriving two sections early. **The Bayesian bootstrap fixes Efron's discreteness, not his calibration.** Its weights are smoother and — by exactly the $(n+1)/n$ of @eq-weightvar — its resampling distribution is slightly *tighter* than Efron's, so its intervals are slightly *shorter*. But a percentile interval read off the Bayesian bootstrap is still an uncorrected percentile interval, and it under-covers for precisely the reason the raw percentile does: $\hat\rho$'s distribution is skewed toward the boundary and nobody corrected for it. Smoothness is not calibration. Nothing in the Dirichlet buys you the $z_0$ and $a$ that BCa computes, or the variance-stabilising transform that Fisher's $z$ applies.
+That last number is worth sitting with, because it is this post's thesis arriving two sections early. **The Bayesian bootstrap fixes Efron's discreteness, not his calibration.**
+
+The tempting explanation for the short intervals is @eq-weightvar — smoother weights, weight-variance ratio $(n+1)/n$, therefore a *tighter* resampling distribution — and it is the wrong size. That factor predicts a spread ratio of $\sqrt{n/(n+1)} = `r fmt(sqrt(n_law / (n_law + 1)), 3)`$ at $n = 15$. What actually happens is a standard-deviation ratio of `r fmt(sd(rho_bb) / sd(bt$t), 3)` on this sample, and a mean interval length across the 500 subsamples of `r fmt(covtab[["Mean length"]][3] / covtab[["Mean length"]][1], 3)` of the percentile interval's. The weight variance accounts for well under half of the shrinkage it usually gets credited with.
+
+The rest is nonlinearity. Correlation is not a mean, so $(n+1)/n$ transfers only at first order; past that the two schemes are being asked to do different things, because an Efron resample of these fifteen schools contains about `r fmt(n_law * (1 - (1 - 1/n_law)^n_law), 1)` distinct ones while the Dirichlet reweights all fifteen every time. Efron's extra spread appears in both tails, somewhat more of it in the upper one, where $\hat\rho^*$ presses against the hard boundary at 1.
+
+Either way the conclusion survives the correction, because it never depended on the size of the gap: a percentile interval read off the Bayesian bootstrap is still an uncorrected percentile interval, and it under-covers for precisely the reason the raw percentile does: $\hat\rho$'s distribution is skewed toward the boundary and nobody corrected for it. Smoothness is not calibration. Nothing in the Dirichlet buys you the $z_0$ and $a$ that BCa computes, or the variance-stabilising transform that Fisher's $z$ applies. Shorter *and* worse-covered is exactly what an uncorrected interval on a smoother resampling law looks like.
 
 Hold that thought, because near the end of the post it becomes the verdict: **the percentile interval isn't the bootstrap working — it's the bootstrap being used lazily on a functional whose distribution isn't symmetric.**
 
@@ -574,7 +593,7 @@ ggplot(dd, aes(v, colour = which)) +
        x = "log odds ratio", y = "density")
 ```
 
-Three things to read off. First, `r fmt(100 * p_bad, 1)`% of Efron replicates were infinite or undefined — essentially the $(1 - 1/24)^{24} \approx `r fmt(100 * (1 - 1/24)^24, 1)`$% chance that the lone event-subject is never drawn across the $24$ draws (the other cells can empty too, but with the counts here that contributes almost nothing). Second, the conditioning bias is real, not hypothetical: the percentile interval from the *finite replicates only* is $[`r fmt(quantile(lo_e[!bad], .025), 2)`, `r fmt(quantile(lo_e[!bad], .975), 2)`]$, against the Haldane version's $[`r fmt(quantile(lo_h, .025), 2)`, `r fmt(quantile(lo_h, .975), 2)`]$ and the Jeffreys posterior's $[`r fmt(quantile(lo_j, .025), 2)`, `r fmt(quantile(lo_j, .975), 2)`]$. Every replicate you threw away was at $-\infty$ — the entire discarded mass lived in the left tail — so `tryCatch`-and-drop is not a repair, it is an amputation of the tail your interval was supposed to cover. The finite-only interval is not an interval for the log odds ratio; it is an interval for the log odds ratio *conditional on the rare cell surviving resampling*, which nobody asked for.
+Three things to read off. First, `r fmt(100 * p_bad, 1)`% of Efron replicates were infinite or undefined — essentially the $(1 - 1/`r n_s`)^{`r n_s`} \approx `r fmt(100 * (1 - 1/n_s)^n_s, 1)`$% chance that the lone event-subject is never drawn across the $`r n_s`$ draws (the other cells can empty too, but with the counts here that contributes almost nothing). Second, the conditioning bias is real, not hypothetical: the percentile interval from the *finite replicates only* is $[`r fmt(quantile(lo_e[!bad], .025), 2)`, `r fmt(quantile(lo_e[!bad], .975), 2)`]$, against the Haldane version's $[`r fmt(quantile(lo_h, .025), 2)`, `r fmt(quantile(lo_h, .975), 2)`]$ and the Jeffreys posterior's $[`r fmt(quantile(lo_j, .025), 2)`, `r fmt(quantile(lo_j, .975), 2)`]$. Every replicate you threw away was at $-\infty$ — the entire discarded mass lived in the left tail — so `tryCatch`-and-drop is not a repair, it is an amputation of the tail your interval was supposed to cover. The finite-only interval is not an interval for the log odds ratio; it is an interval for the log odds ratio *conditional on the rare cell surviving resampling*, which nobody asked for.
 
 ::: {.callout-tip}
 ## The frequentist band-aid is a Bayesian prior
@@ -876,13 +895,12 @@ p_max <- ggplot(cdf_df, aes(t, F, colour = which)) +
 p_atom | p_max
 ```
 
-For this one sample the Efron atom weighs `r fmt(atom_share, 3)`, against the theoretical $1 - (1 - 1/25)^{25} = `r fmt(1 - (1 - 1/25)^25, 3)`$. The true sampling law of the maximum is continuous, skewed, and lives just below $\theta$; the bootstrap replaces it with a spike and a lattice, and no amount of $B$ repairs it. The Bayesian bootstrap, for this functional, is not an improvement but a perfection of the failure: the support endpoint of a reweighted sample is $\max(x)$ with probability one, so its "posterior" is a point mass. And this is Münchhausen's actual physics lesson: **you cannot pull yourself out of the swamp when the thing you are standing on — the observed support — is the thing that is sinking.** The consistent-$\hat F$ rope is tied to nothing here, because the functional cares about exactly the part of $F$ that $\hat F$ estimates worst.
+For this one sample the Efron atom weighs `r fmt(atom_share, 3)`, against the theoretical $1 - (1 - 1/`r n_u`)^{`r n_u`} = `r fmt(1 - (1 - 1/n_u)^n_u, 3)`$. The true sampling law of the maximum is continuous, skewed, and lives just below $\theta$; the bootstrap replaces it with a spike and a lattice, and no amount of $B$ repairs it. The Bayesian bootstrap, for this functional, is not an improvement but a perfection of the failure: the support endpoint of a reweighted sample is $\max(x)$ with probability one, so its "posterior" is a point mass. And this is Münchhausen's actual physics lesson: **you cannot pull yourself out of the swamp when the thing you are standing on — the observed support — is the thing that is sinking.** The consistent-$\hat F$ rope is tied to nothing here, because the functional cares about exactly the part of $F$ that $\hat F$ estimates worst.
 
 For smooth functionals, meanwhile, the swamp recedes — and it is worth watching how slowly. Here is the percentile-versus-BCa disagreement on a skewed mean as $n$ grows:
 
 ```{r}
 #| label: fig-nsweep
-#| cache: true
 #| fig-height: 4.2
 #| fig-cap: "Disagreement between the percentile and BCa upper endpoints for a chi-squared(1) mean, in standard-error units, averaged over simulations at each n. The gap shrinks steadily — but the fitted slope is shallower than the asymptotic −½ reference (dashed), because at these sample sizes a skewed summand has not yet reached the regime where the theory's rate applies. The honest reading: the corrections BCa makes are exactly the ones the asymptotics eventually make for you, and 'eventually' arrives later than the O(n^{-1/2}) label suggests."
 #| fig-alt: "Log-log plot of the standardised gap between BCa and percentile interval upper endpoints against sample size from 10 to 640. Red points decline steadily but along a visibly shallower path than the dashed reference line of slope minus one half, with the observed fitted slope annotated on the plot."
