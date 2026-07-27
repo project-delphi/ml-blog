@@ -29,10 +29,15 @@ This is enforced: `.claude/settings.json` registers a `PreToolUse` hook on `Bash
 
 ```bash
 pkill -f "quarto.*preview"        # quarto preview servers
-pkill -f "http.server .*docs"     # any static docs server started for previewing
+# Static docs servers. Matching argv misses `cd docs && python -m http.server`
+# (no "docs" in its command line), so match on cwd — which also spares servers
+# belonging to other projects. Run from the repo root.
+pgrep -f "http\.server" | while read -r pid; do
+  lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | grep -q "^n$PWD" && kill "$pid"
+done
 ```
 
-Confirm nothing survives (`pgrep -fl "quarto preview"` should print nothing) and say so in the wrap-up.
+Confirm nothing survives — `pgrep -fl "quarto preview"` prints nothing, and `lsof -nP -iTCP -sTCP:LISTEN | grep -i python` lists no server rooted in this repo — and say so in the wrap-up.
 
 ## Writing conventions
 
