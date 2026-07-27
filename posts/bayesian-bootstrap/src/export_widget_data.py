@@ -137,28 +137,13 @@ def export_toy() -> dict[str, object]:
     }
 
 
-def _rle(bits: NDArray[np.bool_]) -> list[int]:
-    """Run-length encode a boolean vector, starting from ``True``.
-
-    Returns alternating run lengths; the first run is of ``True`` and may be
-    zero-length if the vector starts ``False``.
-    """
-    runs: list[int] = []
-    current = True
-    count = 0
-    for bit in bits:
-        if bool(bit) == current:
-            count += 1
-        else:
-            runs.append(count)
-            current = not current
-            count = 1
-    runs.append(count)
-    return runs
-
-
 def export_mnist() -> dict[str, object]:
-    """Per-example correctness, per-class counts and the confusion matrix."""
+    """Per-class counts and the confusion matrix.
+
+    The per-example correctness vector is deliberately *not* shipped: every
+    metric the widgets compute is a function of the per-class counts, so the
+    10,000 individual outcomes would be bytes nothing reads.
+    """
     import mnist_experiment as mx
 
     cache = mx.train_and_cache()
@@ -176,7 +161,6 @@ def export_mnist() -> dict[str, object]:
         "k": cache.k,
         "accuracy": round(cache.accuracy, 6),
         "backend": cache.backend,
-        "correct_rle": _rle(cache.correct),
         "per_class": per_class,
         "confusion": confusion.tolist(),
     }
