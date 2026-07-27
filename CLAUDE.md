@@ -33,7 +33,8 @@ pkill -f "quarto.*preview"        # quarto preview servers
 # (no "docs" in its command line), so match on cwd — which also spares servers
 # belonging to other projects. Run from the repo root.
 pgrep -f "http\.server" | while read -r pid; do
-  lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | grep -q "^n$PWD" && kill "$pid"
+  cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
+  case "$cwd" in "$PWD"|"$PWD"/*) kill "$pid";; esac
 done
 ```
 
