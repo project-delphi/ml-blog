@@ -18,16 +18,14 @@ A personal ML/data blog ("Synthetic Musings") built with [Quarto](https://quarto
 
 **Never commit to `main`.** Every change — new post, edit, fix, even a one-line typo — goes through: feature branch → commit (source *and* the re-rendered `docs/` output together) → push → open a PR with a real description of what changed and why → PR review → merge. `main` only ever advances via a merged PR. The `ship-pr` skill automates this loop.
 
-This is enforced, not just documented: `.claude/settings.json` registers a `PreToolUse` hook on `Bash` that runs `.claude/hooks/block-main-commit.sh`, which denies any command reaching `git commit` while HEAD is on `main`/`master`. A command that *creates* a branch first passes (`git switch -c rk/foo && git commit …`); a bare `git switch main && git commit` does not — switching onto `main` is not an escape hatch. Switching to an *existing* branch and committing is also blocked while on `main`, which is deliberate: it fails safe, and the deny message says what to do. Run `.claude/hooks/test-block-main-commit.sh` after touching the hook — it asserts the full allow/block matrix. To override deliberately, commit from your own terminal, or disable the hook via `/hooks`.
+This is enforced: `.claude/settings.json` registers a `PreToolUse` hook on `Bash` running `.claude/hooks/block-main-commit.sh`, which denies any command reaching `git commit` while HEAD is on `main`/`master`. Creating a branch first passes (`git switch -c rk/foo && git commit …`); switching onto `main` is not an escape hatch. Run `.claude/hooks/test-block-main-commit.sh` after touching the hook — it asserts the full allow/block matrix. To override deliberately, commit from your own terminal or disable the hook via `/hooks`.
 
-**Hand back a localhost preview link whenever a unit of work is complete.** Don't just say "done" — give a clickable URL the change can be eyeballed at, e.g.:
+**Hand back a localhost preview link whenever a unit of work is complete** — a clickable URL, not just "done":
 
-- `quarto preview posts/<slug>/index.qmd` and report the URL it prints (typically `http://localhost:<port>/`), or
+- `quarto preview posts/<slug>/index.qmd`, reporting the URL it prints (typically `http://localhost:<port>/`) — prefer this single-post form, since a whole-project preview indexes and executes every post; or
 - serve the already-built output: `python -m http.server 8000 --directory docs` → `http://localhost:8000/posts/<slug>/index.html`.
 
-Prefer the single-post form; a whole-project preview indexes and executes every post.
-
-**Kill every running Quarto preview server once the change is shipped and merged.** After the PR merges, tear the servers down so stale previews don't linger on their ports:
+**Kill every running preview server once the change is merged**, so stale previews don't linger on their ports:
 
 ```bash
 pkill -f "quarto.*preview"        # quarto preview servers
@@ -37,6 +35,15 @@ pkill -f "http.server .*docs"     # any static docs server started for previewin
 Confirm nothing survives (`pgrep -fl "quarto preview"` should print nothing) and say so in the wrap-up.
 
 ## Writing conventions
+
+**Give every post a spine.** A post is one argument, not a pile of sections. Name the core idea in a sentence before writing; every section advances it, and the reader always knows where they stand relative to it.
+
+- **Open on the core idea and the stakes** — the question, why it's non-obvious, what changes once the reader knows. No "in this post we will…" preamble.
+- **Headings state claims, not topics** — `## Efron's bootstrap is a weighted bootstrap in disguise`, not `## Background`, so the ToC reconstructs the argument.
+- **Each section earns the next.** If two could swap without damage, merge or cut one. `###` is for steps within one idea, not new ideas.
+- **Stitch every seam.** A section's first sentence links back to the previous result or the core idea; its last names the unresolved thing the next section answers — the gap, not the mechanics ("next, some code"). Same for code and figures: a sentence before saying what it will show, one after saying what happened. If an opening sentence reads identically with the previous section deleted, the seam isn't stitched.
+- **Close by returning to the core idea** — restate the opening claim now that it's earned, what it buys in practice, and where it stops holding. Not a summary of sections.
+- **Caveats inline**, as their own short section where the objection occurs (`## Caveat: the uniform is the posterior, not the prior`) — not a "Limitations" bin at the end.
 
 **Always situate the data.** Any post that uses, plots, or even mentions a dataset must tell the reader where it came from before doing anything with it. Cover, in prose (not a bullet checklist bolted on):
 
@@ -50,13 +57,17 @@ Synthetic data is not exempt: state that it is synthetic, give the generating pr
 
 ## Architecture
 
-**Posts are independent, dependency-isolated documents.** `pyproject.toml`'s dependencies are only dev/lint tooling (black, ruff, mypy, jupyter, etc.) — no numpy/sklearn/torch/etc. Any post with real compute dependencies gets its own dedicated virtualenv at the repo root (gitignored, e.g. `.venv-tda`, `.venv-tda-svm`), registered as a **named Jupyter kernel** (`python -m ipykernel install --user --name <kernel-name>`), and the post's frontmatter pins execution to it via `jupyter: <kernel-name>`. When adding a new code-heavy post: create `.venv-<slug>`, `pip install` only what that post needs **plus Quarto's own execution stack** (`jupyter nbclient nbformat pyyaml` — `ipykernel` alone is not enough; without them a render dies with `ModuleNotFoundError: No module named 'yaml'` from Quarto's `jupyter.py` shim), register the kernel, set `jupyter: <kernel-name>` in frontmatter, and render/execute through that venv specifically.
+**Posts are independent, dependency-isolated documents.** `pyproject.toml` carries only dev/lint tooling — no numpy/sklearn/torch. Each code-heavy post gets its own gitignored `.venv-<slug>` at the repo root (e.g. `.venv-tda`, `.venv-tda-svm`), registered as a named Jupyter kernel, and pins execution to it via `jupyter: <kernel-name>` in frontmatter. **Never install into or execute with the system Python** — a bare `python`/`pip` is the system one and will pollute it (or fail on externally-managed environments). Invoke the venv's interpreter directly, which is more robust than activation in non-interactive shells:
 
-**Never install into or execute with the system Python.** Every `pip install`, `ipykernel install`, and render must go through a venv — either activate it (`source .venv-<slug>/bin/activate`) or, more robustly in non-interactive shells, invoke the venv's interpreter directly: `.venv-<slug>/bin/python -m pip install ...` and `.venv-<slug>/bin/python -m ipykernel install --user --name <kernel-name>`. A bare `python`/`pip` at the shell prompt is the system Python and will pollute it (or fail on externally-managed environments); the registered kernel must point at the venv's interpreter, not the system one — verify with `jupyter kernelspec list` and check the kernel's `kernel.json` `argv` path if a render picks up the wrong environment.
+```bash
+.venv-<slug>/bin/python -m pip install <post deps> jupyter nbclient nbformat pyyaml
+.venv-<slug>/bin/python -m ipykernel install --user --name <kernel-name>
+QUARTO_PYTHON="$(pwd)/.venv-<slug>/bin/python" quarto render posts/<slug>/index.qmd
+```
 
-**Rendering a code-heavy post from a non-interactive shell:** `quarto render` discovers its kernel through whatever Python it finds by default, which usually does *not* see a `--user`-registered kernel — the render then fails with `ERROR: Jupyter kernel '<name>' not found. Known kernels: python3`. Point Quarto at the post's venv explicitly: `QUARTO_PYTHON="$(pwd)/.venv-<slug>/bin/python" quarto render posts/<slug>/index.qmd` (equivalently, activate the venv first). This is why the per-post venv must carry the full Jupyter execution stack noted above, not just `ipykernel`.
+Each line above fixes a real failure. `ipykernel` alone is not enough — without Quarto's execution stack (`jupyter nbclient nbformat pyyaml`) a render dies with `ModuleNotFoundError: No module named 'yaml'` from Quarto's `jupyter.py` shim. And `quarto render` finds its kernel through whatever Python it defaults to, which usually cannot see a `--user`-registered kernel: without `QUARTO_PYTHON` it fails with `ERROR: Jupyter kernel '<name>' not found. Known kernels: python3`.
 
-For posts that only *display* code (all cells `#| eval: false`, nothing actually executes — e.g. `posts/langgraph-vs-llamaindex`), a dedicated venv is unnecessary; they pin `jupyter: blog-base`, a shared kernel over the base `.venv` (`make venv && make install`, then `python -m ipykernel install --user --name blog-base`). Quarto still needs *some* working kernel to structurally process `{python}` cells even when nothing runs, so register `blog-base` once before rendering this kind of post on a fresh clone.
+Posts that only *display* code (all cells `#| eval: false` — e.g. `posts/langgraph-vs-llamaindex`) need no dedicated venv; they pin `jupyter: blog-base`, a shared kernel over the base `.venv` (`make venv && make install`, then register `blog-base` the same way). Quarto still needs *some* working kernel to structurally process `{python}` cells even when nothing runs, so register it once on a fresh clone.
 
 **Frontmatter conventions** (see any existing post for a template):
 ```yaml
