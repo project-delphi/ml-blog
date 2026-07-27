@@ -18,7 +18,7 @@ A personal ML/data blog ("Synthetic Musings") built with [Quarto](https://quarto
 
 **Never commit to `main`.** Every change — new post, edit, fix, even a one-line typo — goes through: feature branch → commit (source *and* the re-rendered `docs/` output together) → push → open a PR with a real description of what changed and why → PR review → merge. `main` only ever advances via a merged PR. The `ship-pr` skill automates this loop.
 
-This is enforced, not just documented: `.claude/settings.json` registers a `PreToolUse` hook on `Bash` that runs `.claude/hooks/block-main-commit.sh`, which denies any command reaching `git commit` while HEAD is on `main`/`master`. A command that switches branch first (`git switch -c rk/foo && git commit …`) passes. To override deliberately, commit from your own terminal, or disable the hook via `/hooks`.
+This is enforced, not just documented: `.claude/settings.json` registers a `PreToolUse` hook on `Bash` that runs `.claude/hooks/block-main-commit.sh`, which denies any command reaching `git commit` while HEAD is on `main`/`master`. A command that *creates* a branch first passes (`git switch -c rk/foo && git commit …`); a bare `git switch main && git commit` does not — switching onto `main` is not an escape hatch. Switching to an *existing* branch and committing is also blocked while on `main`, which is deliberate: it fails safe, and the deny message says what to do. Run `.claude/hooks/test-block-main-commit.sh` after touching the hook — it asserts the full allow/block matrix. To override deliberately, commit from your own terminal, or disable the hook via `/hooks`.
 
 **Hand back a localhost preview link whenever a unit of work is complete.** Don't just say "done" — give a clickable URL the change can be eyeballed at, e.g.:
 
@@ -30,8 +30,8 @@ Prefer the single-post form; a whole-project preview indexes and executes every 
 **Kill every running Quarto preview server once the change is shipped and merged.** After the PR merges, tear the servers down so stale previews don't linger on their ports:
 
 ```bash
-pkill -f "quarto preview" ; pkill -f "quarto.*preview"   # quarto preview servers
-pkill -f "http.server .*docs"                             # any static docs server started for previewing
+pkill -f "quarto.*preview"        # quarto preview servers
+pkill -f "http.server .*docs"     # any static docs server started for previewing
 ```
 
 Confirm nothing survives (`pgrep -fl "quarto preview"` should print nothing) and say so in the wrap-up.
