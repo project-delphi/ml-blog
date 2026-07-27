@@ -57,17 +57,21 @@ Synthetic data is not exempt: state that it is synthetic, give the generating pr
 
 ## Architecture
 
-**Posts are independent, dependency-isolated documents.** `pyproject.toml` carries only dev/lint tooling — no numpy/sklearn/torch. Each code-heavy post gets its own gitignored `.venv-<slug>` at the repo root (e.g. `.venv-tda`, `.venv-tda-svm`), registered as a named Jupyter kernel, and pins execution to it via `jupyter: <kernel-name>` in frontmatter. **Never install into or execute with the system Python** — a bare `python`/`pip` is the system one and will pollute it (or fail on externally-managed environments). Invoke the venv's interpreter directly, which is more robust than activation in non-interactive shells:
+**Posts are independent, dependency-isolated documents.** `pyproject.toml` carries only dev/lint tooling — no numpy/sklearn/torch. Each code-heavy post gets its own gitignored `.venv-<slug>` at the repo root (e.g. `.venv-tda`, `.venv-tda-svm`), registered as a named Jupyter kernel, and pins execution to it via `jupyter: <kernel-name>` in frontmatter. **Never install into or execute with the system Python** — a bare `python`/`pip` is the system one and will pollute it (or fail on externally-managed environments). Always target the venv explicitly rather than relying on activation:
 
 ```bash
-.venv-<slug>/bin/python -m pip install <post deps> jupyter nbclient nbformat pyyaml
+uv venv .venv-<slug>
+uv pip install --python .venv-<slug>/bin/python <post deps> ipykernel jupyter nbclient nbformat pyyaml
 .venv-<slug>/bin/python -m ipykernel install --user --name <kernel-name>
 QUARTO_PYTHON="$(pwd)/.venv-<slug>/bin/python" quarto render posts/<slug>/index.qmd
+uv pip freeze --python .venv-<slug>/bin/python > posts/<slug>/requirements.txt
 ```
 
-Each line above fixes a real failure. `ipykernel` alone is not enough — without Quarto's execution stack (`jupyter nbclient nbformat pyyaml`) a render dies with `ModuleNotFoundError: No module named 'yaml'` from Quarto's `jupyter.py` shim. And `quarto render` finds its kernel through whatever Python it defaults to, which usually cannot see a `--user`-registered kernel: without `QUARTO_PYTHON` it fails with `ERROR: Jupyter kernel '<name>' not found. Known kernels: python3`.
+Each line above fixes a real failure. `ipykernel` alone is not enough — without Quarto's execution stack (`jupyter nbclient nbformat pyyaml`) a render dies with `ModuleNotFoundError: No module named 'yaml'` from Quarto's `jupyter.py` shim. And `quarto render` finds its kernel through whatever Python it defaults to, which usually cannot see a `--user`-registered kernel: without `QUARTO_PYTHON` it fails with `ERROR: Jupyter kernel '<name>' not found. Known kernels: python3`. If a render picks up the wrong environment, `jupyter kernelspec list` and the kernel's `argv[0]` say which interpreter it actually resolved to.
 
-Posts that only *display* code (all cells `#| eval: false` — e.g. `posts/langgraph-vs-llamaindex`) need no dedicated venv; they pin `jupyter: blog-base`, a shared kernel over the base `.venv` (`make venv && make install`, then register `blog-base` the same way). Quarto still needs *some* working kernel to structurally process `{python}` cells even when nothing runs, so register it once on a fresh clone.
+That last line is not optional: every post with a dedicated venv carries its exact versions in `posts/<slug>/requirements.txt`, because `_freeze/` is gitignored while `docs/` is committed — without it a re-render on drifted dependencies silently changes published output. Venvs predating uv still work, driven by `.venv-<slug>/bin/python -m pip` (a `uv venv` has no `pip`); recreate one in place from its lockfile to migrate it — kernel specs store an absolute path, so reusing the directory name keeps the registration valid.
+
+Posts that only *display* code (all cells `#| eval: false` — e.g. `posts/langgraph-vs-llamaindex`) need no dedicated venv; they pin `jupyter: blog-base`, a shared kernel over the base `.venv` (`make venv && make install && make kernel`). Quarto still needs *some* working kernel to structurally process `{python}` cells even when nothing runs, so register it once on a fresh clone.
 
 **Frontmatter conventions** (see any existing post for a template):
 ```yaml
