@@ -1,8 +1,9 @@
-# setup blog virtual environment
+# setup blog virtual environment (--allow-existing keeps this idempotent;
+# without it uv exits non-zero when .venv already exists)
 venv:
-	uv venv .venv
+	uv venv --allow-existing .venv
 # install dependencies for blog
-install:
+install: venv
 	uv pip install --python .venv/bin/python .
 # register the shared blog-base Jupyter kernel over .venv
 kernel:
