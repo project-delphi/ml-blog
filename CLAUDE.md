@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A personal ML/data blog ("Synthetic Musings") built with [Quarto](https://quarto.org/) and published to GitHub Pages at https://project-delphi.github.io/ml-blog/. Each post is a self-contained `.qmd` or `.ipynb` file under `posts/<slug>/`; the rendered static site lives in `docs/` and is committed directly to `main` (there is no CI workflow — `docs/` must be rendered and committed locally as part of any content change).
+A personal ML/data blog ("Synthetic Musings") built with [Quarto](https://quarto.org/) and published to GitHub Pages at https://project-delphi.github.io/ml-blog/. Each post is a self-contained `.qmd` or `.ipynb` file under `posts/<slug>/`; the rendered static site lives in `docs/` and is served from `main` (there is no CI workflow — `docs/` must be rendered locally and committed *in the same commit/PR* as the source change, otherwise the published site drifts from the source).
 
 ## Commands
 
@@ -13,6 +13,40 @@ A personal ML/data blog ("Synthetic Musings") built with [Quarto](https://quarto
 - Preview: `quarto preview` (or `make preview`). Previewing the whole project also indexes/executes every post the first time, so prefer `quarto preview posts/<slug>/index.qmd` or serve the already-built `docs/` folder statically (e.g. `python -m http.server` from `docs/`) when you just need to eyeball one post.
 - `make venv` / `make install`: create `.venv` and `pip install .` (the base dev/lint toolchain from `pyproject.toml` — this does *not* include per-post ML dependencies, see below).
 - Lint/format tooling (black, ruff, mypy, pyupgrade, commitizen, codespell) is configured in `.pre-commit-config.yaml` and `pyproject.toml` (`[tool.ruff]`, `[tool.pydoclint]`, `[tool.codespell]`) but hooks aren't installed by default — run manually with `pre-commit run --all-files` if needed.
+
+## Workflow
+
+**Never commit to `main`.** Every change — new post, edit, fix, even a one-line typo — goes through: feature branch → commit (source *and* the re-rendered `docs/` output together) → push → open a PR with a real description of what changed and why → PR review → merge. `main` only ever advances via a merged PR. The `ship-pr` skill automates this loop.
+
+This is enforced, not just documented: `.claude/settings.json` registers a `PreToolUse` hook on `Bash` that runs `.claude/hooks/block-main-commit.sh`, which denies any command reaching `git commit` while HEAD is on `main`/`master`. A command that *creates* a branch first passes (`git switch -c rk/foo && git commit …`); a bare `git switch main && git commit` does not — switching onto `main` is not an escape hatch. Switching to an *existing* branch and committing is also blocked while on `main`, which is deliberate: it fails safe, and the deny message says what to do. Run `.claude/hooks/test-block-main-commit.sh` after touching the hook — it asserts the full allow/block matrix. To override deliberately, commit from your own terminal, or disable the hook via `/hooks`.
+
+**Hand back a localhost preview link whenever a unit of work is complete.** Don't just say "done" — give a clickable URL the change can be eyeballed at, e.g.:
+
+- `quarto preview posts/<slug>/index.qmd` and report the URL it prints (typically `http://localhost:<port>/`), or
+- serve the already-built output: `python -m http.server 8000 --directory docs` → `http://localhost:8000/posts/<slug>/index.html`.
+
+Prefer the single-post form; a whole-project preview indexes and executes every post.
+
+**Kill every running Quarto preview server once the change is shipped and merged.** After the PR merges, tear the servers down so stale previews don't linger on their ports:
+
+```bash
+pkill -f "quarto.*preview"        # quarto preview servers
+pkill -f "http.server .*docs"     # any static docs server started for previewing
+```
+
+Confirm nothing survives (`pgrep -fl "quarto preview"` should print nothing) and say so in the wrap-up.
+
+## Writing conventions
+
+**Always situate the data.** Any post that uses, plots, or even mentions a dataset must tell the reader where it came from before doing anything with it. Cover, in prose (not a bullet checklist bolted on):
+
+- **Provenance** — what the dataset actually is, and a link/citation to the source.
+- **Collector and motive** — who gathered it, under what program or institution, and why they went to the trouble. Instrument, survey, scrape, simulation: say which.
+- **Objective** — what question is being asked *of this data in this post*, and what the target/label means in the real world.
+- **Downstream impact** — what a decision made from this analysis would actually affect (a diagnosis, a loan, a forecast, a research conclusion), and what it costs to be wrong.
+- **Why this method** — what specific property of *this* data (sample size, noise, class imbalance, heavy tails, hierarchy, missingness, small-n uncertainty) makes the technique in the post the right tool, and which quantity we care about it improves.
+
+Synthetic data is not exempt: state that it is synthetic, give the generating process, and explain what real-world situation it is standing in for and why simulating is preferable to a real dataset here.
 
 ## Architecture
 
