@@ -3,8 +3,10 @@
 venv:
 	uv venv --allow-existing .venv
 # install the base toolchain from uv.lock (not a fresh resolve), so every clone
-# gets byte-identical versions; uv sync also prunes anything not in the lock
-install: venv
+# gets byte-identical versions; uv sync also prunes anything not in the lock.
+# No `venv` prerequisite: uv sync creates and manages .venv itself, and running
+# `uv venv` first would only risk building it against the wrong interpreter.
+install:
 	uv sync
 # regenerate uv.lock from pyproject.toml without touching .venv -- useful for
 # reviewing a dependency change before installing it. `make install` keeps the
@@ -23,8 +25,8 @@ quatro:
 # help
 help:
 	@echo "venv - setup blog virtual environment"
-	@echo "install - install dependencies for blog"
-	@echo "lock - refresh the root uv.lock for the base toolchain"
+	@echo "install - sync .venv from uv.lock (creates .venv; prunes extras)"
+	@echo "lock - regenerate uv.lock from pyproject.toml, leaving .venv alone"
 	@echo "kernel - register the blog-base Jupyter kernel"
 	@echo "preview - quarto preview"
 	@echo "quatro - quarto render"
