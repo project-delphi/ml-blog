@@ -1,0 +1,211 @@
+---
+title: "Swarms in Worktrees: How Claude Code Agents Work in Parallel"
+subtitle: "Git worktrees give every agent its own working directory — turning parallel coding agents from a collision risk into a swarm"
+author: "Ravi Kalia"
+date: "2026-07-28"
+categories: [Tooling, Agents, Claude Code, Git]
+tags: [git-worktrees, claude-code, parallel-agents, subagents, version-control]
+format:
+  html:
+    toc: true
+    toc-depth: 2
+header-includes: |
+  <style>
+  .wt { margin: 1.6rem 0 0.4rem 0; }
+  .wt svg { width: 100%; max-width: 520px; display: block; margin: 0 auto;
+            font-family: ui-sans-serif, system-ui, sans-serif; }
+  .wt-cap { text-align: center; font-size: 0.82rem; opacity: 0.7; margin-bottom: 1.6rem; }
+  .wt-box { fill: rgba(224,108,117,0); stroke: #6b7280; stroke-width: 1.5; }
+  .wt-lane { stroke: #6b7280; stroke-width: 1; stroke-dasharray: 3 4; opacity: 0.45; }
+  .wt-lbl { fill: #4b5563; font-size: 11px; }
+  .wt-tag { fill: #1f2937; font-size: 10px; }
+  .wt-hit { fill: #c0392b; font-size: 11px; font-weight: 700; opacity: 0; }
+
+  @keyframes wtA1 { 0%,8%  { transform: none; } 42%,100% { transform: translate(170px,70px); } }
+  @keyframes wtA2 { 0%,14% { transform: none; } 48%,100% { transform: translate(170px,10px); } }
+  @keyframes wtA3 { 0%,20% { transform: none; } 54%,100% { transform: translate(170px,-50px); } }
+  @keyframes wtHit  { 0%,50% { stroke: #6b7280; fill: rgba(224,108,117,0); }
+                      62%    { stroke: #c0392b; fill: rgba(224,108,117,0.22); }
+                      80%,100% { stroke: #6b7280; fill: rgba(224,108,117,0); } }
+  @keyframes wtBoom { 0%,52% { opacity: 0; } 62%,82% { opacity: 1; } 94%,100% { opacity: 0; } }
+  .wt-a .d1 { animation: wtA1 3s infinite; }
+  .wt-a .d2 { animation: wtA2 3s infinite; }
+  .wt-a .d3 { animation: wtA3 3s infinite; }
+  .wt-a .shared { animation: wtHit 3s infinite; }
+  .wt-a .wt-hit { animation: wtBoom 3s infinite; }
+
+  @keyframes wtB    { 0%,8%  { transform: none; } 38%,100% { transform: translate(120px,0); } }
+  @keyframes wtFade { 0%,58% { opacity: 1; } 78%,100% { opacity: 0.18; } }
+  @keyframes wtMerge{ 0%,58% { transform: none; opacity: 0; } 64% { opacity: 1; }
+                      86%,100% { transform: translate(80px,0); opacity: 1; } }
+  @keyframes wtLand { 0%,80% { opacity: 0; transform: scale(0.4); }
+                      90%    { opacity: 0.9; transform: scale(1.6); }
+                      100%   { opacity: 0; transform: scale(1.9); } }
+  .wt-b .d1 { animation: wtB 3s infinite; }
+  .wt-b .d2 { animation: wtB 3s infinite 0.12s; }
+  .wt-b .d3 { animation: wtB 3s infinite 0.24s; }
+  .wt-b .lose { animation: wtFade 3s infinite; }
+  .wt-b .merge { animation: wtMerge 3s infinite; opacity: 0; }
+  .wt-b .land { animation: wtLand 3s infinite; opacity: 0;
+                transform-box: view-box; transform-origin: 380px 95px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wt * { animation: none !important; }
+    .wt-a .d1 { transform: translate(170px,70px); }
+    .wt-a .d2 { transform: translate(170px,10px); }
+    .wt-a .d3 { transform: translate(170px,-50px); }
+    .wt-a .shared { stroke: #c0392b; fill: rgba(224,108,117,0.22); }
+    .wt-a .wt-hit { opacity: 1; }
+    .wt-b .d1, .wt-b .d2, .wt-b .d3 { transform: translate(120px,0); }
+    .wt-b .lose { opacity: 0.18; }
+    .wt-b .merge { transform: translate(80px,0); opacity: 1; }
+  }
+  </style>
+---
+
+## The diff that made no sense
+
+You dispatch two agents at once. One is refactoring the auth middleware; the other is adding tests for the same module. Ten minutes later you open the diff and it is incoherent — half a refactor, a test importing a symbol that no longer exists, and a function body that plainly belongs to neither task. Nothing errored. Neither agent reported a problem. Both told you they were done.
+
+What happened is mundane. Both agents were writing into the same checkout. The first read `middleware.ts`, thought for a while, and wrote back its edited version — a version derived from the file as it stood *before* the second agent's change landed. That change is now gone. Not merged, not conflicted, just overwritten, and the commit you are looking at is a genuine chimera of two incompatible intentions.
+
+The instinct is to reach for locks, or a queue, or to give up and run one agent at a time. None of that is necessary. Git shipped the fix in 2015, it is installed on your machine right now, and hardly anyone uses it: worktrees.
+
+## What a git worktree actually is
+
+A git repository is two things bolted together. There is the object database — every commit, tree and blob you have ever made, sitting in `.git`. And there is the working directory: the files you actually open and edit. The default layout stacks exactly one working directory on top of exactly one object database, so most people never think of them as separable.
+
+A worktree breaks that one-to-one. One repository, one object database, but *several* working directories — each in its own folder on disk, each with a different branch checked out, all live simultaneously. Commits made in any of them land in the same shared object store, so history stays unified and every branch remains visible from everywhere. This is not a clone: your history is not duplicated, and there is no remote to sync between the copies.
+
+The consequence is the whole point. Editing a file in one worktree has no effect whatsoever on the same file in another. Separate working directories over shared history — which happens to be the exact shape a group of parallel agents needs.
+
+## Why agents collide
+
+The failure at the top of this post was not a git bug or a model mistake. It is structural. An agent reads a file, reasons about it for some seconds, and writes it back. That read-think-write cycle is not atomic, and crucially, agents have no shared model of one another: nothing in agent A's context says "agent B is halfway through editing this exact function." There is no lock to acquire and no notification to receive, so the second write simply wins and the first disappears without a trace.
+
+That silence is what makes it expensive. A merge conflict is loud and stops you; a lost write is quiet and ships. You find it later, in review, in a diff that reads like two people talking over each other — because that is precisely what happened.
+
+```{=html}
+<div class="wt wt-a">
+<svg viewBox="0 0 440 195" role="img" aria-label="Three agents writing into one shared working directory, where their changes collide and overwrite each other.">
+  <line class="wt-lane" x1="55" y1="35"  x2="225" y2="105"/>
+  <line class="wt-lane" x1="55" y1="95"  x2="225" y2="105"/>
+  <line class="wt-lane" x1="55" y1="155" x2="225" y2="105"/>
+  <rect class="wt-box shared" x="150" y="50" width="150" height="110" rx="8"/>
+  <text class="wt-lbl" x="225" y="76"  text-anchor="middle">working directory</text>
+  <text class="wt-hit" x="225" y="140" text-anchor="middle">write overwritten</text>
+  <line class="wt-lane" x1="300" y1="105" x2="372" y2="105"/>
+  <line x1="380" y1="20" x2="380" y2="170" stroke="#6b7280" stroke-width="1.5"/>
+  <circle cx="380" cy="105" r="6" fill="#6b7280"/>
+  <text class="wt-tag" x="380" y="188" text-anchor="middle">main</text>
+  <text class="wt-tag" x="55" y="16"  text-anchor="middle">agent 1</text>
+  <text class="wt-tag" x="55" y="76"  text-anchor="middle">agent 2</text>
+  <text class="wt-tag" x="55" y="136" text-anchor="middle">agent 3</text>
+  <g class="d1"><circle cx="55" cy="35"  r="8" fill="#b87a33"/></g>
+  <g class="d2"><circle cx="55" cy="95"  r="8" fill="#3f8d80"/></g>
+  <g class="d3"><circle cx="55" cy="155" r="8" fill="#c94f59"/></g>
+</svg>
+<div class="wt-cap">One directory, three writers. The last write wins and the others vanish.</div>
+</div>
+```
+
+You could of course create the worktrees yourself, remember which agent belongs in which folder, and clean up afterwards. You do not have to — Claude Code treats isolation as infrastructure and sets it up on your behalf.
+
+## How Claude Code automates this
+
+Isolation is not a single feature here so much as a spectrum, running from "you type one flag" to "you never think about it at all."
+
+At the manual end is the `--worktree` flag. Launch a session with it and Claude Code creates a fresh worktree and works there instead of in your checkout, leaving your files and your current branch untouched:
+
+```bash
+claude --worktree   # or: claude -w
+```
+
+One step up, the Agent view creates a worktree automatically for each session you dispatch. Fan out four pieces of work and you get four working directories without asking for any of them; each session edits real files on a real branch, and none of them can see the others' edits.
+
+The same guarantee is available to subagents. Spawning one with `isolation: "worktree"` gives that subagent its own working directory to edit in — a worktree, not a copy — and it is cleaned up automatically if it finishes without changing anything — so speculative work leaves no debris.
+
+At the fully automatic end is `/batch`, which takes one large task, splits it into many subagents, isolates each in its own worktree, and has each open its own pull request:
+
+```
+/batch add structured logging to every handler in src/api
+```
+
+Outside of `/batch`, what actually triggers a fan-out is the shape of the request rather than any special syntax. Three prompts that reliably end up as several agents in several worktrees:
+
+```
+Try three different fixes for the flaky test in tests/pool_test.go — one per
+worktree, each on its own branch. Tell me which one actually holds. Don't
+merge anything yet.
+```
+
+```
+In parallel, each in its own worktree: add rate limiting to /upload, backfill
+the types in lib/analytics, and upgrade the test runner to vitest 3. Open a
+separate PR for each.
+```
+
+```
+Port the four adapters in src/adapters to the new client interface. One
+subagent per adapter, isolated, and stop each one as soon as its adapter's
+tests pass.
+```
+
+What those share is enumerable units of work, an explicit request to run them separately, and a stopping condition for each. Compare them with "clean up the codebase," which cannot fan out usefully because nothing in it marks where one agent's job ends and the next one's begins — the units have to exist in the prompt before they can exist in worktrees.
+
+The first of those three is worth watching play out, because it is where the isolation stops being bookkeeping and starts being leverage.
+
+## A small swarm in action
+
+Say a test fails intermittently and you have three plausible theories: a race in the connection pool, a bad fixture teardown, or a timeout that is simply too tight. Ordinarily you would try them in sequence, reverting between attempts and hoping you reverted cleanly.
+
+Instead you dispatch three subagents, one theory each, every one of them in its own worktree on its own branch. All three edit the same test file and the same helper at the same time, and none of them interferes with the others — because from each agent's perspective it is the only thing touching the repo. Twenty minutes later you have three branches, three diffs, and three honest reports. Two agents found their theory did not hold. One nailed it.
+
+You merge the winner. The other two worktrees are discarded, and because their work never touched your checkout, discarding them costs nothing and leaves nothing behind. You did not compare three approaches by imagining them; you compared three approaches by running all of them.
+
+```{=html}
+<div class="wt wt-b">
+<svg viewBox="0 0 440 195" role="img" aria-label="Three agents each working in an isolated worktree on its own branch, in parallel without collisions, after which one branch merges into main and the others are discarded.">
+  <g class="lose">
+    <line class="wt-lane" x1="55" y1="35" x2="175" y2="35"/>
+    <rect class="wt-box" x="150" y="13" width="150" height="44" rx="8"/>
+    <text class="wt-lbl" x="245" y="39" text-anchor="middle">fix/pool-race</text>
+  </g>
+  <line class="wt-lane" x1="55" y1="95" x2="175" y2="95"/>
+  <rect class="wt-box" x="150" y="73" width="150" height="44" rx="8"/>
+  <text class="wt-lbl" x="245" y="99" text-anchor="middle">fix/fixture-teardown</text>
+  <g class="lose">
+    <line class="wt-lane" x1="55" y1="155" x2="175" y2="155"/>
+    <rect class="wt-box" x="150" y="133" width="150" height="44" rx="8"/>
+    <text class="wt-lbl" x="245" y="159" text-anchor="middle">fix/timeout</text>
+  </g>
+  <line x1="380" y1="13" x2="380" y2="177" stroke="#6b7280" stroke-width="1.5"/>
+  <circle cx="380" cy="95" r="6" fill="#6b7280"/>
+  <circle class="land" cx="380" cy="95" r="8" fill="none" stroke="#3f8d80" stroke-width="2"/>
+  <text class="wt-tag" x="380" y="192" text-anchor="middle">main</text>
+  <g class="lose"><g class="d1"><circle cx="55" cy="35" r="8" fill="#b87a33"/></g></g>
+  <g class="d2"><circle cx="55" cy="95" r="8" fill="#3f8d80"/></g>
+  <g class="lose"><g class="d3"><circle cx="55" cy="155" r="8" fill="#c94f59"/></g></g>
+  <g class="merge"><circle cx="300" cy="95" r="7" fill="#3f8d80"/></g>
+</svg>
+<div class="wt-cap">Three lanes, three branches, no contention — then one merges and the rest are dropped.</div>
+</div>
+```
+
+Three branches for one bug is obviously not the right move every time, so it is worth being deliberate about when the overhead earns its keep.
+
+## When it's worth it
+
+Reach for worktree isolation when agents will touch overlapping files, when you have several genuinely independent tasks to run at once, when a large change decomposes cleanly into parts, or when you want to compare competing approaches rather than commit to one up front. In all four cases isolation is buying you something specific: the ability to run things concurrently that would otherwise have to be serialised.
+
+Skip it when you are running a single agent — there is nothing to collide with, and a second directory is pure overhead. Skip it for small, quick edits, where setup costs more than the work. And weigh it carefully in projects with heavy per-directory dependency installs: if each worktree needs a fresh `node_modules` or a rebuilt virtualenv, that install cost can swamp the benefit for anything short of a long-running task.
+
+Even when the answer is a clear yes, though, isolation only covers what lives inside the git tree — and plenty of what your agents touch does not.
+
+## The gap worktrees don't cover
+
+Separate working directories protect files. They do nothing for shared state outside them. Point three isolated agents at one development database and they will happily trample each other's migrations. Give them a stateful MCP server and they share its session. Have them tick off items in one shared checklist file that sits outside the worktrees and you have rebuilt the original collision, one level up. Perfect file isolation with a single shared Redis instance is not isolation.
+
+Cost is the other thing isolation does not touch. Three agents on one bug is three times the tokens for one merged fix, and no amount of worktree hygiene changes that. What controls spend is scoping: narrow, well-specified tasks that stop when they are done. Isolation decides whether parallel agents can work; scoping decides whether you should have run them in parallel at all.
+
+Worktrees make the swarm safe. Knowing what to send it after is still your job.
