@@ -71,13 +71,13 @@ STALE_FREEZE_OK = {"pinecone-vs-weaviate", "pyspark"}
 
 
 def executes_code(text: str) -> bool:
-    """True if the post has at least one cell Quarto would actually run."""
+    """Report whether the post has a cell Quarto would actually run."""
     cells = [b for lang, b in CELL_RE.findall(text) if lang in COMPUTE_LANGS]
     return any(not EVAL_FALSE_RE.search(c) for c in cells)
 
 
 def check_environment(slug: str, text: str, post_dir: Path) -> list[str]:
-    """A code-executing post must pin a kernel and commit its versions."""
+    """Require a pinned kernel and committed versions for a code post."""
     if slug in LEGACY_NO_ENV:
         return []
     problems = []
@@ -101,10 +101,28 @@ def check_environment(slug: str, text: str, post_dir: Path) -> list[str]:
     return problems
 
 
-def check_freeze(slug: str, source: Path) -> list[str]:
-    """Frozen output is keyed on an md5 of the source; drift means re-execution."""
+def check_freeze(slug: str, source: Path, executes: bool) -> list[str]:
+    """Match frozen output against its source; drift means re-execution."""
     record = FREEZE / slug / "index" / "execute-results" / "html.json"
-    if not record.exists() or slug in STALE_FREEZE_OK:
+    if not record.exists():
+        # For a legacy post the frozen output is the *only* reproducible copy
+        # of what it computes -- there is no environment left to regenerate it
+        # from. Losing the record is the unrecoverable case, so say so loudly.
+        if slug in LEGACY_NO_ENV:
+            return [
+                "has no _freeze/ record, and no environment to rebuild one from. "
+                "Restore it from git history: a project render will otherwise try "
+                "to execute this post and fail."
+            ]
+        return []
+    if slug in STALE_FREEZE_OK:
+        # Exemption is honoured only while its premise holds. If code cells get
+        # added later, the staleness stops being inert and must be reported.
+        if executes:
+            return [
+                "is exempted in STALE_FREEZE_OK on the grounds that it has no code "
+                "cells, but it now executes code. Re-render it and drop the exemption."
+            ]
         return []
     stored = json.loads(record.read_text())["hash"]
     actual = hashlib.md5(source.read_bytes()).hexdigest()
@@ -124,8 +142,9 @@ def main() -> int:
         if not source.exists():
             continue  # .ipynb posts carry their own stored outputs
         text = source.read_text(errors="ignore")
-        problems = check_freeze(post_dir.name, source)
-        if executes_code(text):
+        executes = executes_code(text)
+        problems = check_freeze(post_dir.name, source, executes)
+        if executes:
             problems += check_environment(post_dir.name, text, post_dir)
         if problems:
             failures[post_dir.name] = problems
