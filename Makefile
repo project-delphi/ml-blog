@@ -22,12 +22,20 @@ kernel:
 # or not. These are stubs: they satisfy the lookup so frozen output can be
 # reused, and carry none of the ML dependencies. Build the real .venv-<slug>
 # from posts/<slug>/requirements.txt only when you need to *execute* a post.
+# Existing kernels are left alone: `ipykernel install --user` overwrites by
+# name, so on a machine that already has the real .venv-<slug> kernels this
+# would silently repoint them at the dependency-free .venv and break every
+# targeted render. Only missing names are registered.
 kernels-stub: install
 	@for k in bayesian-bootstrap-blog ipm-blog sir-blog skills-vs-commands \
 	          svm-margin-blog tda-blog tda-filtered-blog tda-svm-blog \
 	          tribes-blog blog-base; do \
-	  .venv/bin/python -m ipykernel install --user --name $$k >/dev/null 2>&1 \
-	    && echo "registered $$k"; \
+	  if .venv/bin/python -c "import sys;from jupyter_client.kernelspec import KernelSpecManager as K;sys.exit(0 if '$$k' in K().find_kernel_specs() else 1)"; then \
+	    echo "kept     $$k (already registered)"; \
+	  else \
+	    .venv/bin/python -m ipykernel install --user --name $$k >/dev/null 2>&1 \
+	      && echo "stubbed  $$k"; \
+	  fi; \
 	done
 # fail if a post executes code without a pinned kernel + requirements.txt, or
 # if its frozen output has drifted from its source. See scripts/check_posts.py.
