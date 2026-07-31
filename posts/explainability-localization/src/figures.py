@@ -49,7 +49,11 @@ def fig_examples(t: M.Trained, idx: dict[str, int]) -> plt.Figure:
         ax.set_ylim(1e-6, 3.0)
         ax.set_xticks(range(10))
         ax.set_ylabel("probability")
-        runner = np.argsort(probs)[-2]
+        # Ranked on the raw probabilities, never the clipped ones. For the
+        # control digit nine classes sit below the 1e-6 display floor, so
+        # ranking the clipped array picks an arbitrary member of that tie and
+        # labels the wrong class as runner-up.
+        runner = np.argsort(t.prob[i])[-2]
         ax.set_title(
             f"p({t.pred[i]}) = {t.prob[i].max():.3f},   "
             f"p({runner}) = {t.prob[i][runner]:.1e}",

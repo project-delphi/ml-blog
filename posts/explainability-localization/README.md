@@ -108,7 +108,9 @@ generators from it *by name* (`rng_for("permutation")`), so adding an experiment
 never shifts the stream of an existing one. Model training seeds `torch` directly
 and runs on CPU.
 
-Nine gates run while the page builds, and each of them fails the render:
+Ten distinct gates run while the page builds — 14 assertions in total, because the
+four Part I checks run separately for each of the two running examples. Each of
+them fails the render:
 
 **Part I** (`make_figures.mnist_gates`, run for both examples)
 
@@ -118,7 +120,11 @@ Nine gates run while the page builds, and each of them fails the render:
   computed through the model's `features`/`head` split;
 - on this GAP-headed network, Grad-CAM equals Zhou et al.'s CAM divided by the 49
   cells of the 7×7 grid, to better than `1e-5` absolute;
-- integrated gradients assign exactly zero to every pixel equal to the baseline.
+- integrated gradients assign exactly zero to every pixel equal to the baseline;
+- the largest saliency value in the map lands on a baseline-valued pixel. Unlike
+  the others this is a fact about the checkpoint rather than a theorem, and it is
+  gated because the post asserts it in prose: a re-render that moves the maximum
+  onto the stroke should fail the build rather than silently falsify the text.
 
 **Part II** (`iris_stats.self_check`)
 

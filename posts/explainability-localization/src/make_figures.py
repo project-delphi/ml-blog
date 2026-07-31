@@ -82,6 +82,20 @@ def mnist_gates(t: M.Trained, idx: dict[str, int]) -> list[str]:
         assert np.all(ig[black] == 0.0), key
         lines.append(f"[{key}] all {black.sum()} baseline-valued pixels receive exactly zero from IG")
 
+    # The prose says the single largest gradient in the whole saliency map lands
+    # on a pixel the image leaves empty. Unlike the checks above that is a fact
+    # about this checkpoint rather than a theorem, so it is gated rather than
+    # trusted: a re-render that moves the maximum onto the stroke should fail
+    # the build and force the sentence to be rewritten, not silently falsify it.
+    i = idx["wrong"]
+    sal = np.abs(A.saliency(t.model, t.xte[i], int(t.pred[i])))
+    black = t.xte[i, 0].numpy() == 0
+    assert black.ravel()[sal.argmax()], "saliency maximum is no longer on a baseline-valued pixel"
+    lines.append(
+        f"[wrong] the largest saliency value in the map ({sal.max():.2f}) is on a "
+        "baseline-valued pixel"
+    )
+
     return lines
 
 
