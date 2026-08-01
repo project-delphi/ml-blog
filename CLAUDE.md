@@ -95,6 +95,7 @@ uv pip install --python .venv-huggingface/bin/python \
   torch transformers datasets tokenizers huggingface_hub evaluate peft \
   sentence-transformers diffusers accelerate safetensors \
   rouge_score sacrebleu nltk absl-py bert_score scikit-learn numpy pandas matplotlib Pillow \
+  torchvision opencv-python-headless \
   pypdf langchain langchain-core langchain-text-splitters langchain-huggingface \
   ipykernel jupyter nbclient nbformat pyyaml
 .venv-huggingface/bin/python -m ipykernel install --user --name huggingface-blog

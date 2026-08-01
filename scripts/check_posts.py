@@ -47,7 +47,6 @@ COMPUTE_LANGS = {"python", "r", "julia"}
 LEGACY_NO_ENV = {
     "classifying_text_chunks",
     "data-types",
-    "diffusers",
     "evaluation-metrics",
     "features-importance-after-clustering",
     "langchain",
