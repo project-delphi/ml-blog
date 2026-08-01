@@ -1,130 +1,240 @@
 ---
 title: "Transformers Library for NLP"
-format: html
+description: "`pipeline()` is three objects behind one call — and fine-tuning is what forces you to take them apart."
+author: "Ravi Kalia"
 date: "2025-04-06"
-authr: "Ravi Kalia"
 categories: [Machine Learning, NLP]
 image: "./cover.png"
+tags: [transformers, huggingface, nlp, fine-tuning]
+jupyter: huggingface-blog
+format:
+    html:
+        toc: true
+        code-fold: true
 ---
 
 ![Transformers Library for NLP](./cover.png)
 
-The Hugging Face `transformers` library is a powerful toolkit for using pretrained models across NLP tasks like classification, summarization, translation, and more.
+One line of `transformers` classifies a sentence, and the brevity hides the interesting part. `pipeline()` is not a model. It is a tokenizer, a model, and a task-specific post-processor, wired together and handed to you as a single callable — and knowing that is the difference between using the library and being stuck the first time the default is wrong.
 
-This post shows how to:
+This post opens the call up. First by reproducing a pipeline's output by hand from its own three parts, then by fine-tuning, which is where you have no choice but to assemble them yourself.
 
-- Run inference using `pipeline()`
-- Fine-tune a model using the `Trainer` API
+## What one line actually does
 
-## Installation
-
-```bash
-pip install transformers datasets evaluate
-```
-
-## Inference Examples
+Start with the one-liner. Always name the model explicitly: the task defaults have changed between versions, and an unnamed model is a silent dependency on whatever the library currently prefers.
 
 ```{python}
-#1. Sentiment Analysis
+import warnings
+
+warnings.filterwarnings("ignore")
 
 from transformers import pipeline
 
-classifier = pipeline("sentiment-analysis")
-print(classifier("I love this library!"))
-# [{'label': 'POSITIVE', 'score': 0.999...}]
+SENTIMENT = "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
+classifier = pipeline("sentiment-analysis", model=SENTIMENT)
 
-#2. Text Generation
-generator = pipeline("text-generation", model="gpt2")
-print(generator("The future of AI is", max_length=30, num_return_sequences=1))
-
-#3. Summarization
-summarizer = pipeline("summarization")
-text = "Hugging Face’s Transformers library lets you use powerful pre-trained models for a wide range of NLP tasks with minimal setup."
-print(summarizer(text))
-
-#4. Translation
-translator = pipeline("translation_en_to_fr")
-print(translator("I like pizza.", max_length=40))
-
-#5. Named Entity Recognition (NER)
-ner = pipeline("ner", grouped_entities=True)
-print(ner("Hugging Face is based in New York City."))
-
-#6. Zero-Shot Classification
-
-classifier = pipeline("zero-shot-classification")
-print(classifier("I want to book a flight.", candidate_labels=["travel", "finance", "education"]))
+text = "I love this library!"
+print(classifier(text))
 ```
 
-## Fine-Tuning a Transformer for Binary Classification
-
-Let’s fine-tune `distilbert-base-uncased` on the IMDb dataset using the Trainer API.
+`POSITIVE` with a confidence. Now take the same pipeline apart. The tokenizer and model it is holding are attributes, so we can run the computation manually and check that we land on the identical number:
 
 ```{python}
+import torch
+
+tokenizer, model = classifier.tokenizer, classifier.model
+print(f"model device: {model.device}")
+
+encoded = tokenizer(text, return_tensors="pt").to(model.device)
+print(f"tokens      : {tokenizer.convert_ids_to_tokens(encoded['input_ids'][0])}")
+
+with torch.no_grad():
+    logits = model(**encoded).logits
+
+probabilities = logits.softmax(-1)[0]
+best = int(probabilities.argmax())
+
+print(f"logits      : {logits.tolist()[0]}")
+print(f"label map   : {model.config.id2label}")
+print(f"manual      : {model.config.id2label[best]} {float(probabilities[best]):.7f}")
+print(f"agrees      : {abs(float(probabilities[best]) - classifier(text)[0]['score']) < 1e-6}")
+```
+
+Four steps — tokenize, forward, softmax, look up the label name — and the result matches the pipeline to seven decimal places. That is all `pipeline` was doing. The `id2label` mapping is worth noticing: `POSITIVE` is not something the network produces, it is a string in the model's config that names column 1 of the logits.
+
+### Caveat: transformers 5 places models on the accelerator for you
+
+The `.to(model.device)` above is not decoration. `pipeline` put the model on MPS (or CUDA), and feeding it CPU tensors fails — sometimes with `RuntimeError: Placeholder storage has not been allocated on MPS device!`, and sometimes, on this machine, by killing the interpreter outright with `SIGBUS` and no traceback at all.
+
+If a hand-written forward pass dies inexplicably after migrating from `transformers` 4.x, this is the first thing to check. The pipeline never had the problem because it moves inputs for you; the moment you step outside it, device placement becomes yours to manage.
+
+## Different tasks, different third part
+
+The tokenizer and model change with the checkpoint. What really varies between tasks is the post-processor — the logic turning raw logits into the structure you wanted. Token classification is the clearest case, because the useful output requires stitching word-pieces back into entities:
+
+```{python}
+ner = pipeline("ner", model="dslim/bert-base-NER", aggregation_strategy="simple")
+
+for entity in ner("Hugging Face is based in New York City."):
+    print(f"{entity['entity_group']:8s} {entity['word']:20s} {entity['score']:.3f}")
+```
+
+`aggregation_strategy="simple"` is what merges `New`, `York`, `City` into one `LOC` span. Without it you get per-token labels in BIO scheme and reassembly is your problem. This argument used to be called `grouped_entities`; it was removed in `transformers` 5, and passing it now raises rather than warning.
+
+Generation keeps the same shape, with decoding rules as the third part:
+
+```{python}
+generator = pipeline("text-generation", model="openai-community/gpt2")
+generated = generator(
+    "The future of AI is", max_new_tokens=20, do_sample=False, truncation=True
+)
+print(generated[0]["generated_text"])
+```
+
+Note `max_new_tokens` rather than `max_length`. `max_length` counts the prompt too, so it silently produces shorter and shorter continuations as prompts grow — one of those defaults that is not wrong so much as rarely what anyone means.
+
+### Caveat: `transformers` 5 deleted the sequence-to-sequence tasks
+
+Translation and summarization used to be pipelines. They are not any more, and this is the sharpest illustration of the post's point — the third part was removed, leaving the other two:
+
+```{python}
+for task in ("translation", "summarization", "text2text-generation"):
+    try:
+        pipeline(task, model="google-t5/t5-small")
+        print(f"{task}: available")
+    except KeyError:
+        print(f"{task}: KeyError — no longer a registered task")
+```
+
+`pipeline("summarization")` and `pipeline("translation_en_to_fr")`, both of which appeared in the original version of this post, now raise `KeyError` rather than warn. The replacement is to drive the encoder-decoder yourself, which for T5 means writing the task prefix the model was trained on:
+
+```{python}
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+
+t5_tok = AutoTokenizer.from_pretrained("google-t5/t5-small")
+t5 = AutoModelForSeq2SeqLM.from_pretrained("google-t5/t5-small")
+
+
+def run_t5(prompt: str, max_new_tokens: int = 40) -> str:
+    """Encode, generate, decode — the three parts, by hand."""
+    enc = t5_tok(prompt, return_tensors="pt").to(t5.device)
+    out = t5.generate(**enc, max_new_tokens=max_new_tokens)
+    return t5_tok.decode(out[0], skip_special_tokens=True)
+
+
+print("translation:", run_t5("translate English to French: I like pizza."))
+```
+
+The prefix `translate English to French:` is not API surface, it is part of the input the model was trained to condition on — which is precisely the knowledge the deleted pipeline used to hold for you. (The output here is imperfect; `t5-small` is 61M parameters and renders "I like" as "Je veux". Small models translate badly, and the pipeline never protected you from that either.)
+
+Zero-shot classification is the outlier worth seeing, because no part of it was trained on your labels:
+
+```{python}
+zero_shot = pipeline("zero-shot-classification", model="typeform/distilbert-base-uncased-mnli")
+result = zero_shot(
+    "I want to book a flight.", candidate_labels=["travel", "finance", "education"]
+)
+print(dict(zip(result["labels"], [round(s, 3) for s in result["scores"]])))
+```
+
+This is an entailment model being asked, once per candidate label, whether "This example is travel." follows from the input. The post-processor turns those entailment probabilities into a ranking. It costs one forward pass per label, which is why zero-shot is convenient and not cheap.
+
+## Fine-tuning forces the parts apart
+
+Everything so far consumed a model someone else trained. Fine-tuning is where the pipeline abstraction stops helping: you must load a tokenizer and a model separately, because the tokenizer has to be applied to a dataset *before* training and the model needs a freshly initialised head.
+
+**About the data.** The task is sentiment on the IMDB corpus — [Maas et al. (2011)](https://ai.stanford.edu/~amaas/data/sentiment/), 25,000 labelled training reviews scraped from IMDB and deliberately restricted to polarised ratings, discussed in more detail in the [companion post on `datasets`](../datasets/index.qmd). We are asking whether a general-purpose encoder can be adapted to predict review polarity from text, and using a small subset because the point here is the mechanics, not the score. A model built this way and pointed at real review traffic would face the distribution problem that corpus's construction implies — no ambivalent reviews exist in it — so nothing below should be read as a usable sentiment classifier.
+
+### Caveat: IMDB is sorted by label, so `train[:1%]` is one class
+
+The obvious way to take a small subset is the wrong one, and it fails silently:
+
+```{python}
+from collections import Counter
 from datasets import load_dataset
+
+first_slice = load_dataset("stanfordnlp/imdb", split="train[:2%]")
+shuffled = load_dataset("stanfordnlp/imdb", split="train").shuffle(seed=0).select(range(500))
+
+print(f"train[:2%]     : {Counter(first_slice['label'])}")
+print(f"shuffled 500   : {Counter(shuffled['label'])}")
+```
+
+The corpus stores all 12,500 negative reviews before all 12,500 positive ones, so a head slice is entirely one class. Train a binary classifier on it and evaluation reports **100% accuracy** for a model that has learned to answer "negative" unconditionally. Nothing errors, and the number looks like success. Shuffle before selecting.
+
+### Assembling the training run
+
+With a balanced subset, the pieces go together explicitly — tokenize the dataset, load a model with an untrained classification head, define the metric, and hand all of it to `Trainer`:
+
+```{python}
+import numpy as np
+import evaluate
 from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
     TrainingArguments,
     Trainer,
 )
-import evaluate
 
-# Load a small IMDb split
-dataset = load_dataset("imdb", split="train[:1%]").train_test_split(test_size=0.2)
+BASE = "distilbert/distilbert-base-uncased"
 
-# Tokenization
-tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
-
-
-def tokenize(example):
-    return tokenizer(example["text"], truncation=True, padding=True)
-
-
-tokenized = dataset.map(tokenize, batched=True)
-
-# Load model
-model = AutoModelForSequenceClassification.from_pretrained(
-    "distilbert-base-uncased", num_labels=2
+data = shuffled.train_test_split(test_size=0.2, seed=0)
+tok = AutoTokenizer.from_pretrained(BASE)
+tokenized = data.map(
+    lambda batch: tok(batch["text"], truncation=True, max_length=256), batched=True
 )
 
-# Evaluation metric
+model = AutoModelForSequenceClassification.from_pretrained(BASE, num_labels=2)
 accuracy = evaluate.load("accuracy")
 
 
 def compute_metrics(eval_pred):
-    logits, labels = eval_pred
-    preds = logits.argmax(axis=1)
-    return accuracy.compute(predictions=preds, references=labels)
+    """Accuracy from raw logits."""
+    return accuracy.compute(
+        predictions=np.argmax(eval_pred.predictions, axis=1),
+        references=eval_pred.label_ids,
+    )
 
 
-# Training setup
 args = TrainingArguments(
     output_dir="./results",
-    evaluation_strategy="epoch",
-    per_device_train_batch_size=4,
-    num_train_epochs=3,
+    eval_strategy="epoch",
+    per_device_train_batch_size=16,
+    per_device_eval_batch_size=32,
+    num_train_epochs=1,
     logging_steps=10,
+    report_to=[],
+    disable_tqdm=True,
 )
 
-# Initialize Trainer
 trainer = Trainer(
     model=model,
     args=args,
     train_dataset=tokenized["train"],
     eval_dataset=tokenized["test"],
+    processing_class=tok,
     compute_metrics=compute_metrics,
 )
 
-# Train the model
 trainer.train()
+print(trainer.evaluate())
 ```
 
+An accuracy meaningfully above 0.5 on a balanced held-out set, from 400 training examples and one epoch — modest, and unlike the 100% above, real.
 
-## Summary
+Two argument names in that cell are the migration from `transformers` 4.x, and both are hard errors rather than warnings:
 
-*	`pipeline()` is the easiest way to use transformers for inference.
-*	For training, Trainer makes fine-tuning on datasets like IMDb accessible with minimal code.
-*	All models are backed by Hugging Face’s hub: https://huggingface.co/models
+| 4.x | 5.x | Symptom if unchanged |
+|---|---|---|
+| `TrainingArguments(evaluation_strategy=…)` | `eval_strategy` | `TypeError: unexpected keyword argument` |
+| `Trainer(tokenizer=…)` | `processing_class` | Deprecated then removed; `tokenizer` no longer accepted |
 
-Let me know if you’d like a version for text generation or token classification!
+`processing_class` is the more interesting rename. `Trainer` needs whatever turns raw inputs into tensors, and for vision or audio models that is an image or feature processor rather than a tokenizer — the new name stopped pretending every modality is text.
+
+## What the three parts buy
+
+The claim was that `pipeline()` is a tokenizer, a model, and a post-processor. The evidence is that we reconstructed its output by hand from its own attributes and matched it to seven decimals, and that fine-tuning — where no post-processor exists yet — requires touching exactly the other two.
+
+The practical consequence is diagnostic. When a pipeline gives a wrong answer, the parts fail in distinguishable ways: garbled sub-word tokens are the tokenizer, a confident wrong label with sensible tokens is the model, and entities split across word-pieces or truncated generations are the post-processor and its arguments. Each has its own fix, and knowing which one you are looking at is most of the work.
+
+Where the decomposition stops being enough is when the failure is in none of them. The two most expensive bugs in this post — a head slice that was secretly one class, and inputs on the wrong device — were invisible to every one of the three parts, and both reported success rather than raising. `pipeline` will not protect you from those, and neither will taking it apart.
