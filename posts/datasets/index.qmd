@@ -1,118 +1,156 @@
 ---
 title: "Hugging Face Datasets"
-description: "A practical guide to loading, creating, and using datasets with the Hugging Face `datasets` library."
+description: "Why `load_dataset` returns instantly on a dataset larger than your RAM, and what that buys you downstream."
 author: "Ravi Kalia"
 date: "2025-04-04"
 categories: [Machine Learning, NLP, PyTorch]
 image: "./cover.png"
+tags: [datasets, arrow, huggingface, data-loading]
+jupyter: huggingface-blog
 format:
     html:
+        toc: true
         code-fold: true
 ---
 
 ![Hugging Face Datasets](./cover.png)
 
-## Introduction
+Load the IMDB review corpus with `datasets` and you appear to have pulled 50,000 documents into your notebook. You have not. The data stays on disk in Apache Arrow format, memory-mapped, and the object you are holding is a view over it — which is why reaching row 24,999 costs the same fraction of a millisecond as reaching row 0, without reading anything in between.
 
-The Hugging Face `datasets` library is a powerful tool for downloading, processing, and managing large-scale datasets for machine learning, particularly in NLP but also for vision and tabular data. It provides seamless integration with PyTorch and TensorFlow.
+That single design decision is what the library is actually for. Convenience wrappers around `pandas.read_csv` are not scarce; what is scarce is a data structure where slicing, filtering, shuffling and splitting a corpus much larger than your memory all cost roughly nothing, and where handing the result to PyTorch does not require you to think about any of it. Everything below follows from memory-mapping: why splits are free, why `map` is cached, and why streaming exists for the one case where even memory-mapping is too much.
 
-## Key Features
+## Where this data comes from
 
-- **Easy Access to Large Datasets**: Preloaded datasets such as `IMDB`, `CIFAR-10`, and `SQuAD`.
-- **Streaming for Large Datasets**: Memory-efficient loading of massive datasets.
-- **Dataset Preprocessing and Transformations**: Apply tokenization, filtering, and mapping functions.
-- **Multiple File Format Support**: Works with CSV, JSON, and Parquet.
-- **Dataset Splitting**: Simple train-test splitting.
-- **Efficient Storage**: Uses Apache Arrow for fast data processing.
-- **Caching**: Avoids redundant downloads and computations.
+The running example is the **IMDB Large Movie Review Dataset**, published by [Maas et al. (2011)](https://ai.stanford.edu/~amaas/data/sentiment/) at the Stanford AI Lab and distributed on the Hub as [`stanfordnlp/imdb`](https://huggingface.co/datasets/stanfordnlp/imdb). It is 50,000 movie reviews scraped from IMDB, split 25,000 train / 25,000 test, with a further 50,000 unlabelled reviews.
 
-## Installation
+The collectors built it because sentiment benchmarks of the day were small enough that models were separated by noise rather than by skill. They wanted a corpus large enough to make the comparison mean something, so they deliberately took only *polarised* reviews — 7/10 and above counts as positive, 4/10 and below as negative, and everything in the middle was discarded. The label is therefore not "did the reviewer like the film" but "did the reviewer feel strongly enough to rate at the extremes", and the classes are balanced by construction rather than by nature.
 
-```{bash}
-pip install datasets
-```
+That construction is worth holding onto, because it is the dataset's main trap. A classifier trained here sees a world with no ambivalence in it. Deployed against real review traffic — where most opinions are lukewarm — it will be confidently wrong about exactly the reviews a recommender most needs to place correctly, and its accuracy on this benchmark will not have warned you. The question this post asks of the data is narrower and safer: not "can we classify it" but "what does it cost to move it around", which is a property of the bytes rather than of the labels.
 
-## Loading and Exploring a Dataset
+## Loading is a memory-map, not a read
+
+Two arguments are enough to fetch a corpus from the Hub. Note the repository id: as of `datasets` 5.x every dataset is addressed as `namespace/name`, and the bare aliases that used to work (`"imdb"`, `"ag_news"`, `"glue"`) now raise `HfUriError`.
 
 ```{python}
 from datasets import load_dataset
 
-# Load the IMDB sentiment analysis dataset
-dataset = load_dataset("imdb")
-print(dataset)
+imdb = load_dataset("stanfordnlp/imdb")
+print(imdb)
 ```
 
-## Creating a Dataset from Scratch
+Three splits, 100,000 rows in total, described down to the feature types. The object we got back is a handle to a file, which we can ask directly:
+
+```{python}
+import os
+import time
+
+train = imdb["train"]
+cache_file = train.cache_files[0]["filename"]
+print(f"backing file: {os.path.basename(cache_file)}")
+print(f"size on disk: {os.path.getsize(cache_file) / 1024**2:.1f} MB")
+
+
+def ms(fn):
+    """Wall-clock milliseconds for one call."""
+    start = time.perf_counter()
+    fn()
+    return (time.perf_counter() - start) * 1000
+
+
+print(f"index row 0:     {ms(lambda: train[0]):.2f} ms")
+print(f"index row 24999: {ms(lambda: train[24999]):.2f} ms")
+```
+
+The corpus is an Arrow file sitting on disk, and reaching the last row costs the same as reaching the first — a fraction of a millisecond, with no scan and no prior read of the intervening 25,000 rows. That constant-time random access over a file is the property every operation below inherits.
+
+RSS, incidentally, is the wrong instrument for checking this: memory-mapped pages count toward resident memory once touched, so the number moves around depending on what you have already read. Access time is the measurement that actually distinguishes a memory-map from a read.
+
+## A dataset can be built from anything
+
+You do not need the Hub. `Dataset.from_dict` builds the same Arrow-backed structure out of ordinary Python, which is how you get a toy example that behaves identically to a real corpus:
 
 ```{python}
 from datasets import Dataset
 
-data = {
-    "text": ["I love this!", "This is bad!", "Absolutely amazing!", "Not good at all!"],
-    "label": [1, 0, 1, 0],
-}
-
-dataset = Dataset.from_dict(data)
-print(dataset)
+toy = Dataset.from_dict(
+    {
+        "text": ["I love this!", "This is bad!", "Absolutely amazing!", "Not good at all!"],
+        "label": [1, 0, 1, 0],
+    }
+)
+print(toy)
 ```
 
-## Loading a Dataset from a CSV File
+Local files work through the same entry point, with the format as the first argument. The CSV alongside this post is five invented rows of names and ages — synthetic, standing in for the tabular file you would actually have, and used here only to show that the loader does not care whether the content is text:
 
 ```{python}
-from datasets import load_dataset
-
-dataset = load_dataset("csv", data_files="data.csv")
-print(dataset)
+csv_data = load_dataset("csv", data_files="data.csv")
+print(csv_data)
 ```
 
-## Splitting a Dataset
+Whichever way the data arrived, it is now the same object, and that is what makes the next operation cheap.
+
+## Splitting copies nothing
+
+`train_test_split` on an in-memory list means allocating two new lists. Here it means recording two sets of indices over a table that never moves:
 
 ```{python}
-train_test_split = dataset["train"].train_test_split(test_size=0.1)
-print(train_test_split)
+split = csv_data["train"].train_test_split(test_size=0.2, seed=0)
+print(split)
+
+print(f"\nsplitting 25,000 IMDB rows: "
+      f"{ms(lambda: train.train_test_split(test_size=0.1, seed=0)):.1f} ms")
 ```
 
+Four rows and one row from five, and — the point of the timing — splitting the real 25,000-row corpus takes single-digit milliseconds, because it records two sets of indices rather than moving any data. Shuffling, filtering and `select` all work this way. The consequence is that you can afford to re-split during an experiment rather than committing to a split up front.
 
+### Caveat: cheap splits are still leaky splits
 
-## Tokenization and Collation with Transformers
+Zero-copy makes splitting free in time and memory; it does nothing about whether the split is *sound*. IMDB ships with reviews of the same film in both train and test, so a model can learn film-specific vocabulary and score well without generalising. The library will not warn you. Free splits make it easy to re-split, not correct to split naively — group-aware splitting is still your problem.
+
+## The boundary with PyTorch is the collate function
+
+A `Dataset` is not a tensor and does not try to be. It hands rows to a `DataLoader`, and the tokenizer turns a batch of rows into padded tensors at the last possible moment:
 
 ```{python}
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
-tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
-
-# Dummy data
-raw_data = [{"text": "hello", "label": 0}, {"text": "world", "label": 1}]
+tokenizer = AutoTokenizer.from_pretrained("distilbert/distilbert-base-uncased")
 
 
 def collate_fn(batch):
+    """Tokenize and pad a list of rows into one batch of tensors."""
     return tokenizer(
-        [ex["text"] for ex in batch], padding=True, truncation=True, return_tensors="pt"
+        [row["text"] for row in batch],
+        padding=True,
+        truncation=True,
+        return_tensors="pt",
     )
 
 
-loader = DataLoader(raw_data, batch_size=2, collate_fn=collate_fn)
-
-for batch in loader:
-    print(batch)
-    break
+loader = DataLoader(toy, batch_size=2, collate_fn=collate_fn)
+batch = next(iter(loader))
+print({k: tuple(v.shape) for k, v in batch.items()})
 ```
 
-## Streaming Large Datasets
+Two examples, padded to the longer of the two, as PyTorch tensors. Tokenizing here rather than up front means padding is per-batch instead of per-corpus, which is why this arrangement is standard: pad to the longest sequence in the dataset and most batches carry mostly padding.
+
+## Streaming, for when even a memory-map is too much
+
+Memory-mapping still assumes the bytes are on your disk. For corpora where that assumption fails — the multi-terabyte web crawls — `streaming=True` returns an `IterableDataset` that pulls shards over the network as you consume them:
 
 ```{python}
-streaming_dataset = load_dataset("imdb", split="train", streaming=True)
+stream = load_dataset("stanfordnlp/imdb", split="train", streaming=True)
 
-for sample in streaming_dataset:
-    print(sample)
-    break  # Stop after one example
+first = next(iter(stream))
+print({k: str(v)[:60] for k, v in first.items()})
 ```
 
-## Conclusion
+Nothing was downloaded but the first shard. The trade is that you give up random access: no indexing, no length, no `train_test_split`, because none of those are answerable without seeing the whole corpus. Streaming is the right default only when the data genuinely does not fit; below that threshold, memory-mapping gives you everything streaming does and random access as well.
 
-The `datasets` library simplifies handling large-scale datasets with powerful built-in functionalities for efficient data loading, transformation, and integration into ML pipelines. It is particularly useful for NLP, vision, and tabular machine learning workflows.
+## What the design buys
 
----
+The claim at the top was that memory-mapping, not convenience, is what the library is for. Following it through: loading is instant because nothing is read, splits and shuffles are free because nothing is copied, `map` results are cached to Arrow because that is the native format anyway, and PyTorch integration is a collate function because the dataset never pretended to be tensors. One decision explains the whole API.
 
-Let me know if you need more examples or modifications! 🚀
+Where it stops holding is the moment your access pattern is not "read rows". Heavy per-row Python in `map` puts you back in the interpreter and the memory-map stops being the bottleneck — batch it or use `num_proc`. And none of this touches whether your data is any good: as the IMDB construction shows, a corpus can be fast to iterate and still be measuring something other than what you think.

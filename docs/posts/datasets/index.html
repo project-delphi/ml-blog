@@ -8,7 +8,7 @@
 
 <meta name="author" content="Ravi Kalia">
 <meta name="dcterms.date" content="2025-04-04">
-<meta name="description" content="A practical guide to loading, creating, and using datasets with the Hugging Face datasets library.">
+<meta name="description" content="Why load_dataset returns instantly on a dataset larger than your RAM, and what that buys you downstream.">
 
 <title>Hugging Face Datasets – Blog Directory</title>
 <style>
@@ -109,7 +109,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <link rel="stylesheet" href="../../styles.css">
 </head>
 
-<body class="nav-fixed fullcontent">
+<body class="nav-fixed">
 
 <div id="quarto-search-results"></div>
   <header id="quarto-header" class="headroom fixed-top quarto-banner">
@@ -155,7 +155,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <h1 class="title">Hugging Face Datasets</h1>
                   <div>
         <div class="description">
-          A practical guide to loading, creating, and using datasets with the Hugging Face <code>datasets</code> library.
+          Why <code>load_dataset</code> returns instantly on a dataset larger than your RAM, and what that buys you downstream.
         </div>
       </div>
                           <div class="quarto-categories">
@@ -190,7 +190,24 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   </header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
 <!-- sidebar -->
 <!-- margin-sidebar -->
-    
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#where-this-data-comes-from" id="toc-where-this-data-comes-from" class="nav-link active" data-scroll-target="#where-this-data-comes-from">Where this data comes from</a></li>
+  <li><a href="#loading-is-a-memory-map-not-a-read" id="toc-loading-is-a-memory-map-not-a-read" class="nav-link" data-scroll-target="#loading-is-a-memory-map-not-a-read">Loading is a memory-map, not a read</a></li>
+  <li><a href="#a-dataset-can-be-built-from-anything" id="toc-a-dataset-can-be-built-from-anything" class="nav-link" data-scroll-target="#a-dataset-can-be-built-from-anything">A dataset can be built from anything</a></li>
+  <li><a href="#splitting-copies-nothing" id="toc-splitting-copies-nothing" class="nav-link" data-scroll-target="#splitting-copies-nothing">Splitting copies nothing</a>
+  <ul class="collapse">
+  <li><a href="#caveat-cheap-splits-are-still-leaky-splits" id="toc-caveat-cheap-splits-are-still-leaky-splits" class="nav-link" data-scroll-target="#caveat-cheap-splits-are-still-leaky-splits">Caveat: cheap splits are still leaky splits</a></li>
+  </ul></li>
+  <li><a href="#the-boundary-with-pytorch-is-the-collate-function" id="toc-the-boundary-with-pytorch-is-the-collate-function" class="nav-link" data-scroll-target="#the-boundary-with-pytorch-is-the-collate-function">The boundary with PyTorch is the collate function</a></li>
+  <li><a href="#streaming-for-when-even-a-memory-map-is-too-much" id="toc-streaming-for-when-even-a-memory-map-is-too-much" class="nav-link" data-scroll-target="#streaming-for-when-even-a-memory-map-is-too-much">Streaming, for when even a memory-map is too much</a></li>
+  <li><a href="#what-the-design-buys" id="toc-what-the-design-buys" class="nav-link" data-scroll-target="#what-the-design-buys">What the design buys</a></li>
+  </ul>
+<div class="toc-actions"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/datasets/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></nav>
+    </div>
 <!-- main -->
 <main class="content quarto-banner-title-block" id="quarto-document-content">
 
@@ -204,37 +221,28 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <figcaption>Hugging Face Datasets</figcaption>
 </figure>
 </div>
-<section id="introduction" class="level2">
-<h2 class="anchored" data-anchor-id="introduction">Introduction</h2>
-<p>The Hugging Face <code>datasets</code> library is a powerful tool for downloading, processing, and managing large-scale datasets for machine learning, particularly in NLP but also for vision and tabular data. It provides seamless integration with PyTorch and TensorFlow.</p>
+<p>Load the IMDB review corpus with <code>datasets</code> and you appear to have pulled 50,000 documents into your notebook. You have not. The data stays on disk in Apache Arrow format, memory-mapped, and the object you are holding is a view over it — which is why reaching row 24,999 costs the same fraction of a millisecond as reaching row 0, without reading anything in between.</p>
+<p>That single design decision is what the library is actually for. Convenience wrappers around <code>pandas.read_csv</code> are not scarce; what is scarce is a data structure where slicing, filtering, shuffling and splitting a corpus much larger than your memory all cost roughly nothing, and where handing the result to PyTorch does not require you to think about any of it. Everything below follows from memory-mapping: why splits are free, why <code>map</code> is cached, and why streaming exists for the one case where even memory-mapping is too much.</p>
+<section id="where-this-data-comes-from" class="level2">
+<h2 class="anchored" data-anchor-id="where-this-data-comes-from">Where this data comes from</h2>
+<p>The running example is the <strong>IMDB Large Movie Review Dataset</strong>, published by <a href="https://ai.stanford.edu/~amaas/data/sentiment/">Maas et al.&nbsp;(2011)</a> at the Stanford AI Lab and distributed on the Hub as <a href="https://huggingface.co/datasets/stanfordnlp/imdb"><code>stanfordnlp/imdb</code></a>. It is 50,000 movie reviews scraped from IMDB, split 25,000 train / 25,000 test, with a further 50,000 unlabelled reviews.</p>
+<p>The collectors built it because sentiment benchmarks of the day were small enough that models were separated by noise rather than by skill. They wanted a corpus large enough to make the comparison mean something, so they deliberately took only <em>polarised</em> reviews — 7/10 and above counts as positive, 4/10 and below as negative, and everything in the middle was discarded. The label is therefore not “did the reviewer like the film” but “did the reviewer feel strongly enough to rate at the extremes”, and the classes are balanced by construction rather than by nature.</p>
+<p>That construction is worth holding onto, because it is the dataset’s main trap. A classifier trained here sees a world with no ambivalence in it. Deployed against real review traffic — where most opinions are lukewarm — it will be confidently wrong about exactly the reviews a recommender most needs to place correctly, and its accuracy on this benchmark will not have warned you. The question this post asks of the data is narrower and safer: not “can we classify it” but “what does it cost to move it around”, which is a property of the bytes rather than of the labels.</p>
 </section>
-<section id="key-features" class="level2">
-<h2 class="anchored" data-anchor-id="key-features">Key Features</h2>
-<ul>
-<li><strong>Easy Access to Large Datasets</strong>: Preloaded datasets such as <code>IMDB</code>, <code>CIFAR-10</code>, and <code>SQuAD</code>.</li>
-<li><strong>Streaming for Large Datasets</strong>: Memory-efficient loading of massive datasets.</li>
-<li><strong>Dataset Preprocessing and Transformations</strong>: Apply tokenization, filtering, and mapping functions.</li>
-<li><strong>Multiple File Format Support</strong>: Works with CSV, JSON, and Parquet.</li>
-<li><strong>Dataset Splitting</strong>: Simple train-test splitting.</li>
-<li><strong>Efficient Storage</strong>: Uses Apache Arrow for fast data processing.</li>
-<li><strong>Caching</strong>: Avoids redundant downloads and computations.</li>
-</ul>
-</section>
-<section id="installation" class="level2">
-<h2 class="anchored" data-anchor-id="installation">Installation</h2>
-<pre class="{bash}"><code>pip install datasets</code></pre>
-</section>
-<section id="loading-and-exploring-a-dataset" class="level2">
-<h2 class="anchored" data-anchor-id="loading-and-exploring-a-dataset">Loading and Exploring a Dataset</h2>
-<div id="bddbb9dc" class="cell" data-execution_count="1">
+<section id="loading-is-a-memory-map-not-a-read" class="level2">
+<h2 class="anchored" data-anchor-id="loading-is-a-memory-map-not-a-read">Loading is a memory-map, not a read</h2>
+<p>Two arguments are enough to fetch a corpus from the Hub. Note the repository id: as of <code>datasets</code> 5.x every dataset is addressed as <code>namespace/name</code>, and the bare aliases that used to work (<code>"imdb"</code>, <code>"ag_news"</code>, <code>"glue"</code>) now raise <code>HfUriError</code>.</p>
+<div id="9d099df8" class="cell" data-execution_count="1">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> datasets <span class="im">import</span> load_dataset</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Load the IMDB sentiment analysis dataset</span></span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>dataset <span class="op">=</span> load_dataset(<span class="st">"imdb"</span>)</span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(dataset)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> datasets <span class="im">import</span> load_dataset</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>imdb <span class="op">=</span> load_dataset(<span class="st">"stanfordnlp/imdb"</span>)</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(imdb)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.</code></pre>
+</div>
 <div class="cell-output cell-output-stdout">
 <pre><code>DatasetDict({
     train: Dataset({
@@ -252,21 +260,54 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 })</code></pre>
 </div>
 </div>
-</section>
-<section id="creating-a-dataset-from-scratch" class="level2">
-<h2 class="anchored" data-anchor-id="creating-a-dataset-from-scratch">Creating a Dataset from Scratch</h2>
-<div id="4914b344" class="cell" data-execution_count="2">
+<p>Three splits, 100,000 rows in total, described down to the feature types. The object we got back is a handle to a file, which we can ask directly:</p>
+<div id="05cbaf38" class="cell" data-execution_count="2">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> datasets <span class="im">import</span> Dataset</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>data <span class="op">=</span> {</span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="st">"text"</span>: [<span class="st">"I love this!"</span>, <span class="st">"This is bad!"</span>, <span class="st">"Absolutely amazing!"</span>, <span class="st">"Not good at all!"</span>],</span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="st">"label"</span>: [<span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">1</span>, <span class="dv">0</span>],</span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>}</span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>dataset <span class="op">=</span> Dataset.from_dict(data)</span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(dataset)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> os</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> time</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>train <span class="op">=</span> imdb[<span class="st">"train"</span>]</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>cache_file <span class="op">=</span> train.cache_files[<span class="dv">0</span>][<span class="st">"filename"</span>]</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"backing file: </span><span class="sc">{</span>os<span class="sc">.</span>path<span class="sc">.</span>basename(cache_file)<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"size on disk: </span><span class="sc">{</span>os<span class="sc">.</span>path<span class="sc">.</span>getsize(cache_file) <span class="op">/</span> <span class="dv">1024</span><span class="op">**</span><span class="dv">2</span><span class="sc">:.1f}</span><span class="ss"> MB"</span>)</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> ms(fn):</span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""Wall-clock milliseconds for one call."""</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>    start <span class="op">=</span> time.perf_counter()</span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>    fn()</span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> (time.perf_counter() <span class="op">-</span> start) <span class="op">*</span> <span class="dv">1000</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"index row 0:     </span><span class="sc">{</span>ms(<span class="kw">lambda</span>: train[<span class="dv">0</span>])<span class="sc">:.2f}</span><span class="ss"> ms"</span>)</span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"index row 24999: </span><span class="sc">{</span>ms(<span class="kw">lambda</span>: train[<span class="dv">24999</span>])<span class="sc">:.2f}</span><span class="ss"> ms"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code>backing file: imdb-train.arrow
+size on disk: 31.9 MB
+index row 0:     2.13 ms
+index row 24999: 0.10 ms</code></pre>
+</div>
+</div>
+<p>The corpus is an Arrow file sitting on disk, and reaching the last row costs the same as reaching the first — a fraction of a millisecond, with no scan and no prior read of the intervening 25,000 rows. That constant-time random access over a file is the property every operation below inherits.</p>
+<p>RSS, incidentally, is the wrong instrument for checking this: memory-mapped pages count toward resident memory once touched, so the number moves around depending on what you have already read. Access time is the measurement that actually distinguishes a memory-map from a read.</p>
+</section>
+<section id="a-dataset-can-be-built-from-anything" class="level2">
+<h2 class="anchored" data-anchor-id="a-dataset-can-be-built-from-anything">A dataset can be built from anything</h2>
+<p>You do not need the Hub. <code>Dataset.from_dict</code> builds the same Arrow-backed structure out of ordinary Python, which is how you get a toy example that behaves identically to a real corpus:</p>
+<div id="afedb30b" class="cell" data-execution_count="3">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> datasets <span class="im">import</span> Dataset</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>toy <span class="op">=</span> Dataset.from_dict(</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    {</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>        <span class="st">"text"</span>: [<span class="st">"I love this!"</span>, <span class="st">"This is bad!"</span>, <span class="st">"Absolutely amazing!"</span>, <span class="st">"Not good at all!"</span>],</span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"label"</span>: [<span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">1</span>, <span class="dv">0</span>],</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(toy)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output cell-output-stdout">
 <pre><code>Dataset({
@@ -275,16 +316,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 })</code></pre>
 </div>
 </div>
-</section>
-<section id="loading-a-dataset-from-a-csv-file" class="level2">
-<h2 class="anchored" data-anchor-id="loading-a-dataset-from-a-csv-file">Loading a Dataset from a CSV File</h2>
-<div id="6877c20d" class="cell" data-execution_count="3">
+<p>Local files work through the same entry point, with the format as the first argument. The CSV alongside this post is five invented rows of names and ages — synthetic, standing in for the tabular file you would actually have, and used here only to show that the loader does not care whether the content is text:</p>
+<div id="f6e305c1" class="cell" data-execution_count="4">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> datasets <span class="im">import</span> load_dataset</span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>dataset <span class="op">=</span> load_dataset(<span class="st">"csv"</span>, data_files<span class="op">=</span><span class="st">"data.csv"</span>)</span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(dataset)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>csv_data <span class="op">=</span> load_dataset(<span class="st">"csv"</span>, data_files<span class="op">=</span><span class="st">"data.csv"</span>)</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(csv_data)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output cell-output-stdout">
 <pre><code>DatasetDict({
@@ -295,14 +332,19 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 })</code></pre>
 </div>
 </div>
+<p>Whichever way the data arrived, it is now the same object, and that is what makes the next operation cheap.</p>
 </section>
-<section id="splitting-a-dataset" class="level2">
-<h2 class="anchored" data-anchor-id="splitting-a-dataset">Splitting a Dataset</h2>
-<div id="04d7d15c" class="cell" data-execution_count="4">
+<section id="splitting-copies-nothing" class="level2">
+<h2 class="anchored" data-anchor-id="splitting-copies-nothing">Splitting copies nothing</h2>
+<p><code>train_test_split</code> on an in-memory list means allocating two new lists. Here it means recording two sets of indices over a table that never moves:</p>
+<div id="407e2a1c" class="cell" data-execution_count="5">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>train_test_split <span class="op">=</span> dataset[<span class="st">"train"</span>].train_test_split(test_size<span class="op">=</span><span class="fl">0.1</span>)</span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(train_test_split)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>split <span class="op">=</span> csv_data[<span class="st">"train"</span>].train_test_split(test_size<span class="op">=</span><span class="fl">0.2</span>, seed<span class="op">=</span><span class="dv">0</span>)</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(split)</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">splitting 25,000 IMDB rows: "</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>      <span class="ss">f"</span><span class="sc">{</span>ms(<span class="kw">lambda</span>: train.train_test_split(test_size<span class="op">=</span><span class="fl">0.1</span>, seed<span class="op">=</span><span class="dv">0</span>))<span class="sc">:.1f}</span><span class="ss"> ms"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output cell-output-stdout">
 <pre><code>DatasetDict({
@@ -314,72 +356,70 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
         features: ['Name', 'Age', 'Country'],
         num_rows: 1
     })
-})</code></pre>
+})
+
+splitting 25,000 IMDB rows: 3.5 ms</code></pre>
 </div>
 </div>
+<p>Four rows and one row from five, and — the point of the timing — splitting the real 25,000-row corpus takes single-digit milliseconds, because it records two sets of indices rather than moving any data. Shuffling, filtering and <code>select</code> all work this way. The consequence is that you can afford to re-split during an experiment rather than committing to a split up front.</p>
+<section id="caveat-cheap-splits-are-still-leaky-splits" class="level3">
+<h3 class="anchored" data-anchor-id="caveat-cheap-splits-are-still-leaky-splits">Caveat: cheap splits are still leaky splits</h3>
+<p>Zero-copy makes splitting free in time and memory; it does nothing about whether the split is <em>sound</em>. IMDB ships with reviews of the same film in both train and test, so a model can learn film-specific vocabulary and score well without generalising. The library will not warn you. Free splits make it easy to re-split, not correct to split naively — group-aware splitting is still your problem.</p>
 </section>
-<section id="tokenization-and-collation-with-transformers" class="level2">
-<h2 class="anchored" data-anchor-id="tokenization-and-collation-with-transformers">Tokenization and Collation with Transformers</h2>
-<div id="f06fba45" class="cell" data-execution_count="5">
+</section>
+<section id="the-boundary-with-pytorch-is-the-collate-function" class="level2">
+<h2 class="anchored" data-anchor-id="the-boundary-with-pytorch-is-the-collate-function">The boundary with PyTorch is the collate function</h2>
+<p>A <code>Dataset</code> is not a tensor and does not try to be. It hands rows to a <code>DataLoader</code>, and the tokenizer turns a batch of rows into padded tensors at the last possible moment:</p>
+<div id="d3153739" class="cell" data-execution_count="6">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> torch.utils.data <span class="im">import</span> DataLoader</span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> transformers <span class="im">import</span> AutoTokenizer</span>
-<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>tokenizer <span class="op">=</span> AutoTokenizer.from_pretrained(<span class="st">"distilbert-base-uncased"</span>)</span>
-<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="co"># Dummy data</span></span>
-<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>raw_data <span class="op">=</span> [{<span class="st">"text"</span>: <span class="st">"hello"</span>, <span class="st">"label"</span>: <span class="dv">0</span>}, {<span class="st">"text"</span>: <span class="st">"world"</span>, <span class="st">"label"</span>: <span class="dv">1</span>}]</span>
-<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> collate_fn(batch):</span>
-<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> tokenizer(</span>
-<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>        [ex[<span class="st">"text"</span>] <span class="cf">for</span> ex <span class="kw">in</span> batch], padding<span class="op">=</span><span class="va">True</span>, truncation<span class="op">=</span><span class="va">True</span>, return_tensors<span class="op">=</span><span class="st">"pt"</span></span>
-<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>    )</span>
-<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>loader <span class="op">=</span> DataLoader(raw_data, batch_size<span class="op">=</span><span class="dv">2</span>, collate_fn<span class="op">=</span>collate_fn)</span>
-<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> batch <span class="kw">in</span> loader:</span>
-<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(batch)</span>
-<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>    <span class="cf">break</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> torch.utils.data <span class="im">import</span> DataLoader</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> transformers <span class="im">import</span> AutoTokenizer</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>tokenizer <span class="op">=</span> AutoTokenizer.from_pretrained(<span class="st">"distilbert/distilbert-base-uncased"</span>)</span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> collate_fn(batch):</span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""Tokenize and pad a list of rows into one batch of tensors."""</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> tokenizer(</span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>        [row[<span class="st">"text"</span>] <span class="cf">for</span> row <span class="kw">in</span> batch],</span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>        padding<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>        truncation<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>        return_tensors<span class="op">=</span><span class="st">"pt"</span>,</span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a>loader <span class="op">=</span> DataLoader(toy, batch_size<span class="op">=</span><span class="dv">2</span>, collate_fn<span class="op">=</span>collate_fn)</span>
+<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> <span class="bu">next</span>(<span class="bu">iter</span>(loader))</span>
+<span id="cb12-19"><a href="#cb12-19" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>({k: <span class="bu">tuple</span>(v.shape) <span class="cf">for</span> k, v <span class="kw">in</span> batch.items()})</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output cell-output-stdout">
-<pre><code>{'input_ids': tensor([[ 101, 7592,  102],
-        [ 101, 2088,  102]]), 'attention_mask': tensor([[1, 1, 1],
-        [1, 1, 1]])}</code></pre>
+<pre><code>{'input_ids': (2, 6), 'token_type_ids': (2, 6), 'attention_mask': (2, 6)}</code></pre>
 </div>
 </div>
+<p>Two examples, padded to the longer of the two, as PyTorch tensors. Tokenizing here rather than up front means padding is per-batch instead of per-corpus, which is why this arrangement is standard: pad to the longest sequence in the dataset and most batches carry mostly padding.</p>
 </section>
-<section id="streaming-large-datasets" class="level2">
-<h2 class="anchored" data-anchor-id="streaming-large-datasets">Streaming Large Datasets</h2>
-<div id="75b67e70" class="cell" data-execution_count="6">
+<section id="streaming-for-when-even-a-memory-map-is-too-much" class="level2">
+<h2 class="anchored" data-anchor-id="streaming-for-when-even-a-memory-map-is-too-much">Streaming, for when even a memory-map is too much</h2>
+<p>Memory-mapping still assumes the bytes are on your disk. For corpora where that assumption fails — the multi-terabyte web crawls — <code>streaming=True</code> returns an <code>IterableDataset</code> that pulls shards over the network as you consume them:</p>
+<div id="64aa6991" class="cell" data-execution_count="7">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>streaming_dataset <span class="op">=</span> load_dataset(<span class="st">"imdb"</span>, split<span class="op">=</span><span class="st">"train"</span>, streaming<span class="op">=</span><span class="va">True</span>)</span>
-<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> sample <span class="kw">in</span> streaming_dataset:</span>
-<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(sample)</span>
-<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">break</span>  <span class="co"># Stop after one example</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>stream <span class="op">=</span> load_dataset(<span class="st">"stanfordnlp/imdb"</span>, split<span class="op">=</span><span class="st">"train"</span>, streaming<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>first <span class="op">=</span> <span class="bu">next</span>(<span class="bu">iter</span>(stream))</span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>({k: <span class="bu">str</span>(v)[:<span class="dv">60</span>] <span class="cf">for</span> k, v <span class="kw">in</span> first.items()})</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
-<div class="cell-output cell-output-stderr">
-<pre><code>huggingface/tokenizers: The current process just got forked, after parallelism has already been used. Disabling parallelism to avoid deadlocks...
-To disable this warning, you can either:
-    - Avoid using `tokenizers` before the fork if possible
-    - Explicitly set the environment variable TOKENIZERS_PARALLELISM=(true | false)
-'HTTPSConnectionPool(host='us.aws.cdn.hf.co', port=443): Read timed out.' thrown while requesting GET https://huggingface.co/datasets/imdb/resolve/e6281661ce1c48d982bc483cf8a173c1bbeb5d31/plain_text/train-00000-of-00001.parquet
-Retrying in 1s [Retry 1/5].</code></pre>
-</div>
 <div class="cell-output cell-output-stdout">
-<pre><code>{'text': 'I rented I AM CURIOUS-YELLOW from my video store because of all the controversy that surrounded it when it was first released in 1967. I also heard that at first it was seized by U.S. customs if it ever tried to enter this country, therefore being a fan of films considered "controversial" I really had to see this for myself.&lt;br /&gt;&lt;br /&gt;The plot is centered around a young Swedish drama student named Lena who wants to learn everything she can about life. In particular she wants to focus her attentions to making some sort of documentary on what the average Swede thought about certain political issues such as the Vietnam War and race issues in the United States. In between asking politicians and ordinary denizens of Stockholm about their opinions on politics, she has sex with her drama teacher, classmates, and married men.&lt;br /&gt;&lt;br /&gt;What kills me about I AM CURIOUS-YELLOW is that 40 years ago, this was considered pornographic. Really, the sex and nudity scenes are few and far between, even then it\'s not shot like some cheaply made porno. While my countrymen mind find it shocking, in reality sex and nudity are a major staple in Swedish cinema. Even Ingmar Bergman, arguably their answer to good old boy John Ford, had sex scenes in his films.&lt;br /&gt;&lt;br /&gt;I do commend the filmmakers for the fact that any sex shown in the film is shown for artistic purposes rather than just to shock people and make money to be shown in pornographic theaters in America. I AM CURIOUS-YELLOW is a good film for anyone wanting to study the meat and potatoes (no pun intended) of Swedish cinema. But really, this film doesn\'t have much of a plot.', 'label': 0}</code></pre>
+<pre><code>{'text': 'I rented I AM CURIOUS-YELLOW from my video store because of ', 'label': '0'}</code></pre>
 </div>
 </div>
+<p>Nothing was downloaded but the first shard. The trade is that you give up random access: no indexing, no length, no <code>train_test_split</code>, because none of those are answerable without seeing the whole corpus. Streaming is the right default only when the data genuinely does not fit; below that threshold, memory-mapping gives you everything streaming does and random access as well.</p>
 </section>
-<section id="conclusion" class="level2">
-<h2 class="anchored" data-anchor-id="conclusion">Conclusion</h2>
-<p>The <code>datasets</code> library simplifies handling large-scale datasets with powerful built-in functionalities for efficient data loading, transformation, and integration into ML pipelines. It is particularly useful for NLP, vision, and tabular machine learning workflows.</p>
-<hr>
-<p>Let me know if you need more examples or modifications! 🚀</p>
+<section id="what-the-design-buys" class="level2">
+<h2 class="anchored" data-anchor-id="what-the-design-buys">What the design buys</h2>
+<p>The claim at the top was that memory-mapping, not convenience, is what the library is for. Following it through: loading is instant because nothing is read, splits and shuffles are free because nothing is copied, <code>map</code> results are cached to Arrow because that is the native format anyway, and PyTorch integration is a collate function because the dataset never pretended to be tensors. One decision explains the whole API.</p>
+<p>Where it stops holding is the moment your access pattern is not “read rows”. Heavy per-row Python in <code>map</code> puts you back in the interpreter and the memory-map stops being the bottleneck — batch it or use <code>num_proc</code>. And none of this touches whether your data is any good: as the IMDB construction shows, a corpus can be fast to iterate and still be measuring something other than what you think.</p>
 
 
 </section>
@@ -807,4 +847,4 @@ window.document.addEventListener("DOMContentLoaded", function (event) {
 
 
 
-<footer class="footer"><div class="nav-footer"><div class="nav-footer-center"><div class="toc-actions"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/datasets/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></div></div></footer></body></html>
+<footer class="footer"><div class="nav-footer"><div class="nav-footer-center"><div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/datasets/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></div></div></footer></body></html>
