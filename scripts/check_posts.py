@@ -50,14 +50,10 @@ LEGACY_NO_ENV = {
     "diffusers",
     "evaluation-metrics",
     "features-importance-after-clustering",
-    "hugging-face-evaluate-library",
     "langchain",
-    "optimum",
     "poor-persons-bayesian",
     "post-with-code",
-    "setfit",
     "soft-vs-hard-prompts",
-    "transformers-library",
     "working-with-quarto",
 }
 

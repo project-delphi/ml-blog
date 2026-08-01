@@ -1,7 +1,12 @@
 ---
 title: "Evaluating NLP Models with the Hugging Face `evaluate` Library"
+description: "The same prediction scores 0.0 and 0.96 depending on which metric you load. `evaluate` makes that swap one line — which is the danger, not the feature."
 author: "Ravi Kalia"
 date: "2025-03-12"
+categories: [NLP, Hugging Face, Evaluation]
+image: "./cover.png"
+tags: [evaluate, metrics, nlp, huggingface]
+jupyter: huggingface-blog
 format:
   html:
     toc: true
@@ -9,122 +14,155 @@ format:
     code-fold: true
     code-tools: true
     code-copy: true
-categories: [NLP, Hugging Face, Evaluation]
-image: "./cover.png"
 ---
 
 ![Evaluating NLP Models with the Hugging Face `evaluate` Library](./cover.png)
 
-The Hugging Face `evaluate` library provides a simple and flexible interface for computing metrics on machine learning predictions. It's especially well-suited for NLP tasks like classification, summarization, and translation, where standard metrics are critical for reliable benchmarking.
+Take one predicted sentence, `"The cat sat."`, and one reference, `"A cat was sitting."`. Score them with ROUGE-2 and you get **0.0** — a total failure. Score the same pair with BERTScore and you get **0.96** — near-perfect. Neither metric is broken. They are answering different questions, and only one of them is the question you meant.
 
-## Installation
+The `evaluate` library makes swapping between them a single argument. That uniformity is genuinely useful and it is also the trap: `evaluate.load("rouge")` and `evaluate.load("bertscore")` look equally authoritative at the call site, cost nothing to interchange, and encode completely different theories of what "correct" means. This post is about reading that difference off the numbers.
 
-```bash
-pip install evaluate
-```
+## Every metric is the same three calls
 
-To explore available metrics
+The library's whole interface is `load`, then `compute`, with predictions and references. Classification is where this feels least surprising, because the notion of correct is unambiguous:
 
 ```{python}
+import warnings
+
+warnings.filterwarnings("ignore")
+
 import evaluate
-evaluate.list_evaluation_modules()
+
+accuracy = evaluate.load("accuracy")
+print(accuracy.compute(predictions=[0, 1, 1, 0], references=[0, 1, 0, 0]))
 ```
 
-Quick Example
+Three of four match, so 0.75, and there is nothing to argue about — the prediction either equals the reference or it does not. Metrics for generated *text* have no such luxury, because a prediction can be right without being identical to the reference. Each one resolves that differently.
 
+The metric is also an object rather than a function, which is what lets `evaluate.combine` run several over a single pass:
 
 ```{python}
-from evaluate import load
-
-accuracy = load("accuracy")
-accuracy.compute(predictions=[0, 1, 1, 0], references=[0, 1, 0, 0])
-# {'accuracy': 0.75}
+clf_metrics = evaluate.combine(["accuracy", "f1", "precision", "recall"])
+print(clf_metrics.compute(predictions=[0, 1, 1, 0], references=[0, 1, 0, 0]))
 ```
 
-### NLP Tasks and Typical Metrics
+Accuracy 0.75 but F1 lower on the same four predictions — already a preview of the point. Accuracy counts every position equally; F1 only cares about the positive class.
 
-| Task                 | Metric Examples                        |
-|----------------------|--------------------------------------|
-| Text classification  | accuracy, f1, recall, precision    |
-| Sequence labeling    | seqeval                             |
-| Translation          | bleu, sacrebleu, chrf              |
-| Summarization        | rouge, bertscore, bleurt           |
-| Text generation      | rouge, bertscore, meteor, bleurt   |
-| Speech recognition   | wer, cer                           |
+## The same pair, four verdicts
 
-These scores need some dependencies:
-
-```bash
-pip install nltk rouge_score bert_score
-```
-
-### Text Generation Metrics
-
-#### ROUGE
-
-Measures token overlap with a reference:
-*	rouge-1: unigram overlap
-*	rouge-2: bigram overlap
+Here is the disagreement in full. One prediction, one reference, several metrics:
 
 ```{python}
+prediction = "The cat sat."
+reference = "A cat was sitting."
+
 rouge = evaluate.load("rouge")
-rouge.compute(predictions=["The cat sat."], references=["A cat was sitting."])
-```
-
-
-#### BLEU
-
-Precision-based n-gram overlap metric, often used in translation:
-```{python}
 bleu = evaluate.load("bleu")
-bleu.compute(
-    predictions=["The cat is on the mat."], references=[["The cat sits on the mat."]]
+
+rouge_scores = rouge.compute(predictions=[prediction], references=[reference])
+bleu_scores = bleu.compute(predictions=[prediction], references=[[reference]])
+
+print("ROUGE:", {k: round(float(v), 4) for k, v in rouge_scores.items()})
+print("BLEU :", round(bleu_scores["bleu"], 4))
+print("BLEU precisions by n-gram:", [round(p, 3) for p in bleu_scores["precisions"]])
+```
+
+ROUGE-1 finds some unigram overlap — `cat` and little else. ROUGE-2 is exactly 0.0, because the two sentences share no adjacent word pair. BLEU is 0.0 too, and its per-n-gram precisions show why: it matches half the unigrams and then nothing at all from bigrams upward, and BLEU's geometric mean over n-gram precisions is zero the moment any one of them is.
+
+All of these are counting string overlap. `sat` and `sitting` are different strings, so as far as these metrics are concerned the model did not say the same thing. Now change the theory of correctness:
+
+```{python}
+bertscore = evaluate.load("bertscore")
+bs = bertscore.compute(predictions=[prediction], references=[reference], lang="en")
+
+print("BERTScore:", {k: round(v[0], 4) for k, v in bs.items() if isinstance(v, list)})
+print("backbone :", bs["hashcode"])
+```
+
+0.96. BERTScore embeds both sentences with a pretrained transformer and matches tokens by cosine similarity, so `sat` and `sitting` land close together and the pair reads as near-equivalent.
+
+Two metrics, one pair, verdicts of 0.0 and 0.96. The gap is not noise — it is the difference between asking "did the model produce these exact words" and "did the model mean this". Summarization and translation papers report ROUGE and BLEU because they are cheap, deterministic and comparable across papers, not because anyone believes n-gram overlap is meaning.
+
+### Caveat: single-sentence scores are close to meaningless anyway
+
+Every number above is computed on one example, which is fine for showing that the metrics disagree and useless for judging a model. BLEU in particular is designed as a corpus-level statistic: its brevity penalty and n-gram precisions are meant to be aggregated over a whole test set, and per-sentence BLEU is notoriously unstable — the same system can score 0.0 on a sentence it translated perfectly well with different word order.
+
+The honest use of these calls is to accumulate over a corpus, then report once.
+
+### Caveat: BERTScore has a model inside it
+
+`bertscore` is not a formula. The `hashcode` printed above names the backbone it silently downloaded — roughly 1.4 GB of `roberta-large` — and the score depends on that choice, on the layer used, and on the language flag. Two BERTScores from different backbones are not comparable, which is why the hashcode exists and why it belongs in anything you report.
+
+It also means `evaluate.load("bertscore")` costs a model download and a forward pass per example, where `evaluate.load("rouge")` costs neither. The uniform interface hides a several-order-of-magnitude difference in what the call actually does.
+
+## Metrics carry dependencies the interface hides
+
+`evaluate.load` fetches a small implementation module from the Hub, and that module may import a package you do not have. The failure then arrives at `compute` time rather than `load` time, which makes it look like a data problem rather than an install problem — an earlier version of this post shipped a commented-out BERTScore cell for exactly this reason, with a note that it was broken. It was not broken; `bert_score` simply was not installed.
+
+ROUGE needs `rouge_score`, `nltk` and `absl-py`; BLEU variants may want `sacrebleu`; BERTScore needs `bert_score`. All are pinned in the `requirements.txt` beside this post, which is why the cell above runs.
+
+## Scoring real generated text
+
+To evaluate a model rather than a hand-written string, generate something first. Note that `pipeline("summarization")` — which earlier versions of this post used — was **removed in `transformers` 5**, along with `translation` and `text2text-generation`. Sequence-to-sequence models are now driven directly:
+
+```{python}
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+
+tok = AutoTokenizer.from_pretrained("google-t5/t5-small")
+model = AutoModelForSeq2SeqLM.from_pretrained("google-t5/t5-small")
+
+article = (
+    "The Hugging Face Transformers library provides thousands of pretrained models "
+    "for natural language processing. It supports text classification, information "
+    "extraction, question answering, summarization and translation, and it works "
+    "with both PyTorch and TensorFlow."
 )
+
+enc = tok(f"summarize: {article}", return_tensors="pt").to(model.device)
+summary = tok.decode(model.generate(**enc, max_new_tokens=40)[0], skip_special_tokens=True)
+print("summary:", summary)
+
+human = "Transformers offers many pretrained models for NLP tasks in PyTorch and TensorFlow."
+print("\nROUGE:", {k: round(float(v), 4)
+                   for k, v in rouge.compute(predictions=[summary], references=[human]).items()})
 ```
 
+The summary is largely extractive — `t5-small` copies source phrasing rather than rewriting — and ROUGE rewards exactly that. A model that paraphrased more aggressively would score *worse* against this reference while arguably summarizing better. That bias belongs to the metric, not the model, and it is a large part of why summarization leaderboards reward extraction.
 
-#### BERTScore
+## Writing your own
 
-Uses a pretrained transformer model to measure semantic similarity in embedding space. There's a small bug here, I don't have time to fix it - however similar code should work.
+When no built-in metric encodes your notion of correct, a plain function will do, and the thing worth getting right is that it should express the asymmetry of your actual decision:
 
 ```{python}
-# bertscore = evaluate.load("bertscore")
-# bertscore.compute(predictions=["The cat sat."],
-#                   references=["A cat was sitting."],
-#                   lang="en")
+def expected_cost(predictions, references, false_negative_cost=5.0):
+    """Mean cost per example when a missed positive hurts more than a false alarm."""
+    incurred = sum(
+        (false_negative_cost if ref == 1 else 1.0)
+        for pred, ref in zip(predictions, references)
+        if pred != ref
+    )
+    return {"expected_cost": round(incurred / len(references), 4)}
+
+
+refs = [0, 1, 1, 0]
+missed_positive = [0, 0, 1, 0]  # one false negative
+false_alarm = [1, 1, 1, 0]  # one false positive
+
+for name, preds in [("missed positive", missed_positive), ("false alarm", false_alarm)]:
+    acc = accuracy.compute(predictions=preds, references=refs)["accuracy"]
+    print(f"{name:16s} accuracy={acc:.2f}  {expected_cost(preds, refs)}")
 ```
 
+This is the point of writing your own. Both prediction sets make exactly one mistake, so accuracy scores them **identically at 0.75** and reports that the two models are equally good. They are not: one missed a positive and one raised a false alarm, and the cost metric separates them by the factor of five it was told to care about.
 
-#### With Hugging Face Pipelines
+Which number you publish should follow from what a mistake costs in the world. A cancer screen and a spam filter have opposite asymmetries, and unweighted accuracy is blind to both.
 
-```{python}
-from transformers import pipeline
-summarizer = pipeline("summarization")
+To use a custom function inside `Trainer`, hand it back in the same `{"name": value}` shape that `compute` returns, which is what the built-ins produce and what `compute_metrics` expects.
 
-summary = summarizer("This is a long text to summarize.")[0]["summary_text"]
+## What the uniform interface is worth
 
-rouge.compute(predictions=[summary], references=["Reference summary here."])
-```
+The claim at the top was that swapping metrics is one line, and that this is the danger. The evidence is 0.0 and 0.96 on an identical pair of sentences, produced by calls that differ only in a string.
 
+What `evaluate` genuinely buys is that the plumbing stops being a variable: the same `compute(predictions=…, references=…)` shape works for every metric, `combine` runs a suite in one pass, and the implementation is versioned on the Hub rather than copy-pasted from a paper's appendix. Reproducibility of the *computation* is real and worth having.
 
-#### Custom Metrics
-
-Define your own scoring function:
-
-```{python}
-import evaluate
-
-
-# Define the custom metric function
-def my_metric_fn(predictions, references):
-    score = sum(p == r for p, r in zip(predictions, references)) / len(references)
-    return {"custom_accuracy": score}
-
-
-# Use the evaluate's simple interface
-result = my_metric_fn(predictions=[1, 0, 1], references=[1, 1, 1])
-print(result)
-```
-
-
-The evaluate library is model-agnostic and pairs well with the rest of the Hugging Face ecosystem. It’s lightweight enough for quick experiments but supports rich comparisons for production or publication.
+What it cannot do is choose for you, and the uniformity actively obscures how different the choices are — in what they measure, in what they cost, and in whether they quietly carry a 1.4 GB model and a hashcode you are then obliged to report. Pick the metric from the decision it informs, and only then let the library make it easy.
