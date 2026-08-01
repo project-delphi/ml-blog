@@ -82,14 +82,38 @@ That last line is not optional: every post with a dedicated venv carries its exa
 
 Posts that only *display* code (all cells `#| eval: false` — e.g. `posts/langgraph-vs-llamaindex`) need no dedicated venv; they pin `jupyter: blog-base`, a shared kernel over the base `.venv` (`make install && make kernel`). Quarto still needs *some* working kernel to structurally process `{python}` cells even when nothing runs, so register it once on a fresh clone. (`mermaid` and other diagram blocks are handled by Quarto's own filters and need no kernel.)
 
-**The Hugging Face posts share two venvs, not thirteen.** Thirteen posts (the HuggingFace-era ones: `datasets`, `hub`, `tokenizers`, `peft`, `transformers-library`, `hugging-face-evaluate-library`, `optimum`, `setfit`, `diffusers`, `classifying_text_chunks`, `langchain`, `evaluation-metrics`, `soft-vs-hard-prompts`) share ~90% of their dependency closure, most of it `torch`. Thirteen `.venv-<slug>` directories would be 20 GB+ of near-identical wheels, so they pin one of two shared kernels instead:
+**The Hugging Face posts share two venvs, not thirteen.** Thirteen posts (the HuggingFace-era ones: `datasets`, `hub`, `tokenizers`, `peft`, `transformers-library`, `hugging-face-evaluate-library`, `optimum`, `setfit`, `diffusers`, `classifying_text_chunks`, `langchain`, `evaluation-metrics`, `soft-vs-hard-prompts`) share ~90% of their dependency closure, most of it `torch`. Each venv measures ~1.2 GB and `uv` copies rather than hardlinks into them here, so thirteen `.venv-<slug>` directories would be ~15 GB of near-identical wheels. They pin one of two shared kernels instead:
 
 - **`huggingface-blog`** over `.venv-huggingface` — `transformers` 5.x. Eleven posts.
 - **`huggingface-t4-blog`** over `.venv-huggingface-t4` — `transformers` 4.57.x. Two posts, `optimum` and `setfit`, and only because those two packages cap it. `optimum-onnx` declares `transformers<4.58.0`; `setfit` declares no upper bound at all but imports `transformers.training_args.default_logdir`, which 5.x removed — so it *resolves* against 5.x and then fails at import. A resolver-only check will not catch that; import the packages before trusting a resolve.
 
+Build them with the § Architecture recipe above and these package sets — `posts/<slug>/requirements.txt` pins the exact resolved versions, but that is a freeze, not a spec, so the intent is recorded here:
+
+```bash
+uv venv .venv-huggingface --python 3.12
+uv pip install --python .venv-huggingface/bin/python \
+  torch transformers datasets tokenizers huggingface_hub evaluate peft \
+  sentence-transformers diffusers accelerate safetensors \
+  rouge_score sacrebleu nltk absl-py scikit-learn numpy pandas matplotlib Pillow \
+  pypdf langchain langchain-core langchain-text-splitters langchain-huggingface \
+  ipykernel jupyter nbclient nbformat pyyaml
+.venv-huggingface/bin/python -m ipykernel install --user --name huggingface-blog
+
+uv venv .venv-huggingface-t4 --python 3.12
+uv pip install --python .venv-huggingface-t4/bin/python \
+  "optimum-onnx[onnxruntime]" setfit transformers torch datasets evaluate \
+  sentence-transformers scikit-learn sentencepiece \
+  ipykernel jupyter nbclient nbformat pyyaml
+.venv-huggingface-t4/bin/python -m ipykernel install --user --name huggingface-t4-blog
+```
+
+Note that `setfit` is deliberately absent from the first set: installing it there resolves fine and then breaks the kernel at import, for the reason above.
+
 The trade this makes: `requirements.txt` is per-post as usual, but for these thirteen it is a copy of a shared freeze, so bumping a dependency for one post changes the versions recorded for all the posts on that kernel. `_freeze/` still hashes source only, so nothing silently re-executes — but the committed versions and the versions that produced a given post's output can drift apart. Re-render every post on a kernel when you bump that kernel's venv.
 
-**Two tiers of code post, and why `_freeze/` is committed.** Eleven posts are reproducible from source: dedicated `.venv-<slug>`, named kernel, committed `requirements.txt`. Eighteen older ones are not — no pinned kernel, no pinned versions, and dependencies (`diffusers`, `setfit`, `peft`, `transformers`, an `openai` client) whose environments no longer exist anywhere. Their committed `_freeze/` record is the only reproducible copy of what they compute, which is why `_freeze/` is tracked rather than ignored.
+**Two tiers of code post, and why `_freeze/` is committed.** Eleven posts are reproducible from source: dedicated `.venv-<slug>`, named kernel, committed `requirements.txt`. Eighteen older ones are not — no pinned kernel, no pinned versions, and dependencies (`diffusers`, `setfit`, `peft`, `transformers`, an `openai` client) pinned to nothing. Their committed `_freeze/` record is the only reproducible copy of what they compute, which is why `_freeze/` is tracked rather than ignored.
+
+Thirteen of those eighteen are being migrated out of that tier by the Hugging Face repair work: the two shared venvs above are their replacement environment. A post leaves `LEGACY_NO_ENV` only once it pins a kernel, carries a `requirements.txt` and has been re-rendered, so the count in that set is the live measure of how far along this is.
 
 That has one consequence worth internalising: **editing a legacy post breaks it.** Quarto keys frozen output on an md5 of the source file, so *any* source edit — even a one-word prose fix — invalidates the record and makes the next project render try to execute a post that cannot execute. If you touch one, build it a venv + kernel + `requirements.txt` first, per the recipe above, and remove its entry from `LEGACY_NO_ENV` in `scripts/check_posts.py`. `make check-posts` enforces both halves of this; run it before any full render. This is not hypothetical — the cover-image commits edited 11 sources without re-rendering and left the freeze cache silently stale for months.
 
