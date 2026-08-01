@@ -1,9 +1,12 @@
 ---
 title: "Hugging Face Hub Python SDK"
+description: "Every Hub repo is a git repo, which means every unpinned `from_pretrained` is a dependency on a moving target."
 author: "Ravi Kalia"
 date: "2025-04-06"
 categories: [ML Tooling, NLP, HuggingFace]
 image: "./cover.png"
+tags: [huggingface, hub, reproducibility, versioning]
+jupyter: huggingface-blog
 format:
     html:
         toc: true
@@ -13,93 +16,110 @@ format:
 
 ![Hugging Face Hub Python SDK](./cover.png)
 
-The Hugging Face Hub is a powerful platform for sharing, discovering, and using machine learning models, datasets, and demos. It integrates seamlessly with the Hugging Face Python ecosystem (`transformers`, `datasets`, `huggingface_hub`, `diffusers`), and supports workflows for both research and production.
+`pipeline("sentiment-analysis", model="distilbert/distilbert-base-uncased-finetuned-sst-2-english")` looks like a pinned dependency. It is not. It names a repository, not a version, and it resolves to whatever the `main` branch of that repository points at the moment you run it. If the owner pushes new weights tomorrow, your code silently gets them.
 
-## Model Hub
+This is not a flaw so much as an unadvertised consequence of the Hub's actual design: every repo — model, dataset, or Space — is a git repository with large files in LFS. Once you see that, the SDK stops looking like a download API and starts looking like a git client, and the reproducibility question becomes the same one you already know how to answer.
 
-The Model Hub hosts over 500,000 models across tasks like NLP, vision, audio, tabular, and multimodal learning.
+## The repo is literally a git repo
 
-Each model repo includes:
-- Pretrained weights (`pytorch_model.bin`, `tf_model.h5`, etc.)
-- Config files (`config.json`, `tokenizer.json`, etc.)
-- README with metadata, examples, and citations
-- Git-based version control
+The SDK will tell you this directly. Every repository has branches, commits, and a resolvable head:
+
+```{python}
+from huggingface_hub import HfApi
+
+REPO = "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
+api = HfApi()
+
+info = api.model_info(REPO)
+print(f"current head : {info.sha}")
+print(f"last modified: {info.lastModified}")
+
+refs = api.list_repo_refs(REPO)
+print(f"branches     : {[b.name for b in refs.branches]}")
+
+print("\nrecent commits:")
+for commit in list(api.list_repo_commits(REPO))[:3]:
+    print(f"  {commit.commit_id[:8]}  {str(commit.created_at)[:10]}  {commit.title[:48]}")
+```
+
+A commit history, exactly as you would get from `git log`. The `sha` is the thing your unpinned call is implicitly resolving to — and the thing you can pin to instead.
+
+## Pinning is one argument
+
+Everything in the ecosystem that loads from the Hub takes a `revision`, and it accepts a branch, a tag, or a commit sha. Passing a sha turns a moving reference into a fixed one:
 
 ```{python}
 from transformers import pipeline
-pipe = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
-print(pipe("I love the Hugging Face Hub!"))
+
+PINNED = info.sha  # resolved above; hard-code this in real work
+
+classifier = pipeline("sentiment-analysis", model=REPO, revision=PINNED)
+print(classifier("I love the Hugging Face Hub!"))
 ```
 
-## Dataset Hub
+The prediction is the same one the unpinned call would give today. The difference is that this one will still give it next year. Note the deliberate inconsistency in the cell above: pinning to `info.sha` is only pinning to "whatever was current when this ran", which is exactly the thing being argued against — in real code you paste the literal sha.
 
-The Dataset Hub provides thousands of datasets, from common NLP corpora to genomics and code.
+### Caveat: pinning does not make a model immutable
 
-```{python}
-from datasets import load_dataset
-ds = load_dataset("ag_news")
-print(ds["train"][0])
-```
+A sha pins *content*, not *availability*. In August 2024 the `runwayml/stable-diffusion-v1-5` repository — one of the most depended-upon repos on the Hub — was removed by its owner, and the weights moved to `stable-diffusion-v1-5/stable-diffusion-v1-5`. Pinned and unpinned code broke alike, because there was nothing left to resolve against. A redirect now covers the old id, but redirects are a courtesy, not a guarantee.
 
-Features:
-	•	Supports streaming and lazy loading
-	•	Efficient storage using Apache Arrow / Parquet
-	•	Built-in filtering, mapping, and shuffling
+The lesson is the one every package ecosystem has learned: pin for reproducibility, but if you actually cannot tolerate the dependency disappearing, hold your own copy.
 
-## Spaces
+## Downloading is a git checkout
 
-Spaces are interactive demos powered by Gradio or Streamlit.
-
-Use cases:
-	•	Prototypes
-	•	Research artifacts
-	•	Community tutorials
-
-Example: Stable Diffusion Space
-
-Spaces can be deployed with just a app.py and pushed via Git.
-
-## Versioning & Access Control
-
-Every repo is a git repository. You can:
-	•	Push and pull like GitHub
-	•	Track changes, create branches
-	•	Set permissions (private/public)
-	•	Create organizations and teams
-```bash
-huggingface-cli login
-git clone https://huggingface.co/your-username/your-model
-```
-
-## Python SDK: huggingface_hub
-
-Install:
-
-
-```bash
-pip install huggingface_hub
-```
-
-Common operations:
+`snapshot_download` is the SDK's `git clone`, and it takes the same `revision`. It fetches the whole repo to the local cache and hands back a path:
 
 ```{python}
 from huggingface_hub import snapshot_download
-snapshot_download(repo_id="google/flan-t5-small")
+import os
+
+path = snapshot_download(repo_id="google/flan-t5-small", revision="main")
+files = sorted(os.listdir(path))
+print(f"{len(files)} files at {os.path.basename(path)}")
+print(files[:8])
 ```
 
-You can also create, delete, or update models and datasets programmatically.
+The cache is content-addressed by commit, so downloading two revisions of the same repo stores both and shares any unchanged files between them. This is also why the cache directory grows the way it does — it is keeping history, not just the latest.
 
-## Enterprise Features
+## Datasets resolve the same way
 
-For teams and orgs:
-	•	Private model hosting
-	•	Inference endpoints
-	•	Model cards with ethical considerations
-	•	Compliance with data governance
-	•	Integration with cloud platforms (AWS/GCP/Azure)
+The Dataset Hub is the same git substrate with a different loader on top, which means the same pinning argument applies. It also means dataset ids follow the same `namespace/name` rule — and as of `datasets` 5.x, the bare aliases that used to work (`"ag_news"`, `"imdb"`, `"glue"`) now raise `HfUriError`:
 
-⸻
+```{python}
+from datasets import load_dataset
 
-The Hugging Face Hub is a cornerstone of the open-source ML ecosystem. Whether you’re a researcher sharing checkpoints or a developer integrating state-of-the-art models, it’s an essential tool in your stack.
+news = load_dataset("fancyzhx/ag_news", split="train")
+print(news)
+print(f"\nfirst row: {news[0]['text'][:90]}...")
+```
 
+**About this corpus.** AG News is a subset of Antonio Gulli's news crawl, packaged for classification by [Zhang, Zhao and LeCun (2015)](https://arxiv.org/abs/1509.01626) to benchmark character-level convolutional networks. It is 120,000 training and 7,600 test headlines-plus-descriptions, balanced across four topic classes — World, Sports, Business, Sci/Tech — chosen as the four largest categories in the crawl.
 
+Two things follow from how it was built. The balance is an artefact of the packaging, not of the news: real newswire is not a quarter sports. And the articles date from around 2004, so a topic classifier trained here has never seen a smartphone, a social network, or a pandemic — "Sci/Tech" means something measurably different now. If a decision downstream routed real stories using this model, the errors would concentrate in exactly the categories that have drifted most, and test accuracy on this frozen corpus would report none of it. It is used here because it is small, public and pinned — properties that matter for demonstrating versioning, and that have nothing to do with whether it is fit for classification today.
+
+## Publishing closes the loop
+
+Writing works the same way, and the git framing keeps holding: `create_repo` is `git init`, `upload_file` is a commit. The following is not executed here — it would push to a real account — but it is the whole API:
+
+```{python}
+#| eval: false
+from huggingface_hub import HfApi, create_repo
+
+create_repo("your-username/your-model", repo_type="model", private=True)
+
+api = HfApi()
+api.upload_file(
+    path_or_fileobj="./config.json",
+    path_in_repo="config.json",
+    repo_id="your-username/your-model",
+    commit_message="Add config",
+)
+```
+
+Each `upload_file` is one commit on `main`, and each commit is a sha someone else can pin to. Authentication is `hf auth login` once, which writes a token to the same cache directory the downloads use.
+
+## What the git framing is worth
+
+The claim at the top was that an unpinned `from_pretrained` is a dependency on a moving target. The Hub being git is what makes that true, and also what makes it fixable: the same call takes a `revision`, the history is inspectable before you choose one, and the local cache keeps revisions side by side rather than overwriting.
+
+Where the analogy stops is deletion and trust. Git gives you content-addressing within a repo that still exists; it gives you nothing if the remote disappears, and a sha certifies that bytes are unchanged, not that they were ever safe to run. `from_pretrained` on an untrusted repo executes that repo's config against your process — pinning a sha to a repo you have not read is reproducibly running someone else's code.

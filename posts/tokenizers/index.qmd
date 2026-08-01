@@ -1,70 +1,54 @@
 ---
 title: "Hugging Face Tokenizers Library"
+description: "A tokenizer's vocabulary is learned, not configured — and when it is learned from too little text, it fails in a way you can read off the output."
 author: "Ravi Kalia"
-format: html
 date: 2025-03-20
 categories: [nlp, huggingface, tokenization]
 image: "./cover.png"
+tags: [tokenizers, bpe, huggingface, nlp]
+jupyter: huggingface-blog
+format:
+    html:
+        toc: true
+        code-fold: true
 ---
 
 ![Hugging Face Tokenizers Library](./cover.png)
 
-The [`tokenizers`](https://github.com/huggingface/tokenizers) library from Hugging Face is a fast, flexible, and production-grade tool for building custom tokenization pipelines. It’s written in Rust and exposed to Python for speed and usability.
+Train a byte-pair tokenizer on a few lines of text, ask it to encode `"Hello world"`, and it returns `['[UNK]', 'e', 'l', 'l', 'o', 'wor', 'l', 'd']`. Nothing errored. The vocabulary simply never contained a capital `H`, or the word `hello`, or anything close enough to help — so the model fell back to characters and then gave up on the first one.
 
-## What is Tokenization?
+That output is worth reading closely, because it is the whole subject of this post. A tokenizer is not a configuration; it is a small model *trained* on a corpus, and the [`tokenizers`](https://github.com/huggingface/tokenizers) library's four-stage pipeline exists so that when the result is wrong you can tell which stage is responsible. Normalizer, pre-tokenizer, model, post-processor — the `[UNK]` above indicts exactly one of them.
 
-Tokenization is the process of converting text into tokens. These tokens can be:
-- Words: `["I", "love", "NLP"]`
-- Subwords: `["I", "lov", "e", "NL", "P"]`
-- Characters: `["I", "l", "o", "v", "e"]`
+## The pipeline is four stages, and failures localise to one
 
-Transformer models usually use **subword tokenization** like Byte-Pair Encoding (BPE), WordPiece, or Unigram for efficiency and generalization.
+Every tokenizer in the library is the same pipeline, and it helps to know what each stage can and cannot be blamed for:
 
-## Why Use `tokenizers`?
+| Stage | Job | Failure it causes |
+|---|---|---|
+| `Normalizer` | Lowercase, NFD/NFKC, strip accents | Case- and accent-sensitive `[UNK]`s |
+| `PreTokenizer` | Split raw text into word-ish chunks | Punctuation glued to words; no cross-word merges |
+| `Model` | The learned vocabulary (BPE, WordPiece, Unigram) | Over-fragmentation; `[UNK]` on unseen characters |
+| `PostProcessor` | Add `[CLS]`, `[SEP]`, type ids | Missing or misplaced special tokens |
+| `Decoder` | Reassemble text from tokens | Lost spacing on round-trip |
 
--  **Very fast** (Rust-powered)
--  **Modular and customizable**
--  **Built-in training support**
--  **Compatible with 🤗 Transformers**
--  **Tracks offsets and original text spans**
-
-## Core Components
-
-| Component        | Description |
-|------------------|-------------|
-| `Normalizer`     | Lowercasing, NFKC, stripping accents |
-| `PreTokenizer`   | Splits text into words/subwords |
-| `Model`          | Learns the subword vocabulary (BPE, WordPiece, etc.) |
-| `PostProcessor`  | Adds `[CLS]`, `[SEP]`, etc. |
-| `Decoder`        | Reconstructs original text |
-
-## Example 1: Load Pretrained Tokenizer
+A pretrained tokenizer arrives with all four already set. Loading one shows what a well-trained vocabulary looks like, and the offsets are the library's distinguishing feature — every token carries the character span it came from:
 
 ```{python}
 from tokenizers import Tokenizer
 
-tokenizer = Tokenizer.from_pretrained("bert-base-uncased")
+bert = Tokenizer.from_pretrained("google-bert/bert-base-uncased")
+out = bert.encode("Hugging Face is creating a tool.")
 
-output = tokenizer.encode("Hugging Face is creating a tool.")
-print("Tokens:", output.tokens)
-print("IDs:", output.ids)
-print("Offsets:", output.offsets)
+print("tokens :", out.tokens)
+print("ids    :", out.ids[:8], "...")
+print("offsets:", out.offsets[:5], "...")
 ```
 
-## Example 2: Build with Normalizer and PreTokenizer
+`hugging` maps back to characters 0–7 of the input string. That mapping survives the whole pipeline, which is what makes token-level predictions (named entities, extractive answers) reportable as spans of the user's original text rather than of some normalised intermediate.
 
-```{python}
-from tokenizers import Tokenizer
-from tokenizers.models import WordPiece
-from tokenizers.normalizers import Lowercase, NFD, StripAccents, Sequence
-from tokenizers.pre_tokenizers import Whitespace
+## The vocabulary comes from data, and too little data shows
 
-tokenizer = Tokenizer(WordPiece(unk_token="[UNK]"))
-tokenizer.normalizer = Sequence([NFD(), Lowercase(), StripAccents()])
-tokenizer.pre_tokenizer = Whitespace()
-```
-
-## Example 3: Train Your Own Tokenizer
+Now build one from scratch. The corpus is `data.txt` beside this post: fifteen hand-written lines of NLP terminology, about 340 bytes — synthetic, and deliberately far too small, standing in for the "quick test corpus" that a first attempt usually reaches for.
 
 ```{python}
 from tokenizers import Tokenizer
@@ -72,38 +56,91 @@ from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
 from tokenizers.pre_tokenizers import Whitespace
 
-tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
-trainer = BpeTrainer(vocab_size=1000, special_tokens=["[UNK]", "[CLS]", "[SEP]"])
-tokenizer.pre_tokenizer = Whitespace()
 
-tokenizer.train(["data.txt"], trainer)
-print(tokenizer.encode("Some unseen text").tokens)
+def train_bpe(corpus, vocab_size):
+    """Train a byte-pair tokenizer over an iterable of strings."""
+    tok = Tokenizer(BPE(unk_token="[UNK]"))
+    tok.pre_tokenizer = Whitespace()
+    trainer = BpeTrainer(
+        vocab_size=vocab_size, special_tokens=["[UNK]", "[CLS]", "[SEP]"]
+    )
+    tok.train_from_iterator(corpus, trainer)
+    return tok
+
+
+with open("data.txt") as fh:
+    tiny_corpus = fh.read().splitlines()
+
+tiny = train_bpe(tiny_corpus, vocab_size=1000)
+
+print(f"requested vocab: 1000")
+print(f"actual vocab   : {tiny.get_vocab_size()}")
+print(f"'Hello world'  : {tiny.encode('Hello world').tokens}")
 ```
 
-## Example 4: Add Special Tokens
+Two diagnostics, both damning. We asked for 1,000 merges and got a couple of hundred — the trainer exhausted the corpus before it ran out of budget, which is the signal that the corpus, not the setting, is the binding constraint. And `Hello` produces `[UNK]` followed by loose characters, because the training text is entirely lowercase: the byte `H` was never observed, so no merge involving it could ever be learned.
+
+Neither of these is a bug in the library, and neither would have been visible from an error message. They are visible from the tokens.
+
+## The same code on a real corpus
+
+Change nothing but the corpus. Here it is the 25,000 IMDB training reviews — a few tens of megabytes of ordinary English prose, described in more detail in the [companion post on `datasets`](../datasets/index.qmd):
+
+```{python}
+from datasets import load_dataset
+
+imdb = load_dataset("stanfordnlp/imdb", split="train")
+real = train_bpe((row["text"] for row in imdb), vocab_size=8000)
+
+print(f"actual vocab  : {real.get_vocab_size()}")
+print(f"'Hello world' : {real.encode('Hello world').tokens}")
+print(f"unseen input  : {real.encode('Some unseen text').tokens}")
+```
+
+The full 8,000-token budget is now used, `Hello world` resolves into three plausible subwords, and a sentence made of words the tokenizer never saw as units still decomposes sensibly instead of collapsing to characters. That last property — graceful degradation on unseen input — is the entire reason transformers use subword vocabularies rather than word ones, and it only emerges when the vocabulary was learned from enough text to contain the right fragments.
+
+Training took a few seconds on 25,000 documents. The Rust implementation is genuinely the reason this is a cell in a blog post rather than an overnight job.
+
+## Special tokens are added after the fact
+
+The model stage knows nothing about `[CLS]` or `[SEP]`; those are the post-processor's job, applied to whatever the model produced. Attaching one to the well-trained tokenizer:
 
 ```{python}
 from tokenizers.processors import TemplateProcessing
 
-tokenizer.post_processor = TemplateProcessing(
+real.post_processor = TemplateProcessing(
     single="[CLS] $A [SEP]",
     pair="[CLS] $A [SEP] $B:1 [SEP]:1",
-    special_tokens=[("[CLS]", 1), ("[SEP]", 2)]
+    special_tokens=[("[CLS]", 1), ("[SEP]", 2)],
 )
 
-encoded = tokenizer.encode("Hello world")
-print(encoded.tokens)  # ['[CLS]', 'hello', 'world', '[SEP]']
+print(real.encode("Hello world").tokens)
+print(real.encode("First sentence", "Second sentence").tokens)
 ```
 
-## Example 5: Integration with Transformers
+The single-sequence template wraps the subwords from before; the pair template additionally marks the second sequence with type id 1, which is what a model's segment embeddings consume. The ids `1` and `2` in `special_tokens` must match the positions the trainer assigned — they were passed as the second and third entries of `special_tokens` above, and getting this wrong silently mislabels every sequence rather than raising.
 
-```python
+## Handing it to `transformers`
+
+A trained `Tokenizer` becomes a `transformers` tokenizer by wrapping it, which is the bridge from this library to the rest of the ecosystem:
+
+```{python}
 from transformers import PreTrainedTokenizerFast
-tok = PreTrainedTokenizerFast(tokenizer_file="my-tokenizer.json")
 
-Use this with pipeline, Trainer, or model training directly.
+hf_tok = PreTrainedTokenizerFast(
+    tokenizer_object=real,
+    unk_token="[UNK]",
+    cls_token="[CLS]",
+    sep_token="[SEP]",
+)
+
+print(hf_tok("Hello world", return_tensors="pt"))
 ```
 
-## Conclusion
-The `tokenizers` library is a powerful tool for building custom tokenization pipelines. It’s fast, flexible, and integrates seamlessly with the Hugging Face ecosystem. Whether you’re working on a small project or a large-scale application, `tokenizers` can help you efficiently preprocess your text data.
+From here it works anywhere a tokenizer is expected — `pipeline`, `Trainer`, or a bare model's forward pass. Saving with `real.save("my-tokenizer.json")` and reloading via `PreTrainedTokenizerFast(tokenizer_file=...)` is the same thing across a process boundary.
 
+## What the four stages buy
+
+The claim at the start was that a tokenizer is trained, and that its failures localise. Both halves paid off in the same example: `['[UNK]', 'e', 'l', 'l', 'o', ...]` told us the *model* stage lacked a character, and that the fix was either a `Lowercase` normalizer or — as it turned out — a corpus large enough to contain a capital letter. Nothing about that diagnosis required reading the library's source.
+
+Where it stops being simple is that the stages interact. Adding a normalizer changes what the model sees, which changes the merges it learns, which changes the offsets the post-processor reports — so a tokenizer is not a stack of independently tunable parts, and any change to an early stage invalidates a vocabulary trained under the old one. Retrain after touching the normalizer; do not patch it in afterwards and expect the merges to still apply.

@@ -8,6 +8,7 @@
 
 <meta name="author" content="Ravi Kalia">
 <meta name="dcterms.date" content="2025-03-20">
+<meta name="description" content="A tokenizer’s vocabulary is learned, not configured — and when it is learned from too little text, it fails in a way you can read off the output.">
 
 <title>Hugging Face Tokenizers Library – Blog Directory</title>
 <style>
@@ -59,7 +60,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </style>
 
 
-<script src="../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.5.1/jquery.min.js" integrity="sha512-bLT0Qm9VnAYZDflyKcBaQ2gg0hSYNQrJ8RilYldYQ1FxQYoCLtUjuuRuZo+fjqhx/qtq/1itJ0C2ejDxltZVFg==" crossorigin="anonymous"></script><script src="../../site_libs/quarto-nav/quarto-nav.js"></script>
 <script src="../../site_libs/quarto-nav/headroom.min.js"></script>
 <script src="../../site_libs/clipboard/clipboard.min.js"></script>
 <script src="../../site_libs/quarto-search/autocomplete.umd.js"></script>
@@ -103,12 +104,16 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     "search-label": "Search"
   }
 }</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" integrity="sha512-c3Nl8+7g4LMSTdrm621y7kf9v3SDPnhxLNhcjFJbKECVnmZHTdo+IRO05sNLTH/D3vA6u1X32ehoLC7WFVdheg==" crossorigin="anonymous"></script>
+
+<script type="application/javascript">define('jquery', [],function() {return window.jQuery;})</script>
+<script src="https://unpkg.com/@jupyter-widgets/html-manager@*/dist/embed-amd.js" crossorigin="anonymous"></script>
 
 
 <link rel="stylesheet" href="../../styles.css">
 </head>
 
-<body class="nav-fixed fullcontent">
+<body class="nav-fixed">
 
 <div id="quarto-search-results"></div>
   <header id="quarto-header" class="headroom fixed-top quarto-banner">
@@ -152,7 +157,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <div class="quarto-title-banner page-columns page-full">
     <div class="quarto-title column-body">
       <h1 class="title">Hugging Face Tokenizers Library</h1>
-                                <div class="quarto-categories">
+                  <div>
+        <div class="description">
+          A tokenizer’s vocabulary is learned, not configured — and when it is learned from too little text, it fails in a way you can read off the output.
+        </div>
+      </div>
+                          <div class="quarto-categories">
                 <div class="quarto-category">nlp</div>
                 <div class="quarto-category">huggingface</div>
                 <div class="quarto-category">tokenization</div>
@@ -184,7 +194,20 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   </header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
 <!-- sidebar -->
 <!-- margin-sidebar -->
-    
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#the-pipeline-is-four-stages-and-failures-localise-to-one" id="toc-the-pipeline-is-four-stages-and-failures-localise-to-one" class="nav-link active" data-scroll-target="#the-pipeline-is-four-stages-and-failures-localise-to-one">The pipeline is four stages, and failures localise to one</a></li>
+  <li><a href="#the-vocabulary-comes-from-data-and-too-little-data-shows" id="toc-the-vocabulary-comes-from-data-and-too-little-data-shows" class="nav-link" data-scroll-target="#the-vocabulary-comes-from-data-and-too-little-data-shows">The vocabulary comes from data, and too little data shows</a></li>
+  <li><a href="#the-same-code-on-a-real-corpus" id="toc-the-same-code-on-a-real-corpus" class="nav-link" data-scroll-target="#the-same-code-on-a-real-corpus">The same code on a real corpus</a></li>
+  <li><a href="#special-tokens-are-added-after-the-fact" id="toc-special-tokens-are-added-after-the-fact" class="nav-link" data-scroll-target="#special-tokens-are-added-after-the-fact">Special tokens are added after the fact</a></li>
+  <li><a href="#handing-it-to-transformers" id="toc-handing-it-to-transformers" class="nav-link" data-scroll-target="#handing-it-to-transformers">Handing it to <code>transformers</code></a></li>
+  <li><a href="#what-the-four-stages-buy" id="toc-what-the-four-stages-buy" class="nav-link" data-scroll-target="#what-the-four-stages-buy">What the four stages buy</a></li>
+  </ul>
+<div class="toc-actions"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/tokenizers/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></nav>
+    </div>
 <!-- main -->
 <main class="content quarto-banner-title-block" id="quarto-document-content">
 
@@ -192,145 +215,217 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 
 
-<p>The <a href="https://github.com/huggingface/tokenizers"><code>tokenizers</code></a> library from Hugging Face is a fast, flexible, and production-grade tool for building custom tokenization pipelines. It’s written in Rust and exposed to Python for speed and usability.</p>
-<section id="what-is-tokenization" class="level2">
-<h2 class="anchored" data-anchor-id="what-is-tokenization">What is Tokenization?</h2>
-<p>Tokenization is the process of converting text into tokens. These tokens can be: - Words: <code>["I", "love", "NLP"]</code> - Subwords: <code>["I", "lov", "e", "NL", "P"]</code> - Characters: <code>["I", "l", "o", "v", "e"]</code></p>
-<p>Transformer models usually use <strong>subword tokenization</strong> like Byte-Pair Encoding (BPE), WordPiece, or Unigram for efficiency and generalization.</p>
-</section>
-<section id="why-use-tokenizers" class="level2">
-<h2 class="anchored" data-anchor-id="why-use-tokenizers">Why Use <code>tokenizers</code>?</h2>
-<ul>
-<li><strong>Very fast</strong> (Rust-powered)</li>
-<li><strong>Modular and customizable</strong></li>
-<li><strong>Built-in training support</strong></li>
-<li><strong>Compatible with 🤗 Transformers</strong></li>
-<li><strong>Tracks offsets and original text spans</strong></li>
-</ul>
-</section>
-<section id="core-components" class="level2">
-<h2 class="anchored" data-anchor-id="core-components">Core Components</h2>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="./cover.png" class="img-fluid figure-img"></p>
+<figcaption>Hugging Face Tokenizers Library</figcaption>
+</figure>
+</div>
+<p>Train a byte-pair tokenizer on a few lines of text, ask it to encode <code>"Hello world"</code>, and it returns <code>['[UNK]', 'e', 'l', 'l', 'o', 'wor', 'l', 'd']</code>. Nothing errored. The vocabulary simply never contained a capital <code>H</code>, or the word <code>hello</code>, or anything close enough to help — so the model fell back to characters and then gave up on the first one.</p>
+<p>That output is worth reading closely, because it is the whole subject of this post. A tokenizer is not a configuration; it is a small model <em>trained</em> on a corpus, and the <a href="https://github.com/huggingface/tokenizers"><code>tokenizers</code></a> library’s four-stage pipeline exists so that when the result is wrong you can tell which stage is responsible. Normalizer, pre-tokenizer, model, post-processor — the <code>[UNK]</code> above indicts exactly one of them.</p>
+<section id="the-pipeline-is-four-stages-and-failures-localise-to-one" class="level2">
+<h2 class="anchored" data-anchor-id="the-pipeline-is-four-stages-and-failures-localise-to-one">The pipeline is four stages, and failures localise to one</h2>
+<p>Every tokenizer in the library is the same pipeline, and it helps to know what each stage can and cannot be blamed for:</p>
 <table class="caption-top table">
 <colgroup>
-<col style="width: 58%">
-<col style="width: 41%">
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
 </colgroup>
 <thead>
 <tr class="header">
-<th>Component</th>
-<th>Description</th>
+<th>Stage</th>
+<th>Job</th>
+<th>Failure it causes</th>
 </tr>
 </thead>
 <tbody>
 <tr class="odd">
 <td><code>Normalizer</code></td>
-<td>Lowercasing, NFKC, stripping accents</td>
+<td>Lowercase, NFD/NFKC, strip accents</td>
+<td>Case- and accent-sensitive <code>[UNK]</code>s</td>
 </tr>
 <tr class="even">
 <td><code>PreTokenizer</code></td>
-<td>Splits text into words/subwords</td>
+<td>Split raw text into word-ish chunks</td>
+<td>Punctuation glued to words; no cross-word merges</td>
 </tr>
 <tr class="odd">
 <td><code>Model</code></td>
-<td>Learns the subword vocabulary (BPE, WordPiece, etc.)</td>
+<td>The learned vocabulary (BPE, WordPiece, Unigram)</td>
+<td>Over-fragmentation; <code>[UNK]</code> on unseen characters</td>
 </tr>
 <tr class="even">
 <td><code>PostProcessor</code></td>
-<td>Adds <code>[CLS]</code>, <code>[SEP]</code>, etc.</td>
+<td>Add <code>[CLS]</code>, <code>[SEP]</code>, type ids</td>
+<td>Missing or misplaced special tokens</td>
 </tr>
 <tr class="odd">
 <td><code>Decoder</code></td>
-<td>Reconstructs original text</td>
+<td>Reassemble text from tokens</td>
+<td>Lost spacing on round-trip</td>
 </tr>
 </tbody>
 </table>
-</section>
-<section id="example-1-load-pretrained-tokenizer" class="level2">
-<h2 class="anchored" data-anchor-id="example-1-load-pretrained-tokenizer">Example 1: Load Pretrained Tokenizer</h2>
-<div id="684270f7" class="cell" data-execution_count="1">
+<p>A pretrained tokenizer arrives with all four already set. Loading one shows what a well-trained vocabulary looks like, and the offsets are the library’s distinguishing feature — every token carries the character span it came from:</p>
+<div id="1a40df91" class="cell" data-execution_count="1">
+<details class="code-fold">
+<summary>Code</summary>
 <div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> tokenizers <span class="im">import</span> Tokenizer</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>tokenizer <span class="op">=</span> Tokenizer.from_pretrained(<span class="st">"bert-base-uncased"</span>)</span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>output <span class="op">=</span> tokenizer.encode(<span class="st">"Hugging Face is creating a tool."</span>)</span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"Tokens:"</span>, output.tokens)</span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"IDs:"</span>, output.ids)</span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"Offsets:"</span>, output.offsets)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>bert <span class="op">=</span> Tokenizer.from_pretrained(<span class="st">"google-bert/bert-base-uncased"</span>)</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>out <span class="op">=</span> bert.encode(<span class="st">"Hugging Face is creating a tool."</span>)</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"tokens :"</span>, out.tokens)</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"ids    :"</span>, out.ids[:<span class="dv">8</span>], <span class="st">"..."</span>)</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"offsets:"</span>, out.offsets[:<span class="dv">5</span>], <span class="st">"..."</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</details>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.</code></pre>
+</div>
+<div class="cell-output cell-output-display">
+<script type="application/vnd.jupyter.widget-view+json">
+{"model_id":"5e43b6c08887438fb5b6f89311d28158","version_major":2,"version_minor":0,"quarto_mimetype":"application/vnd.jupyter.widget-view+json"}
+</script>
+</div>
 <div class="cell-output cell-output-stdout">
-<pre><code>Tokens: ['[CLS]', 'hugging', 'face', 'is', 'creating', 'a', 'tool', '.', '[SEP]']
-IDs: [101, 17662, 2227, 2003, 4526, 1037, 6994, 1012, 102]
-Offsets: [(0, 0), (0, 7), (8, 12), (13, 15), (16, 24), (25, 26), (27, 31), (31, 32), (0, 0)]</code></pre>
+<pre><code>tokens : ['[CLS]', 'hugging', 'face', 'is', 'creating', 'a', 'tool', '.', '[SEP]']
+ids    : [101, 17662, 2227, 2003, 4526, 1037, 6994, 1012] ...
+offsets: [(0, 0), (0, 7), (8, 12), (13, 15), (16, 24)] ...</code></pre>
 </div>
 </div>
+<p><code>hugging</code> maps back to characters 0–7 of the input string. That mapping survives the whole pipeline, which is what makes token-level predictions (named entities, extractive answers) reportable as spans of the user’s original text rather than of some normalised intermediate.</p>
 </section>
-<section id="example-2-build-with-normalizer-and-pretokenizer" class="level2">
-<h2 class="anchored" data-anchor-id="example-2-build-with-normalizer-and-pretokenizer">Example 2: Build with Normalizer and PreTokenizer</h2>
-<div id="20db4a86" class="cell" data-execution_count="2">
-<div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> tokenizers <span class="im">import</span> Tokenizer</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> tokenizers.models <span class="im">import</span> WordPiece</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> tokenizers.normalizers <span class="im">import</span> Lowercase, NFD, StripAccents, Sequence</span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> tokenizers.pre_tokenizers <span class="im">import</span> Whitespace</span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>tokenizer <span class="op">=</span> Tokenizer(WordPiece(unk_token<span class="op">=</span><span class="st">"[UNK]"</span>))</span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>tokenizer.normalizer <span class="op">=</span> Sequence([NFD(), Lowercase(), StripAccents()])</span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>tokenizer.pre_tokenizer <span class="op">=</span> Whitespace()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-</div>
-</section>
-<section id="example-3-train-your-own-tokenizer" class="level2">
-<h2 class="anchored" data-anchor-id="example-3-train-your-own-tokenizer">Example 3: Train Your Own Tokenizer</h2>
-<div id="cad2c643" class="cell" data-execution_count="3">
+<section id="the-vocabulary-comes-from-data-and-too-little-data-shows" class="level2">
+<h2 class="anchored" data-anchor-id="the-vocabulary-comes-from-data-and-too-little-data-shows">The vocabulary comes from data, and too little data shows</h2>
+<p>Now build one from scratch. The corpus is <code>data.txt</code> beside this post: fifteen hand-written lines of NLP terminology, about 340 bytes — synthetic, and deliberately far too small, standing in for the “quick test corpus” that a first attempt usually reaches for.</p>
+<div id="4472222c" class="cell" data-execution_count="2">
+<details class="code-fold">
+<summary>Code</summary>
 <div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> tokenizers <span class="im">import</span> Tokenizer</span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> tokenizers.models <span class="im">import</span> BPE</span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> tokenizers.trainers <span class="im">import</span> BpeTrainer</span>
 <span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> tokenizers.pre_tokenizers <span class="im">import</span> Whitespace</span>
 <span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>tokenizer <span class="op">=</span> Tokenizer(BPE(unk_token<span class="op">=</span><span class="st">"[UNK]"</span>))</span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>trainer <span class="op">=</span> BpeTrainer(vocab_size<span class="op">=</span><span class="dv">1000</span>, special_tokens<span class="op">=</span>[<span class="st">"[UNK]"</span>, <span class="st">"[CLS]"</span>, <span class="st">"[SEP]"</span>])</span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>tokenizer.pre_tokenizer <span class="op">=</span> Whitespace()</span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>tokenizer.train([<span class="st">"data.txt"</span>], trainer)</span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(tokenizer.encode(<span class="st">"Some unseen text"</span>).tokens)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> train_bpe(corpus, vocab_size):</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""Train a byte-pair tokenizer over an iterable of strings."""</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    tok <span class="op">=</span> Tokenizer(BPE(unk_token<span class="op">=</span><span class="st">"[UNK]"</span>))</span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>    tok.pre_tokenizer <span class="op">=</span> Whitespace()</span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    trainer <span class="op">=</span> BpeTrainer(</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>        vocab_size<span class="op">=</span>vocab_size, special_tokens<span class="op">=</span>[<span class="st">"[UNK]"</span>, <span class="st">"[CLS]"</span>, <span class="st">"[SEP]"</span>]</span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>    tok.train_from_iterator(corpus, trainer)</span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> tok</span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a><span class="cf">with</span> <span class="bu">open</span>(<span class="st">"data.txt"</span>) <span class="im">as</span> fh:</span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>    tiny_corpus <span class="op">=</span> fh.read().splitlines()</span>
+<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>tiny <span class="op">=</span> train_bpe(tiny_corpus, vocab_size<span class="op">=</span><span class="dv">1000</span>)</span>
+<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"requested vocab: 1000"</span>)</span>
+<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"actual vocab   : </span><span class="sc">{</span>tiny<span class="sc">.</span>get_vocab_size()<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"'Hello world'  : </span><span class="sc">{</span>tiny<span class="sc">.</span>encode(<span class="st">'Hello world'</span>)<span class="sc">.</span>tokens<span class="sc">}</span><span class="ss">"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</details>
 <div class="cell-output cell-output-stdout">
 <pre><code>
 
 
-['[UNK]', 'o', 'm', 'e', 'u', 'n', 'se', 'en', 'text']</code></pre>
+requested vocab: 1000
+actual vocab   : 187
+'Hello world'  : ['[UNK]', 'e', 'l', 'l', 'o', 'wor', 'l', 'd']</code></pre>
 </div>
 </div>
+<p>Two diagnostics, both damning. We asked for 1,000 merges and got a couple of hundred — the trainer exhausted the corpus before it ran out of budget, which is the signal that the corpus, not the setting, is the binding constraint. And <code>Hello</code> produces <code>[UNK]</code> followed by loose characters, because the training text is entirely lowercase: the byte <code>H</code> was never observed, so no merge involving it could ever be learned.</p>
+<p>Neither of these is a bug in the library, and neither would have been visible from an error message. They are visible from the tokens.</p>
 </section>
-<section id="example-4-add-special-tokens" class="level2">
-<h2 class="anchored" data-anchor-id="example-4-add-special-tokens">Example 4: Add Special Tokens</h2>
-<div id="12b1b7d4" class="cell" data-execution_count="4">
-<div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> tokenizers.processors <span class="im">import</span> TemplateProcessing</span>
+<section id="the-same-code-on-a-real-corpus" class="level2">
+<h2 class="anchored" data-anchor-id="the-same-code-on-a-real-corpus">The same code on a real corpus</h2>
+<p>Change nothing but the corpus. Here it is the 25,000 IMDB training reviews — a few tens of megabytes of ordinary English prose, described in more detail in the <a href="../../posts/datasets/index.html">companion post on <code>datasets</code></a>:</p>
+<div id="27b688dc" class="cell" data-execution_count="3">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> datasets <span class="im">import</span> load_dataset</span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>tokenizer.post_processor <span class="op">=</span> TemplateProcessing(</span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    single<span class="op">=</span><span class="st">"[CLS] $A [SEP]"</span>,</span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    pair<span class="op">=</span><span class="st">"[CLS] $A [SEP] $B:1 [SEP]:1"</span>,</span>
-<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>    special_tokens<span class="op">=</span>[(<span class="st">"[CLS]"</span>, <span class="dv">1</span>), (<span class="st">"[SEP]"</span>, <span class="dv">2</span>)]</span>
-<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>encoded <span class="op">=</span> tokenizer.encode(<span class="st">"Hello world"</span>)</span>
-<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(encoded.tokens)  <span class="co"># ['[CLS]', 'hello', 'world', '[SEP]']</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>imdb <span class="op">=</span> load_dataset(<span class="st">"stanfordnlp/imdb"</span>, split<span class="op">=</span><span class="st">"train"</span>)</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>real <span class="op">=</span> train_bpe((row[<span class="st">"text"</span>] <span class="cf">for</span> row <span class="kw">in</span> imdb), vocab_size<span class="op">=</span><span class="dv">8000</span>)</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"actual vocab  : </span><span class="sc">{</span>real<span class="sc">.</span>get_vocab_size()<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"'Hello world' : </span><span class="sc">{</span>real<span class="sc">.</span>encode(<span class="st">'Hello world'</span>)<span class="sc">.</span>tokens<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"unseen input  : </span><span class="sc">{</span>real<span class="sc">.</span>encode(<span class="st">'Some unseen text'</span>)<span class="sc">.</span>tokens<span class="sc">}</span><span class="ss">"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</details>
 <div class="cell-output cell-output-stdout">
-<pre><code>['[CLS]', '[UNK]', 'e', 'l', 'l', 'o', 'wor', 'l', 'd', '[SEP]']</code></pre>
+<pre><code>
+
+
+actual vocab  : 8000
+'Hello world' : ['Hel', 'lo', 'world']
+unseen input  : ['Some', 'un', 'seen', 'text']</code></pre>
 </div>
 </div>
+<p>The full 8,000-token budget is now used, <code>Hello world</code> resolves into three plausible subwords, and a sentence made of words the tokenizer never saw as units still decomposes sensibly instead of collapsing to characters. That last property — graceful degradation on unseen input — is the entire reason transformers use subword vocabularies rather than word ones, and it only emerges when the vocabulary was learned from enough text to contain the right fragments.</p>
+<p>Training took a few seconds on 25,000 documents. The Rust implementation is genuinely the reason this is a cell in a blog post rather than an overnight job.</p>
 </section>
-<section id="example-5-integration-with-transformers" class="level2">
-<h2 class="anchored" data-anchor-id="example-5-integration-with-transformers">Example 5: Integration with Transformers</h2>
-<div class="sourceCode" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> transformers <span class="im">import</span> PreTrainedTokenizerFast</span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>tok <span class="op">=</span> PreTrainedTokenizerFast(tokenizer_file<span class="op">=</span><span class="st">"my-tokenizer.json"</span>)</span>
-<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>Use this <span class="cf">with</span> pipeline, Trainer, <span class="kw">or</span> model training directly.</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<section id="special-tokens-are-added-after-the-fact" class="level2">
+<h2 class="anchored" data-anchor-id="special-tokens-are-added-after-the-fact">Special tokens are added after the fact</h2>
+<p>The model stage knows nothing about <code>[CLS]</code> or <code>[SEP]</code>; those are the post-processor’s job, applied to whatever the model produced. Attaching one to the well-trained tokenizer:</p>
+<div id="89a09040" class="cell" data-execution_count="4">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> tokenizers.processors <span class="im">import</span> TemplateProcessing</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>real.post_processor <span class="op">=</span> TemplateProcessing(</span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>    single<span class="op">=</span><span class="st">"[CLS] $A [SEP]"</span>,</span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>    pair<span class="op">=</span><span class="st">"[CLS] $A [SEP] $B:1 [SEP]:1"</span>,</span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>    special_tokens<span class="op">=</span>[(<span class="st">"[CLS]"</span>, <span class="dv">1</span>), (<span class="st">"[SEP]"</span>, <span class="dv">2</span>)],</span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(real.encode(<span class="st">"Hello world"</span>).tokens)</span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(real.encode(<span class="st">"First sentence"</span>, <span class="st">"Second sentence"</span>).tokens)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code>['[CLS]', 'Hel', 'lo', 'world', '[SEP]']
+['[CLS]', 'First', 'sent', 'ence', '[SEP]', 'Second', 'sent', 'ence', '[SEP]']</code></pre>
+</div>
+</div>
+<p>The single-sequence template wraps the subwords from before; the pair template additionally marks the second sequence with type id 1, which is what a model’s segment embeddings consume. The ids <code>1</code> and <code>2</code> in <code>special_tokens</code> must match the positions the trainer assigned — they were passed as the second and third entries of <code>special_tokens</code> above, and getting this wrong silently mislabels every sequence rather than raising.</p>
 </section>
-<section id="conclusion" class="level2">
-<h2 class="anchored" data-anchor-id="conclusion">Conclusion</h2>
-<p>The <code>tokenizers</code> library is a powerful tool for building custom tokenization pipelines. It’s fast, flexible, and integrates seamlessly with the Hugging Face ecosystem. Whether you’re working on a small project or a large-scale application, <code>tokenizers</code> can help you efficiently preprocess your text data.</p>
+<section id="handing-it-to-transformers" class="level2">
+<h2 class="anchored" data-anchor-id="handing-it-to-transformers">Handing it to <code>transformers</code></h2>
+<p>A trained <code>Tokenizer</code> becomes a <code>transformers</code> tokenizer by wrapping it, which is the bridge from this library to the rest of the ecosystem:</p>
+<div id="537d5c75" class="cell" data-execution_count="5">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> transformers <span class="im">import</span> PreTrainedTokenizerFast</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>hf_tok <span class="op">=</span> PreTrainedTokenizerFast(</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>    tokenizer_object<span class="op">=</span>real,</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>    unk_token<span class="op">=</span><span class="st">"[UNK]"</span>,</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>    cls_token<span class="op">=</span><span class="st">"[CLS]"</span>,</span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>    sep_token<span class="op">=</span><span class="st">"[SEP]"</span>,</span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(hf_tok(<span class="st">"Hello world"</span>, return_tensors<span class="op">=</span><span class="st">"pt"</span>))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code>{'input_ids': tensor([[   1, 3465,  293,  772,    2]]), 'attention_mask': tensor([[1, 1, 1, 1, 1]])}</code></pre>
+</div>
+</div>
+<p>From here it works anywhere a tokenizer is expected — <code>pipeline</code>, <code>Trainer</code>, or a bare model’s forward pass. Saving with <code>real.save("my-tokenizer.json")</code> and reloading via <code>PreTrainedTokenizerFast(tokenizer_file=...)</code> is the same thing across a process boundary.</p>
+</section>
+<section id="what-the-four-stages-buy" class="level2">
+<h2 class="anchored" data-anchor-id="what-the-four-stages-buy">What the four stages buy</h2>
+<p>The claim at the start was that a tokenizer is trained, and that its failures localise. Both halves paid off in the same example: <code>['[UNK]', 'e', 'l', 'l', 'o', ...]</code> told us the <em>model</em> stage lacked a character, and that the fix was either a <code>Lowercase</code> normalizer or — as it turned out — a corpus large enough to contain a capital letter. Nothing about that diagnosis required reading the library’s source.</p>
+<p>Where it stops being simple is that the stages interact. Adding a normalizer changes what the model sees, which changes the merges it learns, which changes the offsets the post-processor reports — so a tokenizer is not a stack of independently tunable parts, and any change to an early stage invalidates a vocabulary trained under the old one. Retrain after touching the normalizer; do not patch it in afterwards and expect the merges to still apply.</p>
 
 
 </section>
 
 </main> <!-- /main -->
+<script type="application/vnd.jupyter.widget-state+json">
+{"state":{"124a9597edee4f9985de0d246c794943":{"model_module":"@jupyter-widgets/controls","model_module_version":"2.0.0","model_name":"FloatProgressModel","state":{"_dom_classes":[],"_model_module":"@jupyter-widgets/controls","_model_module_version":"2.0.0","_model_name":"FloatProgressModel","_view_count":null,"_view_module":"@jupyter-widgets/controls","_view_module_version":"2.0.0","_view_name":"ProgressView","bar_style":"success","description":"","description_allow_html":false,"layout":"IPY_MODEL_f91a9881abd642a6a4245ad91038819d","max":466062,"min":0,"orientation":"horizontal","style":"IPY_MODEL_a0976ed9d5a14a64a9716cef8c1fe6cf","tabbable":null,"tooltip":null,"value":466062}},"5e43b6c08887438fb5b6f89311d28158":{"model_module":"@jupyter-widgets/controls","model_module_version":"2.0.0","model_name":"HBoxModel","state":{"_dom_classes":[],"_model_module":"@jupyter-widgets/controls","_model_module_version":"2.0.0","_model_name":"HBoxModel","_view_count":null,"_view_module":"@jupyter-widgets/controls","_view_module_version":"2.0.0","_view_name":"HBoxView","box_style":"","children":["IPY_MODEL_ae37183a23bd4f08ae94f90fdf3cfec3","IPY_MODEL_124a9597edee4f9985de0d246c794943","IPY_MODEL_6044a98055664f3b9107154626ce1f76"],"layout":"IPY_MODEL_a1e2869d90684cce9f7953ba3dd43244","tabbable":null,"tooltip":null}},"6044a98055664f3b9107154626ce1f76":{"model_module":"@jupyter-widgets/controls","model_module_version":"2.0.0","model_name":"HTMLModel","state":{"_dom_classes":[],"_model_module":"@jupyter-widgets/controls","_model_module_version":"2.0.0","_model_name":"HTMLModel","_view_count":null,"_view_module":"@jupyter-widgets/controls","_view_module_version":"2.0.0","_view_name":"HTMLView","description":"","description_allow_html":false,"layout":"IPY_MODEL_feb1c831258e4ac8a2675036802d6bcf","placeholder":"​","style":"IPY_MODEL_ec097523e37f46e0bf0b6f01029c3c22","tabbable":null,"tooltip":null,"value":" 466k/466k [00:00&lt;00:00, 1.27MB/s]"}},"889cafc1faa24fe2857a7f7a352ea96b":{"model_module":"@jupyter-widgets/base","model_module_version":"2.0.0","model_name":"LayoutModel","state":{"_model_module":"@jupyter-widgets/base","_model_module_version":"2.0.0","_model_name":"LayoutModel","_view_count":null,"_view_module":"@jupyter-widgets/base","_view_module_version":"2.0.0","_view_name":"LayoutView","align_content":null,"align_items":null,"align_self":null,"border_bottom":null,"border_left":null,"border_right":null,"border_top":null,"bottom":null,"display":null,"flex":null,"flex_flow":null,"grid_area":null,"grid_auto_columns":null,"grid_auto_flow":null,"grid_auto_rows":null,"grid_column":null,"grid_gap":null,"grid_row":null,"grid_template_areas":null,"grid_template_columns":null,"grid_template_rows":null,"height":null,"justify_content":null,"justify_items":null,"left":null,"margin":null,"max_height":null,"max_width":null,"min_height":null,"min_width":null,"object_fit":null,"object_position":null,"order":null,"overflow":null,"padding":null,"right":null,"top":null,"visibility":null,"width":null}},"a0976ed9d5a14a64a9716cef8c1fe6cf":{"model_module":"@jupyter-widgets/controls","model_module_version":"2.0.0","model_name":"ProgressStyleModel","state":{"_model_module":"@jupyter-widgets/controls","_model_module_version":"2.0.0","_model_name":"ProgressStyleModel","_view_count":null,"_view_module":"@jupyter-widgets/base","_view_module_version":"2.0.0","_view_name":"StyleView","bar_color":null,"description_width":""}},"a1e2869d90684cce9f7953ba3dd43244":{"model_module":"@jupyter-widgets/base","model_module_version":"2.0.0","model_name":"LayoutModel","state":{"_model_module":"@jupyter-widgets/base","_model_module_version":"2.0.0","_model_name":"LayoutModel","_view_count":null,"_view_module":"@jupyter-widgets/base","_view_module_version":"2.0.0","_view_name":"LayoutView","align_content":null,"align_items":null,"align_self":null,"border_bottom":null,"border_left":null,"border_right":null,"border_top":null,"bottom":null,"display":null,"flex":null,"flex_flow":null,"grid_area":null,"grid_auto_columns":null,"grid_auto_flow":null,"grid_auto_rows":null,"grid_column":null,"grid_gap":null,"grid_row":null,"grid_template_areas":null,"grid_template_columns":null,"grid_template_rows":null,"height":null,"justify_content":null,"justify_items":null,"left":null,"margin":null,"max_height":null,"max_width":null,"min_height":null,"min_width":null,"object_fit":null,"object_position":null,"order":null,"overflow":null,"padding":null,"right":null,"top":null,"visibility":null,"width":null}},"ae37183a23bd4f08ae94f90fdf3cfec3":{"model_module":"@jupyter-widgets/controls","model_module_version":"2.0.0","model_name":"HTMLModel","state":{"_dom_classes":[],"_model_module":"@jupyter-widgets/controls","_model_module_version":"2.0.0","_model_name":"HTMLModel","_view_count":null,"_view_module":"@jupyter-widgets/controls","_view_module_version":"2.0.0","_view_name":"HTMLView","description":"","description_allow_html":false,"layout":"IPY_MODEL_889cafc1faa24fe2857a7f7a352ea96b","placeholder":"​","style":"IPY_MODEL_d462bf369ba845eea62ffeed62ce9649","tabbable":null,"tooltip":null,"value":"tokenizer.json: 100%"}},"d462bf369ba845eea62ffeed62ce9649":{"model_module":"@jupyter-widgets/controls","model_module_version":"2.0.0","model_name":"HTMLStyleModel","state":{"_model_module":"@jupyter-widgets/controls","_model_module_version":"2.0.0","_model_name":"HTMLStyleModel","_view_count":null,"_view_module":"@jupyter-widgets/base","_view_module_version":"2.0.0","_view_name":"StyleView","background":null,"description_width":"","font_size":null,"text_color":null}},"ec097523e37f46e0bf0b6f01029c3c22":{"model_module":"@jupyter-widgets/controls","model_module_version":"2.0.0","model_name":"HTMLStyleModel","state":{"_model_module":"@jupyter-widgets/controls","_model_module_version":"2.0.0","_model_name":"HTMLStyleModel","_view_count":null,"_view_module":"@jupyter-widgets/base","_view_module_version":"2.0.0","_view_name":"StyleView","background":null,"description_width":"","font_size":null,"text_color":null}},"f91a9881abd642a6a4245ad91038819d":{"model_module":"@jupyter-widgets/base","model_module_version":"2.0.0","model_name":"LayoutModel","state":{"_model_module":"@jupyter-widgets/base","_model_module_version":"2.0.0","_model_name":"LayoutModel","_view_count":null,"_view_module":"@jupyter-widgets/base","_view_module_version":"2.0.0","_view_name":"LayoutView","align_content":null,"align_items":null,"align_self":null,"border_bottom":null,"border_left":null,"border_right":null,"border_top":null,"bottom":null,"display":null,"flex":null,"flex_flow":null,"grid_area":null,"grid_auto_columns":null,"grid_auto_flow":null,"grid_auto_rows":null,"grid_column":null,"grid_gap":null,"grid_row":null,"grid_template_areas":null,"grid_template_columns":null,"grid_template_rows":null,"height":null,"justify_content":null,"justify_items":null,"left":null,"margin":null,"max_height":null,"max_width":null,"min_height":null,"min_width":null,"object_fit":null,"object_position":null,"order":null,"overflow":null,"padding":null,"right":null,"top":null,"visibility":null,"width":null}},"feb1c831258e4ac8a2675036802d6bcf":{"model_module":"@jupyter-widgets/base","model_module_version":"2.0.0","model_name":"LayoutModel","state":{"_model_module":"@jupyter-widgets/base","_model_module_version":"2.0.0","_model_name":"LayoutModel","_view_count":null,"_view_module":"@jupyter-widgets/base","_view_module_version":"2.0.0","_view_name":"LayoutView","align_content":null,"align_items":null,"align_self":null,"border_bottom":null,"border_left":null,"border_right":null,"border_top":null,"bottom":null,"display":null,"flex":null,"flex_flow":null,"grid_area":null,"grid_auto_columns":null,"grid_auto_flow":null,"grid_auto_rows":null,"grid_column":null,"grid_gap":null,"grid_row":null,"grid_template_areas":null,"grid_template_columns":null,"grid_template_rows":null,"height":null,"justify_content":null,"justify_items":null,"left":null,"margin":null,"max_height":null,"max_width":null,"min_height":null,"min_width":null,"object_fit":null,"object_position":null,"order":null,"overflow":null,"padding":null,"right":null,"top":null,"visibility":null,"width":null}}},"version_major":2,"version_minor":0}
+</script>
 <script id="quarto-html-after-body" type="application/javascript">
 window.document.addEventListener("DOMContentLoaded", function (event) {
   const toggleBodyColorMode = (bsSheetEl) => {
@@ -753,4 +848,4 @@ window.document.addEventListener("DOMContentLoaded", function (event) {
 
 
 
-<footer class="footer"><div class="nav-footer"><div class="nav-footer-center"><div class="toc-actions"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/tokenizers/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></div></div></footer></body></html>
+<footer class="footer"><div class="nav-footer"><div class="nav-footer-center"><div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/tokenizers/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></div></div></footer></body></html>
