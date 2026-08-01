@@ -1,102 +1,173 @@
 ---
 title: "LangChain: Introduction"
-format: html
-jupyter: python3
+description: "LangChain 1.x deleted LLMChain and ConversationBufferMemory. What replaced them is not a new API — it is the observation that neither needed to be a class."
+author: "Ravi Kalia"
 date: 2025-03-16
+categories: [AI, NLP, LLM]
 image: "./cover.png"
+tags: [langchain, lcel, llm, huggingface]
+jupyter: huggingface-blog
+format:
+  html:
+    toc: true
+    code-fold: true
 ---
 
 ![LangChain: Introduction](./cover.png)
 
-LangChain is a Python framework for building applications that use large language models (LLMs) in modular and composable ways. It provides core components like prompt templates, memory, chains, and model wrappers. This post walks through building a basic chatbot that remembers user input using LangChain objects and method calls.
+A language model is a pure function: text in, text out, no memory of the last call. Everything that makes a chatbot feel like a conversation lives *outside* the model — in whatever assembles the prompt. LangChain is a library for building that outside part, and its central claim is that assembling it needs composition rather than classes.
 
-## Installation
+That claim is easier to see now than when this post was first written, because LangChain 1.x removed the classes. `LLMChain`, `ConversationBufferMemory`, `ConversationChain` and `langchain.chat_models` are gone — not renamed, **deleted**. What replaced them is the pipe operator and a wrapper, and the deletion is the argument: none of those objects were doing anything that composition could not.
 
-Install the required packages:
+## What broke, concretely
 
-```bash
-pip install langchain openai
-```
-
-Set your OpenAI API key:
-
-```python
-import os
-os.environ["OPENAI_API_KEY"] = "your-key-here"
-```
-
-## LangChain Components Used
-
-|     **Object**      |                              **Purpose**                                     |
-|---------------------|------------------------------------------------------------------------------|
-| `LLM`               | Interface to language models (e.g., OpenAI, HuggingFace, Anthropic).         |
-| `PromptTemplate`    | Structure and format inputs to the LLM.                                      |
-| `OutputParser`      | Parse raw LLM outputs into usable formats (e.g., JSON, numbers).             |
-| `Chain`             | Composable unit combining inputs, prompt, LLM, and output parser.            |
-| `Tool`              | Wraps arbitrary functions for agent use (e.g., calculator, web search).      |
-| `Agent`             | Dynamically selects tools and makes decisions to solve tasks.                |
-| `Retriever`         | Retrieves documents from a vector store or search index.                     |
-| `Document`          | Basic unit of text + metadata (used in RAG).                                 |
-| `Memory`            | Stores chat history or intermediate data between runs.                       |
-| `VectorStore`       | Stores and retrieves embeddings (e.g., FAISS, Chroma, Pinecone).             |
-
-Each component has methods that follow standard object-oriented patterns. You can inspect, override, and compose them as needed.
-
-
-## Step-by-Step Example
-
-
-### Define the Prompt Template
+If you have code from the 0.1 era, this is what it hits now:
 
 ```{python}
-from langchain.prompts import PromptTemplate
+import warnings
 
-prompt = PromptTemplate(
-    input_variables=["history", "user_input"],
-    template="""
-You are a helpful assistant. Use the chat history to keep context.
+warnings.filterwarnings("ignore")
 
-Chat History:
-{history}
+import importlib
 
-User: {user_input}
-Assistant:"""
+for module, symbol in [
+    ("langchain.prompts", "PromptTemplate"),
+    ("langchain.memory", "ConversationBufferMemory"),
+    ("langchain.chains", "LLMChain"),
+    ("langchain.text_splitter", "RecursiveCharacterTextSplitter"),
+    ("langchain_core.prompts", "ChatPromptTemplate"),
+    ("langchain_text_splitters", "RecursiveCharacterTextSplitter"),
+]:
+    try:
+        getattr(importlib.import_module(module), symbol)
+        print(f"ok      {module}.{symbol}")
+    except (ImportError, AttributeError) as exc:
+        print(f"GONE    {module}.{symbol}  ({type(exc).__name__})")
+```
+
+Four `ModuleNotFoundError`s, not deprecation warnings. The top-level `langchain` package no longer holds prompts, memory, chains or splitters at all: primitives moved to `langchain_core`, and integrations moved to per-provider packages like `langchain_huggingface` and `langchain_text_splitters`.
+
+## A model, running locally
+
+The original version of this post used `ChatOpenAI` and an API key. Everything below runs on a small local model instead, so the post is reproducible from its own `requirements.txt` with no account, no key and no per-token cost — which also means the outputs you see were genuinely produced by the code above them.
+
+`Qwen2.5-0.5B-Instruct` is about half a billion parameters, small enough to run on CPU in seconds and weak enough that its limitations show. That is useful here: the post is about plumbing, and a small model makes it obvious when the plumbing rather than the model is doing the work.
+
+```{python}
+from transformers import pipeline
+from langchain_huggingface import ChatHuggingFace, HuggingFacePipeline
+
+generator = pipeline(
+    "text-generation",
+    model="Qwen/Qwen2.5-0.5B-Instruct",
+    max_new_tokens=48,
+    do_sample=False,
+    return_full_text=False,
 )
+chat_model = ChatHuggingFace(llm=HuggingFacePipeline(pipeline=generator))
+print(type(chat_model).__name__)
 ```
 
-### Set Up Conversation Memory
+Two wrappers, and the reason for each is worth knowing. `HuggingFacePipeline` adapts a `transformers` pipeline to LangChain's interface. `ChatHuggingFace` then wraps *that* to apply the model's chat template, turning a list of role-tagged messages into the exact token format Qwen was fine-tuned on. Skip the second and you get a plain text-completion model that will happily invent both sides of the dialogue.
 
-```python
-from langchain.memory import ConversationBufferMemory
+`return_full_text=False` matters too: without it the pipeline echoes the prompt back and every response arrives with the entire templated conversation glued to the front.
 
-memory = ConversationBufferMemory(memory_key="history")
+## A chain is a pipe
+
+Here is the whole of what `LLMChain` used to be:
+
+```{python}
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+
+prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", "You are a concise assistant. Answer in one short sentence."),
+        ("placeholder", "{history}"),
+        ("human", "{input}"),
+    ]
+)
+
+chain = prompt | chat_model | StrOutputParser()
+print(chain.invoke({"input": "What is a vector database?", "history": []}))
 ```
 
-### Create the LLM
+`prompt | chat_model | StrOutputParser()` — format the messages, call the model, take the string off the response object. Each stage implements the same `Runnable` interface, which is what makes `|` meaningful, and the composite is itself a `Runnable` with the same `invoke`, `batch` and `stream` methods as its parts.
 
-```python
-from langchain.chat_models import ChatOpenAI
+That uniformity is the actual design. `LLMChain` was a class that hard-coded this specific three-stage arrangement; the pipe lets you build any arrangement and get streaming and batching for free.
 
-llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0.5)
+## Memory is a wrapper, not a model feature
+
+The chain above is stateless — note that we had to pass `history: []` explicitly. Conversation memory is the observation that "remembering" just means replaying previous turns into the prompt each time, which is a job for a wrapper around the chain:
+
+```{python}
+from langchain_core.chat_history import InMemoryChatMessageHistory
+from langchain_core.runnables.history import RunnableWithMessageHistory
+
+sessions: dict[str, InMemoryChatMessageHistory] = {}
+
+
+def get_history(session_id: str) -> InMemoryChatMessageHistory:
+    """One transcript per session id."""
+    return sessions.setdefault(session_id, InMemoryChatMessageHistory())
+
+
+conversation = RunnableWithMessageHistory(
+    chain,
+    get_history,
+    input_messages_key="input",
+    history_messages_key="history",
+)
+
+config = {"configurable": {"session_id": "demo"}}
+print("1:", conversation.invoke({"input": "Hi, my name is Ravi."}, config=config).strip())
+print("2:", conversation.invoke({"input": "What is my name?"}, config=config).strip())
+print("\nstored messages:", len(sessions["demo"].messages))
 ```
 
-### Build The Chain
+The second answer knows the name from the first. Four messages are stored — two human, two AI — and the `{history}` placeholder in the prompt is where they get replayed on each call.
 
-```python
-from langchain.chains import LLMChain
+To show that this is entirely the wrapper's doing rather than anything the model retains, ask the same question through the bare chain with an empty history:
 
-chat_chain = LLMChain(llm=llm, prompt=prompt, memory=memory)
+```{python}
+print(chain.invoke({"input": "What is my name?", "history": []}).strip())
 ```
 
-### Run the Chatbot
+No idea. Same model object, same weights, same process — the only difference is whether prior turns were pasted into the prompt. That is what "memory" means for an LLM, and stating it plainly is more useful than a `ConversationBufferMemory` class that made it look like a property of the model.
 
-```python
-response1 = chat_chain.run("Hi, my name is Ravi")
-response2 = chat_chain.run("What's my name?")
+### Caveat: the replacement is already deprecated
 
-print(response1)
-print(response2)
-```
-## Summary
+Running the cell above emits `LangChainDeprecationWarning: RunnableWithMessageHistory is deprecated. Use LangGraph's built-in persistence instead.`
 
-This example uses LangChain’s core abstractions to implement a chatbot that preserves conversational state. By combining prompt templating, language models, and memory into a chain, you can create more coherent and interactive applications. The same pattern extends to document retrieval, tool use, planning, and multi-agent systems.
+So the successor to `ConversationBufferMemory` is itself on the way out, in favour of a separate library with its own state model. It still works and it is still the smallest thing that demonstrates the idea, which is why this post uses it — but if you are building something to keep, look at LangGraph's checkpointers before adopting the API above.
+
+This is worth flagging rather than hiding, because it is the post's own argument arriving on schedule: the composition primitives in `langchain_core` have held steady across the 1.x transition, while the convenience objects wrapped around them have now been replaced twice.
+
+### Caveat: replaying the whole transcript does not scale
+
+`InMemoryChatMessageHistory` keeps everything and replays all of it. Since cost and latency scale with prompt length, and every model has a hard context limit, a long enough conversation gets expensive and then simply fails.
+
+Production systems trim, summarise, or retrieve selectively — and LangChain offers those as different history implementations precisely because the naive one has this ceiling. It is also why the deleted `ConversationBufferMemory` was a poor default: it named the simplest strategy as though it were *the* strategy.
+
+## The components that remain
+
+The vocabulary that survived the 1.x transition, and where it now lives:
+
+| Component | Package | Purpose |
+|---|---|---|
+| `ChatPromptTemplate` | `langchain_core.prompts` | Structure messages for the model |
+| `Runnable` / `|` | `langchain_core.runnables` | Compose steps; gives `invoke`/`batch`/`stream` |
+| `StrOutputParser` | `langchain_core.output_parsers` | Take text off the response object |
+| `RunnableWithMessageHistory` | `langchain_core.runnables.history` | Replay a transcript into the prompt |
+| `ChatHuggingFace` | `langchain_huggingface` | Provider adapter + chat template |
+| `RecursiveCharacterTextSplitter` | `langchain_text_splitters` | Chunk documents for retrieval |
+
+The last one is the entry point to retrieval, where the same composition applies — a retriever is a `Runnable`, so RAG is the same pipe with a document-fetching stage in front. That is the subject of the [companion post on classifying PDF documents](../classifying_text_chunks/index.qmd).
+
+## Whether the abstraction earns its keep
+
+The claim was that LangChain's value is composition, and that deleting `LLMChain` demonstrated it. The evidence is that the replacement is shorter than what it replaced: three piped objects instead of a class, and a wrapper that makes explicit what memory always was.
+
+The fair objection is that for a single prompt and a single model, none of this is necessary — `chat_model.invoke(messages)` would have done, and the pipe is ceremony. The abstraction starts paying when there are several stages that need to stream as a unit, batch as a unit, or be swapped independently, and it keeps paying when the provider changes and only the adapter does.
+
+Where it stops holding is version churn. A framework whose central objects were deleted between minor-looking releases is one whose tutorials go stale faster than the models do — as this post did. Pin your versions, and prefer the `langchain_core` primitives, which are the part with a stability commitment.

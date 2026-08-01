@@ -45,14 +45,10 @@ COMPUTE_LANGS = {"python", "r", "julia"}
 # venv + kernel + requirements.txt per CLAUDE.md and delete its line. Editing
 # the source invalidates its frozen output, so there is no third option.
 LEGACY_NO_ENV = {
-    "classifying_text_chunks",
     "data-types",
-    "evaluation-metrics",
     "features-importance-after-clustering",
-    "langchain",
     "poor-persons-bayesian",
     "post-with-code",
-    "soft-vs-hard-prompts",
     "working-with-quarto",
 }
 
