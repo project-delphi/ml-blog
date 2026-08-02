@@ -110,6 +110,12 @@ _UNARYOPS: dict[type, Callable[[Any], Any]] = {
 }
 
 
+# A syntax whitelist stops arbitrary code but not arbitrary *cost*: `9**9**9`
+# is four legal nodes that hang the process for hours building an integer with
+# billions of digits. Bound the exponent too.
+_MAX_EXPONENT = 256
+
+
 def _eval_node(node: ast.AST) -> float:
     """Evaluate a whitelisted arithmetic AST node."""
     if isinstance(node, ast.Expression):
@@ -117,7 +123,10 @@ def _eval_node(node: ast.AST) -> float:
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
         return node.value
     if isinstance(node, ast.BinOp) and type(node.op) in _BINOPS:
-        return _BINOPS[type(node.op)](_eval_node(node.left), _eval_node(node.right))
+        left, right = _eval_node(node.left), _eval_node(node.right)
+        if isinstance(node.op, ast.Pow) and abs(right) > _MAX_EXPONENT:
+            raise ValueError(f"exponent {right} exceeds the limit of {_MAX_EXPONENT}")
+        return _BINOPS[type(node.op)](left, right)
     if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARYOPS:
         return _UNARYOPS[type(node.op)](_eval_node(node.operand))
     raise ValueError(f"unsupported syntax: {type(node).__name__}")

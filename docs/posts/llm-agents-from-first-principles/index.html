@@ -371,28 +371,43 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb3-45"><a href="#cb3-45" aria-hidden="true" tabindex="-1"></a>        <span class="cf">except</span> <span class="pp">Exception</span> <span class="im">as</span> exc:</span>
 <span id="cb3-46"><a href="#cb3-46" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="ss">f"ERROR: </span><span class="sc">{</span>name<span class="sc">}</span><span class="ss"> raised </span><span class="sc">{</span><span class="bu">type</span>(exc)<span class="sc">.</span><span class="va">__name__</span><span class="sc">}</span><span class="ss">: </span><span class="sc">{</span>exc<span class="sc">}</span><span class="ss">"</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 <p>Nothing in there raises. An unknown tool name, wrong argument names, an exception thrown inside the tool itself — all three are caught and returned as an observation string. This is the single most important line of judgement in the file. A crashed tool is not a bug in the scaffold; it is information the policy can act on, and handing it back as text gives the model a chance to correct itself on the next turn. Raise instead, and one malformed argument kills the whole run.</p>
-<p>The two tools the examples use are unremarkable, except that <code>calculator</code> parses to an AST and walks a whitelist rather than calling <code>eval</code> — the model writes the expression, so the expression is untrusted input:</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> calculator(expr: <span class="bu">str</span>) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""Evaluate an arithmetic expression exactly, without `eval`."""</span></span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    <span class="co"># `^` means xor in Python but exponentiation in maths notation, and models</span></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="co"># write the maths one. Translate it rather than failing on it.</span></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    cleaned <span class="op">=</span> expr.replace(<span class="st">"^"</span>, <span class="st">"**"</span>)</span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    value <span class="op">=</span> _eval_node(ast.parse(cleaned, mode<span class="op">=</span><span class="st">"eval"</span>))</span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="co"># `/` always yields a float, so an exact result reads as "2341.0" and the</span></span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    <span class="co"># model then feeds that string to a tool wanting an integer. Narrow it.</span></span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">isinstance</span>(value, <span class="bu">float</span>) <span class="kw">and</span> value.is_integer():</span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>        value <span class="op">=</span> <span class="bu">int</span>(value)</span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="ss">f"</span><span class="sc">{</span>expr<span class="sc">}</span><span class="ss"> = </span><span class="sc">{</span>value<span class="sc">}</span><span class="ss">"</span></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> is_prime(n: <span class="bu">int</span>) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
-<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""Trial-divide to decide primality."""</span></span>
-<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>    n <span class="op">=</span> <span class="bu">int</span>(n)</span>
-<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> n <span class="op">&lt;</span> <span class="dv">2</span>:</span>
-<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="ss">f"</span><span class="sc">{</span>n<span class="sc">}</span><span class="ss"> is not prime"</span></span>
-<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>    factor <span class="op">=</span> <span class="bu">next</span>((d <span class="cf">for</span> d <span class="kw">in</span> <span class="bu">range</span>(<span class="dv">2</span>, <span class="bu">int</span>(n<span class="op">**</span><span class="fl">0.5</span>) <span class="op">+</span> <span class="dv">1</span>) <span class="cf">if</span> n <span class="op">%</span> d <span class="op">==</span> <span class="dv">0</span>), <span class="va">None</span>)</span>
-<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> factor <span class="kw">is</span> <span class="va">None</span>:</span>
-<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="ss">f"</span><span class="sc">{</span>n<span class="sc">}</span><span class="ss"> is prime"</span></span>
-<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="ss">f"</span><span class="sc">{</span>n<span class="sc">}</span><span class="ss"> is not prime (divisible by </span><span class="sc">{</span>factor<span class="sc">}</span><span class="ss">)"</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>The two tools the examples use are unremarkable, except that <code>calculator</code> parses to an AST and walks a whitelist rather than calling <code>eval</code> — the model writes the expression, so the expression is untrusted input. Note that the whitelist alone is not enough: it blocks arbitrary <em>code</em>, but <code>9**9**9</code> is four perfectly legal nodes that would hang the process, so cost needs bounding separately.</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> _eval_node(node: ast.AST) <span class="op">-&gt;</span> <span class="bu">float</span>:</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""Evaluate a whitelisted arithmetic AST node."""</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">isinstance</span>(node, ast.Expression):</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> _eval_node(node.body)</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">isinstance</span>(node, ast.Constant) <span class="kw">and</span> <span class="bu">isinstance</span>(node.value, (<span class="bu">int</span>, <span class="bu">float</span>)):</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> node.value</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">isinstance</span>(node, ast.BinOp) <span class="kw">and</span> <span class="bu">type</span>(node.op) <span class="kw">in</span> _BINOPS:</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>        left, right <span class="op">=</span> _eval_node(node.left), _eval_node(node.right)</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="bu">isinstance</span>(node.op, ast.Pow) <span class="kw">and</span> <span class="bu">abs</span>(right) <span class="op">&gt;</span> _MAX_EXPONENT:</span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>            <span class="cf">raise</span> <span class="pp">ValueError</span>(<span class="ss">f"exponent </span><span class="sc">{</span>right<span class="sc">}</span><span class="ss"> exceeds the limit of </span><span class="sc">{</span>_MAX_EXPONENT<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> _BINOPS[<span class="bu">type</span>(node.op)](left, right)</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">isinstance</span>(node, ast.UnaryOp) <span class="kw">and</span> <span class="bu">type</span>(node.op) <span class="kw">in</span> _UNARYOPS:</span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> _UNARYOPS[<span class="bu">type</span>(node.op)](_eval_node(node.operand))</span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">raise</span> <span class="pp">ValueError</span>(<span class="ss">f"unsupported syntax: </span><span class="sc">{</span><span class="bu">type</span>(node)<span class="sc">.</span><span class="va">__name__</span><span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> calculator(expr: <span class="bu">str</span>) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""Evaluate an arithmetic expression exactly, without `eval`."""</span></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>    <span class="co"># `^` means xor in Python but exponentiation in maths notation, and models</span></span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>    <span class="co"># write the maths one. Translate it rather than failing on it.</span></span>
+<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a>    cleaned <span class="op">=</span> expr.replace(<span class="st">"^"</span>, <span class="st">"**"</span>)</span>
+<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>    value <span class="op">=</span> _eval_node(ast.parse(cleaned, mode<span class="op">=</span><span class="st">"eval"</span>))</span>
+<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a>    <span class="co"># `/` always yields a float, so an exact result reads as "2341.0" and the</span></span>
+<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a>    <span class="co"># model then feeds that string to a tool wanting an integer. Narrow it.</span></span>
+<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">isinstance</span>(value, <span class="bu">float</span>) <span class="kw">and</span> value.is_integer():</span>
+<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a>        value <span class="op">=</span> <span class="bu">int</span>(value)</span>
+<span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="ss">f"</span><span class="sc">{</span>expr<span class="sc">}</span><span class="ss"> = </span><span class="sc">{</span>value<span class="sc">}</span><span class="ss">"</span></span>
+<span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> is_prime(n: <span class="bu">int</span>) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
+<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""Trial-divide to decide primality."""</span></span>
+<span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a>    n <span class="op">=</span> <span class="bu">int</span>(n)</span>
+<span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> n <span class="op">&lt;</span> <span class="dv">2</span>:</span>
+<span id="cb4-32"><a href="#cb4-32" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="ss">f"</span><span class="sc">{</span>n<span class="sc">}</span><span class="ss"> is not prime"</span></span>
+<span id="cb4-33"><a href="#cb4-33" aria-hidden="true" tabindex="-1"></a>    factor <span class="op">=</span> <span class="bu">next</span>((d <span class="cf">for</span> d <span class="kw">in</span> <span class="bu">range</span>(<span class="dv">2</span>, <span class="bu">int</span>(n<span class="op">**</span><span class="fl">0.5</span>) <span class="op">+</span> <span class="dv">1</span>) <span class="cf">if</span> n <span class="op">%</span> d <span class="op">==</span> <span class="dv">0</span>), <span class="va">None</span>)</span>
+<span id="cb4-34"><a href="#cb4-34" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> factor <span class="kw">is</span> <span class="va">None</span>:</span>
+<span id="cb4-35"><a href="#cb4-35" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="ss">f"</span><span class="sc">{</span>n<span class="sc">}</span><span class="ss"> is prime"</span></span>
+<span id="cb4-36"><a href="#cb4-36" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="ss">f"</span><span class="sc">{</span>n<span class="sc">}</span><span class="ss"> is not prime (divisible by </span><span class="sc">{</span>factor<span class="sc">}</span><span class="ss">)"</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 <p>Both tools return strings, because a string is what has to go back into the transcript. That leaves the harder direction: turning the model’s string into a typed action.</p>
 </section>
 <section id="parsing-is-where-the-contract-is-actually-enforced" class="level2">
@@ -507,7 +522,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="example-1-the-loop-terminates-without-touching-a-tool" class="level2">
 <h2 class="anchored" data-anchor-id="example-1-the-loop-terminates-without-touching-a-tool">Example 1: the loop terminates without touching a tool</h2>
 <p>The first question needs no tools at all, which tests that the bare loop can stop. It is deliberately arithmetic the model can do in its head:</p>
-<div id="00219b65" class="cell" data-execution_count="8">
+<div id="3fe85d9c" class="cell" data-execution_count="8">
 <div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> agent <span class="im">import</span> Agent, GroqBackend, default_registry</span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>Agent(backend<span class="op">=</span>GroqBackend()).run(<span class="st">"What is (37 * 4 - 9) / 5?"</span>).show()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
@@ -527,7 +542,7 @@ ANSWER (answered): (37 * 4 - 9) / 5 = (148 - 9) / 5 = 139 / 5 = 27.8</code></pre
 <section id="example-2-the-round-trip-twice" class="level2">
 <h2 class="anchored" data-anchor-id="example-2-the-round-trip-twice">Example 2: the round trip, twice</h2>
 <p>Now the same loop with both tools registered, and a question whose answer the model has no way to know: whether a number it has not yet computed is prime.</p>
-<div id="42300e11" class="cell" data-execution_count="9">
+<div id="62766890" class="cell" data-execution_count="9">
 <div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>Agent(backend<span class="op">=</span>GroqBackend(), registry<span class="op">=</span>default_registry()).run(</span>
 <span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">"Use the calculator tool to compute (128^2 + 3) / 7, "</span></span>
 <span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    <span class="st">"then tell me whether the result is prime."</span></span>
@@ -536,21 +551,21 @@ ANSWER (answered): (37 * 4 - 9) / 5 = (148 - 9) / 5 = 139 / 5 = 27.8</code></pre
 <pre><code>QUESTION: Use the calculator tool to compute (128^2 + 3) / 7, then tell me whether the result is prime.
 
 --- turn 1 | model output ---
-THOUGHT: First, we need to calculate the value of (128^2 + 3) / 7.
+THOUGHT: First, we need to compute the value of (128^2 + 3) / 7 using the calculator tool.
 ACTION: calculator
 ACTION_INPUT: {"expr": "(128^2 + 3) / 7"}
 --- turn 1 | observation ---
 (128^2 + 3) / 7 = 2341
 
 --- turn 2 | model output ---
-THOUGHT: Now that we have the result of the calculation, we need to determine if 2341 is a prime number.
+THOUGHT: Now that we have the result of the calculation, we need to check whether 2341 is a prime number using the is_prime tool.
 ACTION: is_prime
 ACTION_INPUT: {"n": 2341}
 --- turn 2 | observation ---
 2341 is prime
 
 --- turn 3 | model output ---
-THOUGHT: We have determined that the result of the calculation, 2341, is indeed a prime number.
+THOUGHT: We have now determined that the result of the calculation, 2341, is indeed a prime number.
 FINAL: 2341 is prime
 
 ANSWER (answered): 2341 is prime</code></pre>
