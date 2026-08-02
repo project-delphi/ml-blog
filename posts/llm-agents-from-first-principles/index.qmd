@@ -1,0 +1,175 @@
+---
+title: "LLM Agents from First Principles"
+author: "Ravi Kalia"
+date: "2026-08-02"
+categories: [Agents, LLM, Machine Learning]
+image: "./cover.png"
+tags: [agents, llm, tool-use, react, groq]
+jupyter: llm-agents
+resources:
+  - agent.py
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+---
+
+```{=html}
+<style>
+/* Model transcripts are the payload of this post and some THOUGHT lines run
+   long. Wrap printed cell output instead of clipping it to a scrollbar; the
+   source blocks above keep their normal no-wrap behaviour. */
+.cell-output-stdout pre code { white-space: pre-wrap; word-break: break-word; }
+</style>
+```
+
+![LLM Agents from First Principles](./cover.png)
+
+Strip the frameworks away and an LLM agent is a `while` loop with exactly one non-deterministic line in it. Everything else — the message history, the tool dispatch table, the regex that reads the model's output, the counters that stop it running forever — is ordinary Python with no learned parameters and no surprises. This post builds that loop in one standard-library file, [`agent.py`](./agent.py), and runs it live against a real model. The code below is imported, not retyped, and every transcript in this post was produced by the render that built the page.
+
+## An agent is a policy, a loop, and nothing else
+
+Three words carry the whole design. An **action** is something the agent can do: call a tool, or stop and answer. An **observation** is what comes back from the world when it acts. A **policy** maps the history so far to the next action — and that is the job we hand to the language model. The model is not "the agent"; it is one function inside it, sampled once per iteration, whose output is a string that we then have to interpret as an action.
+
+That framing tells you exactly where to look for the interesting failures. A policy that emits an action we cannot parse, a tool that throws, a loop that never terminates: all of these are scaffold problems, and the scaffold is code we write. Start with the one piece that isn't.
+
+## The only stochastic line in the file
+
+Here is the entire connection to the model — an HTTP POST and a dictionary lookup:
+
+```{python}
+#| echo: false
+#| output: asis
+import inspect
+import agent
+
+def show(*objs):
+    print("```python")
+    print("\n\n".join(inspect.getsource(o).rstrip() for o in objs))
+    print("```")
+
+show(agent.GroqBackend)
+```
+
+The policy behind it is [Llama 3.3 70B Instruct](https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct), trained and released by Meta and served here through [Groq](https://console.groq.com/)'s free tier, which is why this post costs nothing to reproduce. It is worth being as careful about where a policy comes from as about where a dataset comes from. This one was pretrained on a large undisclosed web corpus and then instruction-tuned to follow directions in a chat format — that tuning is the only reason the format contract below works at all, and it is a statistical tendency, not a guarantee. What we are asking of it is narrow: given a question and a list of tools, emit the next action. The consequence of a wrong action here is a wrong arithmetic answer in a blog post; the same loop wired to a tool that spends money or writes to a database inherits every one of the failure modes shown further down, with real costs attached.
+
+Note what the signature does *not* contain: no key, no retry policy, no state. `create` takes messages and returns a string. Swap it for any other function with that shape — a local model, a different provider, a stub that returns canned text — and nothing else in the file changes. That is the seam the rest of the design hangs from, so the next question is what we put on the message list.
+
+## State the model sees, and state it doesn't
+
+Agents have two kinds of state and conflating them is the usual source of confusion. `Transcript` is the dialogue: literally the list of messages the model conditions on. `AgentState` is the scaffold's own bookkeeping — how many turns have elapsed, how much budget is left — which the model never sees except as one sentence of prompt.
+
+```{python}
+#| echo: false
+#| output: asis
+show(agent.Transcript, agent.AgentState)
+```
+
+The chat schema has no role for "the environment", so a tool result has to re-enter as a user turn labelled `OBSERVATION:`. That is a workaround, not a principle, and it is worth knowing it's there. The `memory` dict is the seed of everything an agent framework would later grow: right now nothing reads it back.
+
+## Tool errors are observations, not exceptions
+
+A tool is a Python function plus a sentence describing it, because the model can only choose a tool it has been told about. The registry holds both, and its one real design decision is in `execute`:
+
+```{python}
+#| echo: false
+#| output: asis
+show(agent.Tool, agent.ToolRegistry)
+```
+
+Nothing in there raises. An unknown tool name, wrong argument names, an exception thrown inside the tool itself — all three are caught and returned as an observation string. This is the single most important line of judgement in the file. A crashed tool is not a bug in the scaffold; it is information the policy can act on, and handing it back as text gives the model a chance to correct itself on the next turn. Raise instead, and one malformed argument kills the whole run.
+
+The two tools the examples use are unremarkable, except that `calculator` parses to an AST and walks a whitelist rather than calling `eval` — the model writes the expression, so the expression is untrusted input:
+
+```{python}
+#| echo: false
+#| output: asis
+show(agent.calculator, agent.is_prime)
+```
+
+Both tools return strings, because a string is what has to go back into the transcript. That leaves the harder direction: turning the model's string into a typed action.
+
+## Parsing is where the contract is actually enforced
+
+The prompt *asks* for one of two shapes. Nothing makes the model comply, so `parse` is where we find out:
+
+```{python}
+#| echo: false
+#| output: asis
+show(agent.parse)
+```
+
+The `_NULL_ACTIONS` set is not defensive programming for its own sake — it is a bug this post actually hit. Told to reply in "exactly one of two forms", Llama 3.3 routinely emits *both*, filling the unused action slot with `ACTION: None` beside a perfectly good `FINAL:` line. The first version of this loop read that as a malformed tool call and burned four of its six turns arguing with the model before it gave in. Treating the null word as "no action" fixed it, and the prompt now says explicitly not to write the line. Both halves were needed.
+
+Note that a genuine violation returns a `ParseError` *value* rather than raising, for the same reason tool failures do: in a stochastic system, malformed output is a normal event on the happy path, not an exception.
+
+## The loop
+
+`render` assembles the prompt — protocol, tool specs, remaining budget, then the transcript. It is a pure function of state, which means the prompt the model sees is fully reconstructible from what the scaffold holds:
+
+```{python}
+#| echo: false
+#| output: asis
+show(agent.render)
+```
+
+And the loop itself. Read it as a `while` with two guards, one sampled line, and a three-way branch:
+
+```{python}
+#| echo: false
+#| output: asis
+show(agent.Agent)
+```
+
+That is the whole agent. Increment the turn, sample the policy, parse, and either return, feed back an error, or run a tool and feed back its output. The turn and tool-call budgets are what make termination a property of the code rather than a hope about the model's behaviour.
+
+## Example 1: the loop terminates without touching a tool
+
+The first question needs no tools at all, which tests that the bare loop can stop. It is deliberately arithmetic the model can do in its head:
+
+```{python}
+#| code-fold: false
+from agent import Agent, GroqBackend, default_registry
+
+Agent(backend=GroqBackend()).run("What is (37 * 4 - 9) / 5?").show()
+```
+
+One turn, no tools registered, no tool called. The answer is right — `139 / 5` really is `27.8` — and notice the `ACTION: None` line sitting in the raw output exactly as described above, silently absorbed by the parser instead of costing a round trip. This is the trajectory that shows how little an "agent" is doing when the policy already knows the answer: one sample, one parse, return. Nothing tests the tool path until the question is one the model cannot answer alone.
+
+## Example 2: the round trip, twice
+
+Now the same loop with both tools registered, and a question whose answer the model has no way to know: whether a number it has not yet computed is prime.
+
+```{python}
+#| code-fold: false
+Agent(backend=GroqBackend(), registry=default_registry()).run(
+    "Use the calculator tool to compute (128^2 + 3) / 7, "
+    "then tell me whether the result is prime."
+).show()
+```
+
+Three turns, two complete round trips. Turn one: the model emits `ACTION: calculator` with a JSON argument, `parse` turns those two lines into a `ToolCall`, the registry dispatches to a Python function, and `16387 / 7 = 2341` goes back into the transcript as an observation. Turn two: conditioned on that observation, the policy picks a *different* tool — it was never told to use `is_prime`, it chose it — and gets `2341 is prime` back. Turn three: nothing left to look up, so it stops. Both results are independently checkable, which is the point of using arithmetic: `128² + 3 = 16387`, `16387 / 7 = 2341` exactly, and 2341 has no divisor below its square root.
+
+The interesting thing is how boring the mechanism is. Between the two model calls, the only things that happened were a regex match, a `dict.get`, and a function call.
+
+## Caveat: temperature 0 is not determinism
+
+Both runs above used `temperature=0.0`, which selects the most likely token at each step rather than sampling — but batching and floating-point non-associativity on the serving side mean identical requests can still return different text. The transcripts above are *one* trajectory, captured when this page was rendered, not a fixed point. Re-run them and the model may reach the same answers by a different route, call `is_prime` first, or skip a tool it used here. An agent's behaviour is a distribution over trajectories; a single printed run is a sample from it, and that is precisely why the turn and tool-call budgets exist in code rather than in the prompt.
+
+## Running it yourself
+
+`agent.py` imports nothing outside the standard library. Get a free key at [console.groq.com/keys](https://console.groq.com/keys), then:
+
+```bash
+export GROQ_API_KEY=...          # never hardcode it; the module reads the env
+python agent.py                  # runs both examples above
+```
+
+If the variable is unset, `GroqBackend.create` raises with that instruction rather than failing somewhere less obvious.
+
+## What you just ran, and what it isn't
+
+The claim at the top was that an agent is deterministic control flow plus one stochastic call, looped, and the two traces make the split concrete. Stochastic: four calls to `create`, and nothing else. Deterministic: prompt assembly, parsing, dispatch, budget accounting, termination — every one of them plain code you can step through, test without a network, and reason about the way you reason about any other program. The tool outputs are deterministic here too, though in general the environment is a second source of randomness, and a `search` or `read_file` tool would make it one.
+
+What that buys you in practice is a debugging strategy. When an agent misbehaves, the question is always which half broke: did the policy pick a bad action, or did the scaffold mishandle a good one? The `ACTION: None` bug looked like a stupid model and was really a strict parser. Frameworks are worth reaching for once you need what this toy has no answer for — memory that outlives a single `run`, planning over horizons longer than one greedy step, several agents sharing work — but each of those is a change to the scaffold, the part with no learned parameters, and none of them changes the shape of the loop you just read.
