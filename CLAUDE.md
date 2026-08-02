@@ -118,6 +118,8 @@ Thirteen of those eighteen are being migrated out of that tier by the Hugging Fa
 
 That has one consequence worth internalising: **editing a legacy post breaks it.** Quarto keys frozen output on an md5 of the source file, so *any* source edit — even a one-word prose fix — invalidates the record and makes the next project render try to execute a post that cannot execute. If you touch one, build it a venv + kernel + `requirements.txt` first, per the recipe above, and remove its entry from `LEGACY_NO_ENV` in `scripts/check_posts.py`. `make check-posts` enforces both halves of this; run it before any full render. This is not hypothetical — the cover-image commits edited 11 sources without re-rendering and left the freeze cache silently stale for months.
 
+**One post calls a live API.** `llm-agents-from-first-principles` executes an LLM agent against Groq's free tier, so re-executing it needs `GROQ_API_KEY` in the environment — its `.venv-llm-agents` holds only Quarto's execution stack, because `agent.py` is stdlib-only. A *project* render never re-executes it (`freeze: auto`, and its `_freeze/` record is committed), so a keyless clone renders the site fine; only `quarto render posts/llm-agents-from-first-principles/index.qmd` needs the key, since single-document renders always execute. Its captured transcripts are one sample from a stochastic policy, not a reproducible fixed point: re-rendering legitimately changes the published output even at `temperature=0`, so don't re-render it to "refresh" anything, and never edit the transcripts by hand.
+
 **Frontmatter conventions** (see any existing post for a template):
 ```yaml
 title: "..."
