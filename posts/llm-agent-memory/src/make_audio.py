@@ -4,8 +4,14 @@ A build tool, not part of the post's execution environment — the same
 arrangement as ``make_cover.py``. The post's own kernel is stdlib-only, so
 Kokoro (and its ~327MB of weights) lives in a borrowed venv instead of the
 post's ``requirements.txt``. Versions are frozen in
-``src/requirements-audio.txt``. Run from the post directory:
+``src/requirements-audio.txt``. Build the venv and run from the post directory:
 
+    uv venv .venv-kokoro --python 3.12
+    uv pip install --python .venv-kokoro/bin/python kokoro soundfile
+    # misaki's English G2P loads a spaCy pipeline that Kokoro does not pull in,
+    # and `python -m spacy download` cannot install into a pip-less uv venv:
+    uv pip install --python .venv-kokoro/bin/python \
+      "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
     ../../.venv-kokoro/bin/python src/make_audio.py
 
 The two clips are the same assistant answering the same caller, differing only
@@ -25,6 +31,11 @@ from kokoro import KPipeline
 
 REPO = "hexgrad/Kokoro-82M"
 OUT = Path(__file__).resolve().parent.parent / "audio"
+
+# Kokoro's output rate. It is a model constant that the package exposes nowhere
+# — not on KModel, not on KPipeline — so it has to be written down, and it is
+# load-bearing: get it wrong and the clips are pitched wrong rather than failing.
+# Re-check it against the model card when bumping the pinned kokoro version.
 SAMPLE_RATE = 24_000
 
 # (filename stem, Kokoro voice pack, text). Voice packs are prefixed by language
@@ -49,7 +60,11 @@ def available_voices() -> set[str]:
     Returns:
         Voice pack names, without the ``voices/`` prefix or ``.pt`` suffix.
     """
-    return {f[len("voices/") : -len(".pt")] for f in list_repo_files(REPO) if f.startswith("voices/")}
+    return {
+        f[len("voices/") : -len(".pt")]
+        for f in list_repo_files(REPO)
+        if f.startswith("voices/") and f.endswith(".pt")
+    }
 
 
 def synthesise(pipeline: KPipeline, voice: str, text: str, wav: Path) -> None:
