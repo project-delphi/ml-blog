@@ -1,0 +1,217 @@
+---
+title: "Your LLM Has No Memory. Everything Else Is Engineering."
+subtitle: "Short-term vs. long-term memory in agentic systems, through one voice assistant"
+description: "An LLM is stateless per call. What we call memory is a set of choices about what goes into the prompt, what gets stored outside it, and when it comes back."
+author: "Ravi Kalia"
+date: "2026-08-03"
+categories: [Machine Learning, LLMs, Agents]
+image: "./cover.png"
+tags: [memory, context-window, rag, agents, tts, kokoro, prompt-caching]
+jupyter: llm-agent-memory
+resources:
+  - audio
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+---
+
+![Your LLM Has No Memory. Everything Else Is Engineering.](./cover.png)
+
+You are building a voice assistant. Speech in, transcript to a model, reply out, a text-to-speech engine reads it aloud. During a call it works beautifully — it remembers that the user said "call me Alex" ninety seconds ago and keeps the thread. Then the call ends, Alex phones back next morning, and the assistant has no idea who is speaking or that it was asked yesterday for a calmer voice.
+
+Nothing broke. **An LLM is stateless per call**: you send a request, it computes a reply, and no state survives inside the model afterwards. Everything anyone calls "memory" is external engineering around that stateless core — what you put in the prompt, what you store outside it, and when you pull it back in.
+
+## Short-term memory is just the context window, replayed every turn
+
+Within one call the assistant appears to remember because you re-send the conversation. Turn three is not a lone question; it is the system prompt and every prior turn, shipped as one request:
+
+```{python}
+SYSTEM = "You are a phone assistant. Two sentences max; replies are spoken aloud."
+
+turns = [
+    ("user", "Hi, call me Alex"),
+    ("assistant", "Nice to meet you, Alex."),
+    ("user", "How hard should tomorrow's ride be?"),
+]
+request = [{"role": "system", "content": SYSTEM}]
+request += [{"role": r, "content": c} for r, c in turns]
+
+print(f"{len(request)} messages, {sum(len(m['content']) for m in request)} characters sent")
+```
+
+Every one of those messages goes over the wire on *this* turn, and again on the next. That transcript is short-term memory, and the call is its lifetime.
+
+It is bounded, and it grows every turn with latency and cost behind it. Truncation — dropping the oldest turns — silently discards the turn where Alex gave their name, usually the most valuable thing in the window.
+
+Compaction, or context editing, is the better fix: as the window fills, replace older turns with a summary, or clear content that has done its job, such as a long tool result already acted on. Applied to a call that has run long:
+
+```{python}
+def compact(history, keep=4):
+    """Replace all but the last `keep` turns with one summary message."""
+    old, recent = history[:-keep], history[-keep:]
+    gist = "; ".join(c for _, c in old)[:60]
+    return [{"role": "system", "content": f"Earlier in this call: {gist}…"}] + [
+        {"role": r, "content": c} for r, c in recent
+    ]
+
+long_call = turns * 8
+print(f"{len(long_call)} messages -> {len(compact(long_call))} after compaction")
+```
+
+The salient facts survive because you chose them rather than letting position decide. It is still lossy: that summary cannot answer a question about a number mentioned in turn two.
+
+## The system and user prompts are injection points, not memory
+
+Two things go into each request. The **system prompt** is the session's fixed frame: persona, rules, constraints. In a voice app it exists largely because the output is spoken — two or three sentences, no markdown, units spelled out, since the engine reads every character aloud and nobody wants to hear "asterisk asterisk". The **user prompt** is the live turn.
+
+Neither *is* memory. They are slots. If something must survive the call, no prompt-writing achieves it; the fact has to live elsewhere and be injected back into a slot later. Which raises the real question: stored where?
+
+## Long-term memory is a storage choice, and there are four
+
+### RAG, when the fact lives in a large fuzzy corpus
+
+Alex asks whether the training plan syncs with a particular bike computer. The answer sits in a help-centre corpus of a few thousand articles that changes weekly. [Retrieval-augmented generation](../how-does-rag-work/) fits: embed the corpus ahead of time, embed the question at call time, paste the nearest chunks into the prompt. The match is semantic — Alex says "does it talk to my Garmin", the article says "supported head unit integrations". You pay an embedding call, extra tokens, and the occasional irrelevant chunk.
+
+### A key-value lookup, when the fact is small and discrete
+
+Alex's preferred voice is not a fuzzy question. It is one row: `user_id → voice_id`, where the value names a voice pack the speech engine loads. Embedding that and searching by cosine similarity is slower, costlier and less reliable than a lookup by key — same for name, language and timezone. People skip this mechanism because it isn't interesting, and it is right for most per-user facts, not least because the engine needs that voice ID on the latency path, where a vector search does not belong.
+
+### A memory tool, when the model should decide what is worth keeping
+
+Both of those assume you know in advance what to store. A memory tool inverts that: give the agent read and write access to a file-like store through tool calls, and let it decide what is durable. Alex mentions the default voice is a bit sharp, and the agent writes itself a note — one tool call, no schema:
+
+```{python}
+import tempfile
+from pathlib import Path
+
+store = Path(tempfile.mkdtemp())  # a real deployment uses durable storage
+
+
+def memory_write(user_id, text):
+    """The agent's write tool: append a durable fact about this caller."""
+    path = store / f"{user_id}.md"
+    with path.open("a") as fh:
+        fh.write(text + "\n")
+    return f"wrote {len(text)} chars to {path.name}"
+
+
+print(memory_write("u_8213", "- Prefers a calm, low-pitched voice; dislikes the default."))
+print(memory_write("u_8213", "- Usually asks about cycling training."))
+```
+
+On a new call it reads that back before replying. You get memory for what no schema anticipated; you take on curation, because the file grows, contradicts itself and goes stale unless you prune it.
+
+### Fine-tuning, which is rarely the answer for personalisation
+
+You can bake facts into weights instead. It is almost always wrong here: you cannot edit one user's preference out of a model, cannot inspect what it stored, and retrain to fix a typo. Fine-tuning shapes behaviour; use retrieval for what a model knows about a person.
+
+## The tooling that makes this practical
+
+**Compaction paired with a memory tool** for long sessions — the pairing matters, since the agent should write durable facts out before a summary discards them. **Prompt caching** for a large fixed prefix: not memory, but a latency and billing optimisation over content you were resending anyway. And a **vector database** under RAG.
+
+## Two calls with Alex
+
+Session one wrote those two lines out and put the voice ID in a key-value store. Session two is next morning: new call, empty window, no shared history. Everything the assistant "knows" is assembled by your code before the model is invoked:
+
+```{python}
+voices = {"u_8213": "bm_george"}  # key-value store: user_id -> Kokoro voice pack
+
+remembered = (store / "u_8213.md").read_text()
+system_prompt = f"{SYSTEM}\n\nWhat you know about this caller:\n{remembered}"
+
+print("TTS voice:", voices["u_8213"])
+print("---")
+print(system_prompt)
+```
+
+That is the whole trick: a key lookup for the voice, a memory file read into the system prompt slot, and an empty window that fills as the call proceeds. Ten turns later the bike computer question arrives and the agent falls back to RAG mid-call.
+
+Four mechanisms, one call, each doing what it is good at. Choosing *between* them is usually the wrong framing; they answer different questions.
+
+## The voice is a model too, and it fits in 82 million parameters
+
+`bm_george` is not a vendor SKU. It is a voice pack from [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), an open-weight TTS model — 82 million parameters, Apache-2.0 weights, a StyleTTS 2 architecture with an ISTFTNet vocoder rather than a diffusion stack — shipping 54 voices across eight languages in about 327MB. That is why one key-value row is enough: personalising the voice means remembering a short string, and the model that speaks it runs locally.
+
+Listen to what the memory lookup buys. Both clips are Kokoro, same code path — only the name and the voice ID differ:
+
+::: {.widget}
+
+```{=html}
+<div class="tts-demo">
+  <div class="tts-row">
+    <button class="tts-play" data-target="tts-1" aria-label="Play the session one greeting">&#9654;</button>
+    <div>
+      <span class="tts-meta">Session 1 — nothing stored yet. Default voice, <code>af_heart</code>.</span><br>
+      “Nice to meet you. How can I help?”
+    </div>
+    <audio id="tts-1" preload="none" src="audio/session-1-default.mp3"></audio>
+  </div>
+  <div class="tts-row">
+    <button class="tts-play" data-target="tts-2" aria-label="Play the session two greeting">&#9654;</button>
+    <div>
+      <span class="tts-meta">Session 2 — name from the memory file, voice from the key-value store, <code>bm_george</code>.</span><br>
+      “Morning, Alex. Ready to talk about tomorrow's ride?”
+    </div>
+    <audio id="tts-2" preload="none" src="audio/session-2-remembered.mp3"></audio>
+  </div>
+</div>
+
+<style>
+/* The .widget wrapper is unstyled in this post — bayesian-bootstrap's theme.scss
+   is not shipped here — so spacing lives on .tts-demo itself. */
+.tts-demo {
+  display: flex; flex-direction: column; gap: .9rem;
+  margin: 1.6rem 0 1.9rem; padding: 1.1rem 1.2rem;
+  border: 1px solid rgba(128, 128, 128, .32); border-radius: .5rem;
+}
+.tts-row { display: flex; align-items: center; gap: .85rem; line-height: 1.45; }
+.tts-meta { font-size: .82em; opacity: .72; }
+.tts-play {
+  flex: 0 0 auto; width: 2.6rem; height: 2.6rem; border: 0; border-radius: 50%;
+  background: #4A3AA7; color: #fff; font-size: .95rem; cursor: pointer;
+}
+.tts-play:hover { background: #6A5CBB; }
+.tts-play:focus-visible { outline: 2px solid #6A5CBB; outline-offset: 2px; }
+</style>
+
+<script>
+document.querySelectorAll('.tts-play').forEach(function (button) {
+  var audio = document.getElementById(button.dataset.target);
+  button.addEventListener('click', function () {
+    document.querySelectorAll('.tts-demo audio').forEach(function (other) {
+      if (other !== audio) { other.pause(); other.currentTime = 0; }
+    });
+    audio.paused ? audio.play() : audio.pause();
+  });
+  audio.addEventListener('play', function () { button.innerHTML = '&#10074;&#10074;'; });
+  ['pause', 'ended'].forEach(function (event) {
+    audio.addEventListener(event, function () { button.innerHTML = '&#9654;'; });
+  });
+});
+</script>
+```
+
+:::
+
+The second clip knows two things the first does not, and neither of them came out of the model.
+
+## Where each mechanism actually lives
+
+| Concept | What it stores | Where it lives | Persists across sessions? | Best for |
+|---|---|---|---|---|
+| Context window / conversation history | Transcript of one session | The request, every turn | No | Coherence within one call |
+| System prompt | Persona, rules, injected memory | Top of every request | No — you re-inject it | Session-wide behaviour: "keep replies speakable" |
+| User prompt | The current turn | The request | No | Whatever the user just said |
+| Compaction / context editing | A summary replacing older turns | The request, rewritten | No | Sessions that outgrow the window |
+| RAG | Documents, as embeddings | Vector database over your corpus | Yes | Large fuzzy corpora searched at call time |
+| Key-value store lookup | Small discrete facts, by key | Any ordinary datastore | Yes | Per-user settings: voice ID, name, language |
+| Memory tool (agent-managed files) | Whatever the model judged durable | Files it reads and writes via tools | Yes | Preferences no schema anticipated |
+| Fine-tuning | Patterns baked into weights | The model itself | Yes, but not editable | Behaviour and style, not personal facts |
+
+## Memory is a design decision, not a model feature
+
+The assistant that greeted Alex by name on the second call is not a smarter model than the one that forgot. It is the same stateless function, called with a better-assembled prompt.
+
+Which tells you where to look when it breaks. Forgetting something four turns back is a compaction problem. Forgetting between calls means nothing was stored. Stating something false means retrieval missed, or a stored fact went stale. None of those are the model failing to remember. It was never remembering anything.
