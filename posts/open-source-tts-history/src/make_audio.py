@@ -14,7 +14,10 @@ mirrored from Google's own demo page (see ``TACOTRON`` below for provenance).
 
 Build the environment and run from the post directory::
 
-    brew install espeak-ng flite         # 1990s and 2000s engines, plus ffmpeg
+    # The clips below were built with espeak-ng 1.52.0 and flite 2.2. These two
+    # determine three of the five clips as surely as the frozen venv determines
+    # the fifth, so record the versions when you rebuild on newer ones.
+    brew install espeak-ng flite ffmpeg
     uv venv .venv-kokoro --python 3.12   # already present in this repo
     uv pip install --python .venv-kokoro/bin/python kokoro soundfile
     # misaki's English G2P loads a spaCy pipeline that Kokoro does not pull in,
