@@ -1,0 +1,393 @@
+---
+title: "From Formants to Foundation Models"
+subtitle: "A friendly history of open-source text-to-speech"
+description: "Every era of TTS moved the unit of generation down a level of abstraction — from rules, to recorded fragments, to parameters, to raw samples, to tokens. You can hear each step."
+author: "Ravi Kalia"
+date: "2026-08-03"
+categories: [Machine Learning, Speech, History]
+image: "./cover.png"
+tags: [tts, speech-synthesis, kokoro, vits, tacotron, festival, codec]
+resources:
+  - audio
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+---
+
+![From Formants to Foundation Models](./cover.png)
+
+Speech synthesis is one of the few corners of machine learning where thirty years
+of progress fits into twenty seconds of listening. Your ear does the evaluation;
+no benchmark required.
+
+The through-line is one idea: every era of text-to-speech moved the **unit of
+generation** down a level of abstraction — from rules about how a voice resonates,
+to recorded fragments of speech, to statistical parameters, to raw audio samples,
+to discrete tokens. Each move bought naturalness and gave up control.
+
+The old engines still install, so this is no museum tour. Every era below has a
+player, and four of the five clips were made on a laptop while writing this.
+
+## The map
+
+Five eras, each defined by what it generates. Click one.
+
+```{=html}
+<div class="ttshist">
+  <div class="ttshist-rail" role="tablist" aria-label="Eras of text-to-speech">
+    <button class="ttshist-era" id="ttshist-tab-0" role="tab" aria-controls="ttshist-panel" aria-selected="true" tabindex="0"
+            data-title="1990s &middot; Rules and fragments"
+            data-body="Formant synthesis generates speech from hand-written rules, storing no recorded audio at all. Diphone concatenation splices together one recorded copy of each sound-to-sound transition. Intelligible, unmistakably synthetic.">
+      <span class="ttshist-dot"></span>
+      <span class="ttshist-year">1990s</span>
+      <span class="ttshist-label">Formant &amp; diphone</span>
+    </button>
+    <button class="ttshist-era" id="ttshist-tab-1" role="tab" aria-controls="ttshist-panel" aria-selected="false" tabindex="-1"
+            data-title="2000s &middot; Hoard it or model it"
+            data-body="Unit selection records hours of speech and picks the longest matching run at synthesis time. Statistical parametric synthesis does the opposite: store no waveforms, model spectrum, pitch and duration instead.">
+      <span class="ttshist-dot"></span>
+      <span class="ttshist-year">2000s</span>
+      <span class="ttshist-label">Unit selection &amp; HMMs</span>
+    </button>
+    <button class="ttshist-era" id="ttshist-tab-2" role="tab" aria-controls="ttshist-panel" aria-selected="false" tabindex="-1"
+            data-title="2010s &middot; The pipeline collapses"
+            data-body="WaveNet models raw waveform samples directly. Tacotron learns the text front-end that took decades to hand-write. Two neural networks replace the whole stack — and it is far slower than real time.">
+      <span class="ttshist-dot"></span>
+      <span class="ttshist-year">2010s</span>
+      <span class="ttshist-label">Seq2seq &amp; neural vocoders</span>
+    </button>
+    <button class="ttshist-era" id="ttshist-tab-3" role="tab" aria-controls="ttshist-panel" aria-selected="false" tabindex="-1"
+            data-title="Early 2020s &middot; Fast enough to ship"
+            data-body="FastSpeech 2 generates the whole spectrogram in parallel. HiFi-GAN turns the vocoder into a GAN. VITS folds both stages into one model. Real time on ordinary hardware, with fixed voices.">
+      <span class="ttshist-dot"></span>
+      <span class="ttshist-year">Early 2020s</span>
+      <span class="ttshist-label">Non-autoregressive &amp; GANs</span>
+    </button>
+    <button class="ttshist-era" id="ttshist-tab-4" role="tab" aria-controls="ttshist-panel" aria-selected="false" tabindex="-1"
+            data-title="Now &middot; Speech as tokens"
+            data-body="A neural audio codec turns sound into discrete tokens, so a transformer can predict speech exactly as it predicts words. Zero-shot voice cloning and prompted emotion arrive as side effects.">
+      <span class="ttshist-dot"></span>
+      <span class="ttshist-year">2026</span>
+      <span class="ttshist-label">Codec tokens &amp; speech-LLMs</span>
+    </button>
+  </div>
+  <!-- Seeded with the first era so the panel still says something if the script
+       never runs; select() overwrites it on init. No aria-live here — the tab
+       pattern already announces the panel on selection, and the two together
+       double-announce on some screen readers. -->
+  <div class="ttshist-panel" id="ttshist-panel" role="tabpanel" tabindex="0"
+       aria-labelledby="ttshist-tab-0">
+    <p class="ttshist-panel-title">1990s &middot; Rules and fragments</p>
+    <p class="ttshist-panel-body">Formant synthesis generates speech from hand-written rules, storing no recorded audio at all. Diphone concatenation splices together one recorded copy of each sound-to-sound transition. Intelligible, unmistakably synthetic.</p>
+  </div>
+</div>
+
+<style>
+.ttshist { margin: 1.6rem 0 2rem; }
+.ttshist-rail {
+  position: relative; display: flex; overflow-x: auto;
+  padding: 0.25rem 0 0.5rem; scrollbar-width: thin;
+}
+/* The connecting rail sits behind the dots, at their vertical centre. The 10%
+   inset is not arbitrary: five equal-width markers put their dot centres at
+   10/30/50/70/90%, so anything smaller leaves the line protruding past the
+   outer dots. Keep it in step with the number of eras. */
+.ttshist-rail::before {
+  content: ""; position: absolute; left: 10%; right: 10%; top: 13px;
+  height: 3px; background: #d9d4ee; z-index: 0;
+}
+.ttshist-era {
+  position: relative; z-index: 1; flex: 1 0 8.5rem;
+  display: flex; flex-direction: column; align-items: center; gap: 0.35rem;
+  background: none; border: 0; padding: 0 0.4rem; cursor: pointer;
+  font: inherit; color: inherit; text-align: center;
+}
+.ttshist-dot {
+  width: 17px; height: 17px; border-radius: 50%;
+  background: #fff; border: 3px solid #b7afdd; box-sizing: border-box;
+  transition: transform 120ms ease, background-color 120ms ease, border-color 120ms ease;
+}
+.ttshist-year { font-weight: 700; font-size: 0.86rem; line-height: 1.1; }
+.ttshist-label { font-size: 0.74rem; opacity: 0.72; line-height: 1.2; }
+/* The selected state must not depend on colour alone. Browser "auto dark mode"
+   rewrites these purples to a flat grey — and so does any forced-colours or
+   high-contrast setting — which would leave no visible selection at all. Size,
+   border weight and an underline all survive that rewriting. */
+.ttshist-era[aria-selected="true"] .ttshist-dot {
+  background: #4A3AA7; border-color: #4A3AA7;
+  border-width: 5px; transform: scale(1.35);
+}
+.ttshist-era[aria-selected="true"] .ttshist-year {
+  color: #4A3AA7; text-decoration: underline; text-underline-offset: 4px;
+  text-decoration-thickness: 2px;
+}
+.ttshist-era:hover .ttshist-dot { border-color: #4A3AA7; }
+.ttshist-era:focus-visible { outline: 2px solid #4A3AA7; outline-offset: 3px; border-radius: 6px; }
+.ttshist-panel {
+  margin-top: 0.5rem; padding: 0.85rem 1rem;
+  border-left: 4px solid #4A3AA7; background: rgba(74, 58, 167, 0.06);
+  border-radius: 0 6px 6px 0; min-height: 5.5rem;
+}
+.ttshist-panel-title { margin: 0 0 0.3rem; font-weight: 700; color: #4A3AA7; }
+.ttshist-panel-body { margin: 0; font-size: 0.94rem; line-height: 1.5; }
+@media (prefers-reduced-motion: reduce) {
+  .ttshist-dot { transition: none; }
+}
+</style>
+
+<script>
+(function () {
+  var root = document.querySelector(".ttshist");
+  if (!root) return;
+  var tabs = Array.prototype.slice.call(root.querySelectorAll(".ttshist-era"));
+  var panel = root.querySelector(".ttshist-panel");
+  var title = root.querySelector(".ttshist-panel-title");
+  var body = root.querySelector(".ttshist-panel-body");
+
+  function select(index, focus) {
+    tabs.forEach(function (tab, i) {
+      var on = i === index;
+      tab.setAttribute("aria-selected", on ? "true" : "false");
+      tab.tabIndex = on ? 0 : -1;
+    });
+    // textContent, not innerHTML: the HTML parser already entity-decoded these
+    // attributes, so they are plain strings by the time they reach the dataset.
+    title.textContent = tabs[index].dataset.title;
+    body.textContent = tabs[index].dataset.body;
+    panel.setAttribute("aria-labelledby", tabs[index].id);
+    if (focus) tabs[index].focus();
+  }
+
+  tabs.forEach(function (tab, i) {
+    tab.addEventListener("click", function () { select(i, false); });
+    // Arrow keys are the expected way to move through a tablist.
+    tab.addEventListener("keydown", function (event) {
+      var delta = { ArrowRight: 1, ArrowLeft: -1, Home: -Infinity, End: Infinity }[event.key];
+      if (delta === undefined) return;
+      event.preventDefault();
+      var next = delta === -Infinity ? 0
+        : delta === Infinity ? tabs.length - 1
+        : (i + delta + tabs.length) % tabs.length;
+      select(next, true);
+    });
+  });
+
+  select(0, false);
+})();
+</script>
+```
+
+## The 1990s: you could understand it, but never mistake it for a person
+
+The first era stored no speech at all. **Formant synthesis** builds a voice from
+oscillators and filters tuned to reproduce *formants* — the resonant frequency
+bands your throat and mouth impose on a sound, and what makes "ee" differ from
+"ah". Rules convert letters to phonemes, phonemes to filter settings. That is how
+DECtalk spoke, and why Stephen Hawking's voice sounded as it did.
+
+The alternative: record a human once, then cut the recording up. **Diphone
+concatenation** stores one copy of every sound-to-sound transition — the
+milliseconds spanning "k" into "æ" — then splices and pitch-shifts them into a
+sentence. Edinburgh's Festival, released in 1996 and still the ancestor of most
+open-source TTS, did exactly this.
+
+**What changed:** arbitrary text became speakable on a machine with almost no
+memory. The cost was humanity: every syllable is identical every time, because
+only one copy exists.
+
+## The 2000s: two opposite fixes for the same robotic seam
+
+Both 1990s techniques failed at the joins. The next decade produced two opposite
+responses.
+
+**Unit selection** attacked it with volume: record hours of one speaker, then
+search that database at synthesis time for the longest contiguous stretch of real
+audio matching the target. When the database contains your phrase, the output *is*
+a human recording. When it does not, the voice lurches between registers
+mid-sentence.
+
+**Statistical parametric synthesis** stored no waveforms at all. The HTS toolkit
+modelled speech with hidden Markov models as smoothly varying parameters —
+spectral envelope, pitch, duration — then rebuilt audio with a *vocoder*, a
+component that reconstructs a waveform from that compact description. Tiny and
+easy to bend: change a parameter, change the speaker. It also sounded muffled and
+buzzy, because averaging is what a statistical model does.
+
+**What changed:** the field split into hoarding real audio versus modelling its
+parameters, and neither got both naturalness and flexibility. The neural era broke
+that deadlock.
+
+## The 2010s: the hand-built pipeline collapsed into two networks
+
+DeepMind's WaveNet (2016) dropped the intermediate representation entirely and
+predicted the raw waveform one sample at a time, each conditioned on every sample
+before it — an *autoregressive* model, in the same sense as a language model
+predicting the next word. At 16,000-odd predictions per second of audio it was
+glacially slow, and it beat everything before it.
+
+Tacotron (2017) removed the other half of the stack: a sequence-to-sequence network
+mapped characters directly to a mel spectrogram, learning from data the
+pronunciation and prosody rules people had hand-written for decades. Tacotron 2
+bolted the two together — a spectrogram predictor feeding WaveNet as a **neural
+vocoder** — and scored 4.53 on a 5-point naturalness rating against 4.58 for
+professionally recorded human speech.
+
+**What changed:** the linguistic front-end stopped being engineered and started
+being learned. The price was speed; WaveGlow (2018) began clawing it back with a
+flow that generates samples in parallel.
+
+## The early 2020s: dropping autoregression made it fast enough to ship
+
+Quality was solved; throughput was not. FastSpeech 2 (2020) predicts each phoneme's
+duration explicitly, then emits the entire spectrogram in one parallel pass instead
+of left to right. HiFi-GAN (2020) did the same for the vocoder, training a
+generator against several discriminators to run hundreds of times faster than real
+time on a GPU — and, crucially, faster than real time on a laptop CPU. VITS (2021)
+closed the remaining seam, training both stages end-to-end with no separate
+vocoder.
+
+**What changed:** open-source TTS became deployable rather than demonstrable. The
+limitation was rigidity — a model gave you the voices it was trained on, and a new
+voice meant a new training run.
+
+## Now: speech is just another token stream
+
+The current era rests on the **neural audio codec**: a model that compresses a
+waveform into a short sequence of discrete symbols — *codec tokens* — and decodes
+them back to sound. Think of it as a vocabulary for audio, the role subword tokens
+play for text.
+
+Once speech is a token sequence, generating it is a language-modelling problem and
+the whole transformer toolkit transfers. Chatterbox is explicitly a Llama-style
+backbone predicting speech tokens; CosyVoice 2, OpenAudio S1-mini and IndexTTS-2
+are variations on the theme.
+
+**What changed:** voice stopped being a property of the weights and became part of
+the prompt. Give one a few seconds of reference audio and it clones a speaker with
+no fine-tuning; ask for an emotion and it obliges. The costs return too:
+autoregression brings back latency and occasional garbled output, and effortless
+cloning is a real misuse risk — which is why models like Chatterbox watermark what
+they emit.
+
+## Hear thirty years of the same sentence
+
+Here is that arc as sound. Four of the five clips were generated locally by
+[this post's build script](https://github.com/project-delphi/ml-blog/blob/main/posts/open-source-tts-history/src/make_audio.py),
+all saying one sentence so the only variable is technique. These are living
+descendants, not original binaries — eSpeak NG still synthesises by formant rule,
+and Flite still ships a diphone database and a parametric voice.
+
+```{=html}
+<div class="ttshist-samples">
+
+  <div class="ttshist-sample">
+    <div class="ttshist-sample-head">
+      <span class="ttshist-sample-era">1990s &middot; formant synthesis</span>
+      <span class="ttshist-sample-eng">eSpeak NG 1.52</span>
+    </div>
+    <audio controls preload="metadata" src="audio/01-formant-espeak-ng.mp3"></audio>
+    <p class="ttshist-sample-note">No recorded human speech anywhere in this file. Every sound is rules driving filters.</p>
+  </div>
+
+  <div class="ttshist-sample">
+    <div class="ttshist-sample-head">
+      <span class="ttshist-sample-era">1990s &middot; diphone concatenation</span>
+      <span class="ttshist-sample-eng">Flite 2.2, <code>cmu_us_kal</code></span>
+    </div>
+    <audio controls preload="metadata" src="audio/02-diphone-flite-kal.mp3"></audio>
+    <p class="ttshist-sample-note">A real person&rsquo;s voice, chopped into transitions and pitch-shifted back together. Listen for the seams.</p>
+  </div>
+
+  <div class="ttshist-sample">
+    <div class="ttshist-sample-head">
+      <span class="ttshist-sample-era">2000s &middot; statistical parametric</span>
+      <span class="ttshist-sample-eng">Flite 2.2, <code>cmu_us_slt</code> Clustergen</span>
+    </div>
+    <audio controls preload="metadata" src="audio/03-parametric-flite-slt.mp3"></audio>
+    <p class="ttshist-sample-note">Smooth where the diphone voice was jagged, muffled where it was sharp. Clustergen is the same family as HMM-based HTS, not literally HTS.</p>
+  </div>
+
+  <div class="ttshist-sample">
+    <div class="ttshist-sample-head">
+      <span class="ttshist-sample-era">2010s &middot; seq2seq + neural vocoder</span>
+      <span class="ttshist-sample-eng">Tacotron 2 (Google)</span>
+    </div>
+    <audio controls preload="metadata" src="audio/04-tacotron2-google.mp3"></audio>
+    <p class="ttshist-sample-note">The one clip not generated here, and a different sentence: Tacotron 2&rsquo;s checkpoint was never released, so this is mirrored from <a href="https://google.github.io/tacotron/publications/tacotron2/" target="_blank" rel="noopener">Google&rsquo;s demo page</a>.</p>
+  </div>
+
+  <div class="ttshist-sample">
+    <div class="ttshist-sample-head">
+      <span class="ttshist-sample-era">2026 &middot; codec-era neural TTS</span>
+      <span class="ttshist-sample-eng">Kokoro-82M, voice <code>af_heart</code></span>
+    </div>
+    <audio controls preload="metadata" src="audio/05-kokoro-82m.mp3"></audio>
+    <p class="ttshist-sample-note">82 million parameters, generated on a laptop CPU in seconds. Try other voices in the <a href="https://huggingface.co/spaces/hexgrad/Kokoro-TTS" target="_blank" rel="noopener">official Kokoro Space</a>.</p>
+  </div>
+
+</div>
+
+<style>
+.ttshist-samples { display: grid; gap: 1.1rem; margin: 1.5rem 0 2rem; }
+.ttshist-sample {
+  padding: 0.9rem 1rem; border: 1px solid #e3e0f0; border-radius: 8px;
+  background: rgba(74, 58, 167, 0.035);
+}
+.ttshist-sample-head {
+  display: flex; flex-wrap: wrap; gap: 0.4rem 0.9rem;
+  align-items: baseline; margin-bottom: 0.55rem;
+}
+.ttshist-sample-era { font-weight: 700; color: #4A3AA7; font-size: 0.95rem; }
+.ttshist-sample-eng { font-size: 0.82rem; opacity: 0.75; }
+.ttshist-sample audio { width: 100%; max-width: 100%; display: block; }
+.ttshist-sample-note { margin: 0.55rem 0 0; font-size: 0.86rem; line-height: 1.45; opacity: 0.85; }
+</style>
+```
+
+The jump from the third clip to the fifth is the entire neural revolution — the one
+place where reading about mean opinion scores tells you less than four seconds of
+listening.
+
+## What you can actually download today
+
+All five run locally, and all five carry a permissive licence.
+
+| Model | Provider | Parameters | Underlying tech | Licence |
+|---|---|---|---|---|
+| [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) | hexgrad | 82M | Non-autoregressive StyleTTS 2 architecture with an ISTFTNet decoder | Apache 2.0 |
+| [Chatterbox / Turbo](https://github.com/resemble-ai/chatterbox) | Resemble AI | 500M / 350M | Llama-style token generator plus a distilled diffusion decoder | MIT |
+| [CosyVoice 2](https://huggingface.co/FunAudioLLM/CosyVoice2-0.5B) | Alibaba (FunAudioLLM) | 0.5B | LLM-based codec TTS, streaming-optimised to ~150 ms latency | Apache 2.0 |
+| [OpenAudio S1-mini](https://huggingface.co/fishaudio/openaudio-s1-mini) | Fish Audio | 0.5B | Dual autoregressive (Dual-AR) codec architecture with GFSQ | Apache 2.0 |
+| [IndexTTS-2](https://github.com/index-tts/index-tts) | Bilibili | not published | Autoregressive text-to-semantic then semantic-to-mel, with duration and emotion control | Apache 2.0 |
+
+: Leading open-source TTS models as of August 2026. IndexTTS-2's parameter count is not stated in its repository, model card or paper, so it is left blank rather than guessed.
+
+## Caveat: parameter count is a poor proxy for quality here
+
+That table invites a comparison it cannot support. Kokoro is roughly six times
+smaller than the codec models beside it and still ranks near the top of community
+listening arenas, because it does a narrower job — fixed voices, no cloning, no
+emotion prompt. The larger models buy controllability, not better sentences. Pick
+on the axis you need, and treat naturalness scores as noisy — they shift with the
+listener pool, the text, and who ran the evaluation.
+
+## Where this is heading
+
+The direction of travel is that TTS stops being a separate component. Once speech
+is tokens, there is no principled reason to generate text and then read it aloud —
+one model can emit speech tokens directly, removing the prosody errors that come
+from a synthesiser guessing at intent it never saw. Expect streaming by default
+rather than as an optimisation, emotion and style addressed in the prompt like
+everything else, and watermarking to get far more attention, because a technology
+that clones a voice from six seconds of audio has already outrun the norms around
+it.
+
+## Sources
+
+- WaveNet — [arXiv:1609.03499](https://arxiv.org/abs/1609.03499); Tacotron — [arXiv:1703.10135](https://arxiv.org/abs/1703.10135); Tacotron 2, including the 4.53 vs 4.58 MOS figures — [arXiv:1712.05884](https://arxiv.org/abs/1712.05884); WaveGlow — [arXiv:1811.00002](https://arxiv.org/abs/1811.00002)
+- FastSpeech 2 — [arXiv:2006.04558](https://arxiv.org/abs/2006.04558); HiFi-GAN — [arXiv:2010.05646](https://arxiv.org/abs/2010.05646); VITS — [arXiv:2106.06103](https://arxiv.org/abs/2106.06103)
+- [Festival](https://www.cstr.ed.ac.uk/projects/festival/) (CSTR Edinburgh), [Flite](https://github.com/festvox/flite) and [HTS](https://hts.sp.nitech.ac.jp/) for the pre-neural eras; [eSpeak NG](https://github.com/espeak-ng/espeak-ng) for formant synthesis
+- Model cards and repositories linked in the table above; Chatterbox parameter counts and PerTh watermarking from [Resemble AI](https://www.resemble.ai/chatterbox/)
+- Tacotron 2 sample clip mirrored from [Google's demo page](https://google.github.io/tacotron/publications/tacotron2/)
