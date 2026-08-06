@@ -51,13 +51,15 @@ raw = "{" + response.content[0].text + "}"       # reattach what you clipped
 data = json.loads(raw)                           # ...and hope
 ```
 
-Look at the last two lines. You're manually gluing back the brace you injected and the brace you truncated, then hoping. Nested objects break the stop sequence outright, because the *first* `}` isn't the last one. And the whole approach is now moot: **assistant-turn prefill returns a 400 on current Claude models** — Sonnet 5, Opus 5, and the 4.6-and-later family all reject it. If this pattern is still in your codebase, it isn't legacy-but-working. It's a time bomb.
+Look at the last two lines. You're manually gluing back the brace you injected and the brace you truncated, then hoping. Nested objects break the stop sequence outright, because the *first* `}` isn't the last one.
+
+It's also running out of road: **prefill now returns a 400 on Sonnet 5, Opus 5, Fable 5, and the 4.6-and-later Opus and Sonnet models.** Haiku 4.5 still accepts it, so it isn't dead everywhere — but "works on the model I happen to call" is a thin foundation to build on.
 
 ## The new way: make the shape a contract
 
 Pass a JSON Schema through `output_config.format` and the API *guarantees* the response conforms to it — not "usually," not "if the prompt is worded carefully," but enforced at the endpoint. No brace surgery, no stop sequences, no retry loop.
 
-Here's a messy support ticket about a data export failing at 90%, going in as free text and coming out as a typed object.
+Here's a messy support ticket — invented for this post, but written the way an annoyed customer actually writes — going in as free text, coming out as a typed object.
 
 ```{python}
 #| eval: false
@@ -87,10 +89,13 @@ schema = {
 
 response = client.messages.create(
     model="claude-sonnet-5",
-    max_tokens=1024,
+    max_tokens=4096,                  # shared by thinking + response; leave headroom
     messages=[{"role": "user", "content": ticket}],
     output_config={"format": {"type": "json_schema", "schema": schema}},
 )
+
+if response.stop_reason != "end_turn":         # refusal, or truncated mid-object
+    raise RuntimeError(f"no conforming output: {response.stop_reason}")
 
 text = next(b.text for b in response.content if b.type == "text")
 data = json.loads(text)
@@ -108,13 +113,15 @@ I didn't call the API for this post — no key hit, no request made — so the b
 }
 ```
 
-No brace-hunting. No pleasantries to strip. Just an object matching the schema, every time.
+No brace-hunting. No pleasantries to strip. When the turn completes, you get an object matching the schema — not a shape you have to defend against.
 
 ## The ticket was never the point
 
 Swap the ticket for a log line, a resume, a tool call your agent needs to act on — anything where the model's output has to become a variable in your code, not a paragraph a human reads. Define the shape once, let the API enforce it, delete the parsing code you used to need.
 
-Two honest caveats. A schema guarantees *shape*, not *correctness* — you'll never get malformed JSON, but you can still get a confidently wrong `category`, so spot-check classifications on edge cases before trusting the pipeline unattended. And the guarantee has escape hatches worth handling: if the model refuses on safety grounds, or you hit `max_tokens` mid-object, `stop_reason` will say so and the output won't conform. Check it before you parse.
+Two honest caveats. A schema guarantees *shape*, not *correctness* — you'll never get malformed JSON, but you can still get a confidently wrong `category`, so spot-check classifications on edge cases before trusting the pipeline unattended.
+
+And the guarantee is scoped to a turn that finishes. A safety refusal or a `max_tokens` truncation leaves you with an empty or clipped response, and `stop_reason` says which — that's the check in the snippet above, and the line people skip. Budget generously: thinking shares `max_tokens` with the response, so a ceiling that fit a toy input can clip a real one.
 
 ## References
 

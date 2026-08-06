@@ -229,7 +229,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <li><strong>Prefill the assistant turn.</strong> Seed the model’s own turn with a lone <code>{</code> so it has no choice but to continue from inside the object. No room left for a preamble — the preamble slot is already spent.</li>
 <li><strong>Add a stop sequence.</strong> Halt generation the moment a closing <code>}</code> appears, so the model can’t tack on “let me know if you need anything else.”</li>
 </ol>
-<div id="e4aeb82f" class="cell" data-execution_count="1">
+<div id="4d51615b" class="cell" data-execution_count="1">
 <div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># The old way — do not use this on current models.</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>response <span class="op">=</span> client.messages.create(</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    model<span class="op">=</span><span class="st">"claude-sonnet-5"</span>,</span>
@@ -244,13 +244,14 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>raw <span class="op">=</span> <span class="st">"{"</span> <span class="op">+</span> response.content[<span class="dv">0</span>].text <span class="op">+</span> <span class="st">"}"</span>       <span class="co"># reattach what you clipped</span></span>
 <span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>data <span class="op">=</span> json.loads(raw)                           <span class="co"># ...and hope</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </div>
-<p>Look at the last two lines. You’re manually gluing back the brace you injected and the brace you truncated, then hoping. Nested objects break the stop sequence outright, because the <em>first</em> <code>}</code> isn’t the last one. And the whole approach is now moot: <strong>assistant-turn prefill returns a 400 on current Claude models</strong> — Sonnet 5, Opus 5, and the 4.6-and-later family all reject it. If this pattern is still in your codebase, it isn’t legacy-but-working. It’s a time bomb.</p>
+<p>Look at the last two lines. You’re manually gluing back the brace you injected and the brace you truncated, then hoping. Nested objects break the stop sequence outright, because the <em>first</em> <code>}</code> isn’t the last one.</p>
+<p>It’s also running out of road: <strong>prefill now returns a 400 on Sonnet 5, Opus 5, Fable 5, and the 4.6-and-later Opus and Sonnet models.</strong> Haiku 4.5 still accepts it, so it isn’t dead everywhere — but “works on the model I happen to call” is a thin foundation to build on.</p>
 </section>
 <section id="the-new-way-make-the-shape-a-contract" class="level2">
 <h2 class="anchored" data-anchor-id="the-new-way-make-the-shape-a-contract">The new way: make the shape a contract</h2>
 <p>Pass a JSON Schema through <code>output_config.format</code> and the API <em>guarantees</em> the response conforms to it — not “usually,” not “if the prompt is worded carefully,” but enforced at the endpoint. No brace surgery, no stop sequences, no retry loop.</p>
-<p>Here’s a messy support ticket about a data export failing at 90%, going in as free text and coming out as a typed object.</p>
-<div id="26c4fea2" class="cell" data-execution_count="2">
+<p>Here’s a messy support ticket — invented for this post, but written the way an annoyed customer actually writes — going in as free text, coming out as a typed object.</p>
+<div id="8475a114" class="cell" data-execution_count="2">
 <div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> json</span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> anthropic</span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -277,13 +278,16 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>response <span class="op">=</span> client.messages.create(</span>
 <span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>    model<span class="op">=</span><span class="st">"claude-sonnet-5"</span>,</span>
-<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>    max_tokens<span class="op">=</span><span class="dv">1024</span>,</span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>    max_tokens<span class="op">=</span><span class="dv">4096</span>,                  <span class="co"># shared by thinking + response; leave headroom</span></span>
 <span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>    messages<span class="op">=</span>[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: ticket}],</span>
 <span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>    output_config<span class="op">=</span>{<span class="st">"format"</span>: {<span class="st">"type"</span>: <span class="st">"json_schema"</span>, <span class="st">"schema"</span>: schema}},</span>
 <span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>)</span>
 <span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a>text <span class="op">=</span> <span class="bu">next</span>(b.text <span class="cf">for</span> b <span class="kw">in</span> response.content <span class="cf">if</span> b.<span class="bu">type</span> <span class="op">==</span> <span class="st">"text"</span>)</span>
-<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a>data <span class="op">=</span> json.loads(text)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> response.stop_reason <span class="op">!=</span> <span class="st">"end_turn"</span>:         <span class="co"># refusal, or truncated mid-object</span></span>
+<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a>    <span class="cf">raise</span> <span class="pp">RuntimeError</span>(<span class="ss">f"no conforming output: </span><span class="sc">{</span>response<span class="sc">.</span>stop_reason<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a>text <span class="op">=</span> <span class="bu">next</span>(b.text <span class="cf">for</span> b <span class="kw">in</span> response.content <span class="cf">if</span> b.<span class="bu">type</span> <span class="op">==</span> <span class="st">"text"</span>)</span>
+<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a>data <span class="op">=</span> json.loads(text)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </div>
 <p>I didn’t call the API for this post — no key hit, no request made — so the block below is hand-written to show the <em>shape</em> a conforming response takes, not a captured transcript. That’s the whole point: with a schema attached, this is what you’re guaranteed to get back, not what you’re hoping for.</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode json code-with-copy"><code class="sourceCode json"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
@@ -293,12 +297,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">"summary"</span><span class="fu">:</span> <span class="st">"Nightly export has failed at 90% completion for three consecutive nights, blocking a Friday board report."</span><span class="fu">,</span></span>
 <span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">"suggested_team"</span><span class="fu">:</span> <span class="st">"engineering"</span></span>
 <span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<p>No brace-hunting. No pleasantries to strip. Just an object matching the schema, every time.</p>
+<p>No brace-hunting. No pleasantries to strip. When the turn completes, you get an object matching the schema — not a shape you have to defend against.</p>
 </section>
 <section id="the-ticket-was-never-the-point" class="level2">
 <h2 class="anchored" data-anchor-id="the-ticket-was-never-the-point">The ticket was never the point</h2>
 <p>Swap the ticket for a log line, a resume, a tool call your agent needs to act on — anything where the model’s output has to become a variable in your code, not a paragraph a human reads. Define the shape once, let the API enforce it, delete the parsing code you used to need.</p>
-<p>Two honest caveats. A schema guarantees <em>shape</em>, not <em>correctness</em> — you’ll never get malformed JSON, but you can still get a confidently wrong <code>category</code>, so spot-check classifications on edge cases before trusting the pipeline unattended. And the guarantee has escape hatches worth handling: if the model refuses on safety grounds, or you hit <code>max_tokens</code> mid-object, <code>stop_reason</code> will say so and the output won’t conform. Check it before you parse.</p>
+<p>Two honest caveats. A schema guarantees <em>shape</em>, not <em>correctness</em> — you’ll never get malformed JSON, but you can still get a confidently wrong <code>category</code>, so spot-check classifications on edge cases before trusting the pipeline unattended.</p>
+<p>And the guarantee is scoped to a turn that finishes. A safety refusal or a <code>max_tokens</code> truncation leaves you with an empty or clipped response, and <code>stop_reason</code> says which — that’s the check in the snippet above, and the line people skip. Budget generously: thinking shares <code>max_tokens</code> with the response, so a ceiling that fit a toy input can clip a real one.</p>
 </section>
 <section id="references" class="level2">
 <h2 class="anchored" data-anchor-id="references">References</h2>
