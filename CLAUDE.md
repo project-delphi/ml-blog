@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A personal ML/data blog ("Synthetic Musings") built with [Quarto](https://quarto.org/) and published to GitHub Pages at https://project-delphi.github.io/ml-blog/. Each post is a self-contained `.qmd` or `.ipynb` file under `posts/<slug>/`; the rendered static site lives in `docs/` and is served from `main` (there is no CI workflow — `docs/` must be rendered locally and committed *in the same commit/PR* as the source change, otherwise the published site drifts from the source).
 
+Pages serves this repo with its **legacy Jekyll builder**, so `docs/.nojekyll` is load-bearing: without it Jekyll walks all ~80 rendered posts on every deploy, and any `{{` or `{%` that lands in a code block becomes a build failure rather than a page. It is listed under `project: resources:` in `_quarto.yml` rather than merely committed, because a project render deletes and rebuilds `docs/` — an unlisted `docs/.nojekyll` gets wiped on the next full render and the protection disappears silently. If a Pages build ever hangs or errors, check that `docs/.nojekyll` still exists before debugging content.
+
 ## Commands
 
 - Render one post: `quarto render posts/<slug>/index.qmd` (or `index.ipynb`). Narrow blast radius — it leaves every other built page untouched — but note it **always executes that post's code**: `freeze` is only honoured on a *project* render, never on a single document. So this needs the post's real venv, and it is the slow path for a code-heavy post.
