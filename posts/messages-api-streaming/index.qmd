@@ -1,0 +1,174 @@
+---
+title: "Waiting, and Not Waiting"
+subtitle: "Streaming, full responses, and the fragments that break naive parsers"
+description: "The Messages API is one endpoint with two delivery modes — and the difference stops being cosmetic the moment tool calls enter the picture."
+author: "Ravi Kalia"
+date: "2026-08-08"
+categories: [LLMs, Engineering, APIs]
+image: "./cover.png"
+tags: [claude, anthropic, streaming, sse, messages-api, tool-use]
+jupyter: blog-base
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: show
+    code-tools: true
+---
+
+![Waiting, and Not Waiting](./cover.png)
+
+## The spinner is the product
+
+You have been on both sides of this. You click something, a spinner appears, four seconds of nothing — then the whole answer lands at once. Somewhere else, in a chat window, you click and words start arriving immediately, and you're reading the beginning of the sentence before the end of it exists.
+
+Those are the same API call. Same endpoint, same request body plus one field, same final answer. The only difference is whether the server hands you the result in one piece or in a hundred.
+
+That looks cosmetic, and mostly it is — right up until the model calls a tool, at which point the pieces stop being a rendering detail and become a parsing problem.
+
+## One endpoint does all of it
+
+Everything goes through `POST /v1/messages`. There is no separate endpoint for tool use, images, or structured output — those are fields on this one request.
+
+You send a list of messages; you get back a `Message`. Two things to internalise early. **The API is stateless**: a "conversation" is a list you keep on your side and resend in full every time, so there's no session id to look for. And the response's `content` is a *list of blocks*, not a string — usually one text block, sometimes text plus a tool call. Check `block.type` before reaching for `.text`.
+
+## Ask for the whole thing first
+
+The simplest version of the call has no streaming in it at all.
+
+```{python}
+#| eval: false
+import anthropic
+
+client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
+
+response = client.messages.create(
+    model="claude-opus-5",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Name three uses for a paperclip."}],
+)
+
+for block in response.content:
+    if block.type == "text":
+        print(block.text)
+```
+
+That's it. The call blocks until the model is done, then hands back one object with the text, the token counts, and a `stop_reason` explaining why generation ended.
+
+Start here, and stay here longer than you think you should. A full response is a *value*: log it, assert on it, write a test against it. A stream is a *process*, and processes are harder to reason about when what you're really asking is "does my prompt work?"
+
+There is one thing a full response cannot do, though, and it's the reason the other mode exists.
+
+## Streaming is the same answer, arriving in pieces
+
+It cannot show you anything until it can show you everything.
+
+Streaming fixes that with Server-Sent Events — SSE, and the name oversells it. An SSE response is an ordinary HTTP response the server declines to finish: instead of sending a body and closing, it holds the connection open and writes a sequence of small labelled chunks, each an `event:` line and a `data:` line carrying JSON. One direction, plain text, over the HTTP you already have. Nothing to install.
+
+Two reasons to want it, one soft and one hard.
+
+**Perceived latency.** Total time doesn't improve — the model generates at the speed it generates. But time-to-first-word collapses to a few hundred milliseconds, and a reader who can start reading doesn't experience the rest as waiting. You aren't making it faster; you're making the waiting disappear into the reading.
+
+**Timeouts, which aren't a matter of taste.** A long generation can outlive the request holding it: an idle connection gets dropped by something in the middle — a proxy, a load balancer, the client library's own patience — and you lose output the model already produced and you already paid for. A stream is never idle. This is enough of a hazard that the Python SDK raises a `ValueError` rather than let you send a non-streaming request with a `max_tokens` large enough to be at risk.
+
+The same call, streamed:
+
+```{python}
+#| eval: false
+with client.messages.stream(
+    model="claude-opus-5",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Name three uses for a paperclip."}],
+) as stream:
+    for text in stream.text_stream:
+        print(text, end="", flush=True)
+
+    final = stream.get_final_message()  # the same object create() would return
+
+print(f"\n[{final.usage.output_tokens} output tokens]")
+```
+
+Note the last two lines. `get_final_message()` accumulates every event and returns exactly the object the non-streaming call returns — so "streaming" and "holding a complete `Message` at the end" are not a trade. If you're only streaming to dodge timeouts, use this and ignore events entirely.
+
+## The event sequence is an envelope inside an envelope
+
+`text_stream` is a convenience over something more structured, worth seeing before you need it. The stream is nested open/close pairs, like any tag-based format you've parsed: the message opens, each content block inside it opens and emits deltas and closes, then the message closes.
+
+| Event | What it carries |
+|---|---|
+| `message_start` | The `Message` shell — id, model, role, with `content` empty |
+| `content_block_start` | A block begins, at a given `index` |
+| `content_block_delta` | One fragment, for the block at that `index` |
+| `content_block_stop` | That block is complete |
+| `message_delta` | Top-level updates: `stop_reason`, and cumulative `usage` |
+| `message_stop` | Done |
+
+That `index` is the block's position in the final `content` array, and it matters because one response can hold several blocks — some text, then a tool call, then more text — whose deltas are distinguishable *only* by index. Deltas are typed too: `text_delta` for prose, `thinking_delta` for extended thinking, and one more we're about to get to.
+
+::: {.callout-note}
+## Two details that bite people once each
+
+The `usage` numbers on `message_delta` are **cumulative**, not per-event — sum them and you'll report nonsense. And streams may contain `ping` events at any point, plus event types that didn't exist when you wrote your handler. Ignore what you don't recognise rather than raising on it.
+:::
+
+## Tool arguments arrive as fragments of a JSON object
+
+Here's where delivery stops being cosmetic.
+
+When Claude calls a tool, the arguments arrive as a `tool_use` block whose `input` is a JSON object. Streamed, that object comes as `input_json_delta` events carrying a `partial_json` field — and *partial* is meant literally. These are substrings of the serialised JSON, chopped wherever the boundary fell:
+
+```json
+{"type":"input_json_delta","partial_json":"{\"location\":"}
+{"type":"input_json_delta","partial_json":" \"San"}
+{"type":"input_json_delta","partial_json":" Francisc"}
+{"type":"input_json_delta","partial_json":"o, CA\"}"}
+```
+
+`{"location":` is not JSON. Neither is `o, CA"}`. The obvious loop — parse each delta as it arrives — fails on every fragment, and not even consistently enough to catch reliably: a fragment can occasionally be *valid* JSON meaning something entirely different from the document it belongs to.
+
+::: {.callout-warning}
+## Concatenate first, parse once
+
+Append each `partial_json` to a buffer keyed by the block's `index`, and call `json.loads()` only after that block's `content_block_stop`. The contract is about the assembled object: `tool_use.input` is *always* an object in the final message, even though every delta is a string.
+:::
+
+Better still, don't hand-roll it: `get_final_message()` does the accumulation and hands back a parsed `input` dict. That's the real reason to prefer the SDK helper over the raw event iterator whenever tools are in play.
+
+## Which one to reach for
+
+| What you're building | Mode | Why |
+|---|---|---|
+| Batch job, eval harness, classifier | Full response | Nobody's watching a clock. Simpler code, testable output. Consider the Batches API too — same requests, half the price |
+| Chat UI | Streaming | The entire point is time-to-first-word |
+| Agent that calls tools | Streaming, accumulated | Turns run long; use `get_final_message()` and treat tool input as one value, never as fragments |
+| Long report generation | Streaming, not optional | This is the timeout case — a large `max_tokens` without streaming is a connection waiting to be dropped |
+
+Stream when a human is watching, or when the response is long enough that the connection itself is a risk. Otherwise take the simple thing.
+
+## What breaks, and what you can't put back
+
+Overload is the failure you'll meet first. A 529 `overloaded_error` means the API is busy, not that your request was wrong — it's retryable, and the SDK already retries it (along with 429s, 5xx, and connection errors) twice by default with exponential backoff. Mid-stream it arrives as an `error` event rather than an HTTP status, since the status line went out long ago.
+
+::: {.callout-note}
+## Don't write the retry loop first
+
+`max_retries` defaults to `2`. Hand-rolled retry layered on top gives you multiplied attempts and a latency profile nobody can explain. Tune the parameter first.
+:::
+
+A dropped connection is different, because you're holding a real but incomplete answer. You *can* resume: send what you received back as a **user** message asking the model to continue from where it stopped. (On Claude 4.6 and later it must be a user turn — prefilling the assistant turn is rejected on current models.)
+
+But you can only resume from a **text** block. Tool use and thinking blocks cannot be partially recovered, and by now the reason should be visible: a half-delivered tool call is a broken JSON string, so there is no object to hand back as context. Thinking blocks are worse — each is closed by a cryptographic `signature_delta` arriving just before `content_block_stop`, and an unsigned fragment can't be replayed as authentic. If the drop lands inside either, discard back to the last completed text block.
+
+## Back to the spinner
+
+These really are the same call: one endpoint, one request body, one final `Message` whichever mode you pick. The difference is delivery, and for most of what you'll build that's a user-experience decision you can defer — until long responses, where the stream is what keeps the connection alive, and tool calls, where the fragments will quietly corrupt your parsing if you treat each one as a document.
+
+So: start with a full response, switch to streaming when you have a reason, and the day you add tools, accumulate before you parse.
+
+::: {.callout-tip}
+## Try it yourself
+
+Swap `text_stream` for the raw event loop — `for event in stream:` — and print every `event.type`. Watch the envelope appear: one `message_start`, matched `content_block_start`/`content_block_stop` pairs, a lot of deltas, then `message_delta` and `message_stop`.
+
+Then pull `event.usage.output_tokens` off the `message_delta` event and compare it against `stream.get_final_message().usage.output_tokens`. They should agree — proving it to yourself is what makes the "cumulative, not per-event" warning stick.
+:::
