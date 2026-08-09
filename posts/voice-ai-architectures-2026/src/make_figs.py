@@ -125,16 +125,18 @@ S2S = {
     "source": "Artificial Analysis Speech to Speech leaderboard",
     "self_reported": False,
     # label, speech reasoning %, conversational dynamics %, is_open
+    # Ordered by speech reasoning descending, ties broken on conversational
+    # dynamics, matching the table in the post.
     "rows": [
         ("Qwen Audio 3.0 Realtime Plus", 99, 98.4, False),
-        ("GPT-Realtime-2.1 High", 96, 95.7, False),
         ("Grok Voice Think Fast 2.0", 97, 95.1, False),
         ("Gemini 3.1 Flash (High)", 97, 74.3, False),
+        ("GPT-Realtime-2.1 High", 96, 95.7, False),
         ("Deepslate Opal", 85, 85.7, False),
         ("Qwen3 Omni Flash", 59, 72.7, False),
-        ("PersonaPlex", 19, 91.0, True),
-        ("Nemotron 3 VoiceChat", 27, 52.9, True),
         ("Freeze-Omni", 33, 58.7, True),
+        ("Nemotron 3 VoiceChat", 27, 52.9, True),
+        ("PersonaPlex", 19, 91.0, True),
         ("FLM-Audio", 16, 62.0, True),
         ("Moshi", 4, 61.0, True),
     ],
@@ -161,15 +163,18 @@ def fig_latency() -> None:
     fig, ax = plt.subplots(figsize=(WIDTH, 4.6), dpi=DPI)
     y = range(len(rows))
     h = 0.36
+    # The y axis is inverted below, so the *smaller* offset draws higher. First
+    # word goes on top of each pair to match the legend order and the order the
+    # two events actually happen in.
     ax.barh(
-        [i + h / 2 + 0.02 for i in y],
+        [i - h / 2 - 0.02 for i in y],
         first,
         height=h,
         color=STEP_LIGHT,
         label="First word",
     )
     ax.barh(
-        [i - h / 2 - 0.02 for i in y],
+        [i + h / 2 + 0.02 for i in y],
         done,
         height=h,
         color=CLOSED,
@@ -177,8 +182,8 @@ def fig_latency() -> None:
     )
 
     for i, (f, d) in enumerate(zip(first, done)):
-        ax.text(f + 0.12, i + h / 2 + 0.02, f"{f:.2f}", va="center", fontsize=8.5, color=INK)
-        ax.text(d + 0.12, i - h / 2 - 0.02, f"{d:.2f}", va="center", fontsize=8.5, color=INK)
+        ax.text(f + 0.12, i - h / 2 - 0.02, f"{f:.2f}", va="center", fontsize=8.5, color=INK)
+        ax.text(d + 0.12, i + h / 2 + 0.02, f"{d:.2f}", va="center", fontsize=8.5, color=INK)
 
     ax.set_yticks(list(y))
     ax.set_yticklabels(labels, fontsize=9.5, color=INK)
@@ -304,8 +309,9 @@ def fig_s2s() -> None:
     # Points above ~80% reasoning sit at the right edge, so their labels go to
     # the left; the two OpenAI/xAI points nearly coincide and are split apart.
     nudge = {
-        "GPT-Realtime-2.1 High": (-11, 6, "right"),
-        "Grok Voice Think Fast 2.0": (-11, -12, "right"),
+        "Qwen Audio 3.0 Realtime Plus": (-11, 7, "right"),
+        "GPT-Realtime-2.1 High": (-11, -1, "right"),
+        "Grok Voice Think Fast 2.0": (-11, -14, "right"),
     }
     for label, reasoning, dynamics, is_open in rows:
         color = OPEN if is_open else CLOSED
