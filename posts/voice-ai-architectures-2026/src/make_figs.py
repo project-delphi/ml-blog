@@ -187,6 +187,12 @@ def fig_latency() -> None:
 
     ax.set_yticks(list(y))
     ax.set_yticklabels(labels, fontsize=9.5, color=INK)
+    # The cascaded baseline is the reference point the chart exists to make, so its
+    # tick label is emphasised rather than given a third colour -- the two purples
+    # already encode which stage of the response a bar measures.
+    for tick, row in zip(ax.get_yticklabels(), rows):
+        if row[3]:
+            tick.set_fontweight("bold")
     ax.invert_yaxis()
     ax.set_xlim(0, 12.4)
     ax.set_xlabel("seconds (lower is better)", fontsize=9.5, color=MUTED)
@@ -352,8 +358,10 @@ def fig_s2s() -> None:
         fontsize=9.5,
         color=MUTED,
     )
+    # Deliberately not "open models handle the conversation, not the question": only
+    # PersonaPlex is strong on dynamics, and a chart title gets screenshotted alone.
     ax.set_title(
-        "Native speech-to-speech: open models handle the conversation, not the question",
+        "Native speech-to-speech: every open model trails the frontier on reasoning",
         fontsize=12.5,
         color=INK,
         fontweight="bold",
