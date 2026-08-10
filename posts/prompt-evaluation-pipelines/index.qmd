@@ -1,0 +1,171 @@
+---
+title: "How Prompt Evaluation Pipelines Work"
+subtitle: "And why LLM-as-judge ended up at the center of them"
+description: "A demo is a sample of size one, and the qualities you actually care about — tone, helpfulness, groundedness — have no regex. That leaves another model holding the grading pen, which works only if you measure how often it agrees with you."
+author: "Ravi Kalia"
+date: "2026-08-09"
+categories: [LLM, Evaluation, AI Engineering]
+image: "./cover.png"
+tags: [evals, llm-as-judge, prompt-engineering, rag, groundedness, ci]
+format:
+  html:
+    toc: true
+    code-fold: false
+---
+
+![How Prompt Evaluation Pipelines Work](./cover.png)
+
+You add a sentence to a system prompt to stop the assistant rambling. Three questions in the
+playground come back tighter, so you ship. Two weeks later support notices it has quietly
+stopped citing sources, because "be concise" outranked "quote the document" in a way nobody
+tested for.
+
+Nothing there was a bug. A prompt change has no compiler and no stack trace, so the only way
+to know what it broke is to decide in advance what "broken" means and measure it. That
+decision, made repeatable, is an eval pipeline — and for most properties worth measuring,
+the thing doing the measuring is another model.
+
+## A demo is a sample of size one
+
+**Non-determinism.** Even at `temperature=0` the same input need not give the same output.
+One good answer says the prompt *can* work, not that it usually does.
+
+**Correctness is often a judgement call.** "Did it answer the question?" has no assertion,
+nor does "was the tone right for a frustrated customer". You can recognise failure instantly
+and still not be able to write `assert` for it.
+
+**Regressions are silent.** Fixing verbosity while breaking citation discipline throws
+nothing; it surfaces as a support ticket weeks later. Without a fixed test set there is no
+before-and-after, so the regression is invisible by construction.
+
+## Every eval pipeline is the same six stages
+
+1. **Define success criteria** — the specific, separable properties an output must have.
+2. **Build a test set** — inputs representative of real traffic, plus the edges: empty
+   context, contradictory documents, prompt injection, unanswerable questions.
+3. **Run the prompt** over every case, recording inputs, outputs and model version.
+4. **Score** each output against the criteria.
+5. **Aggregate** into a few numbers comparable across prompt versions.
+6. **Iterate**, adding every new failure as a permanent case.
+
+Stage one is the hard one. "Quality" is not a criterion; "every factual claim appears in the
+retrieved context" is. Vague criteria produce scores that move without telling you why, and
+the choice of scorer inherits that vagueness.
+
+## Deterministic scorers are cheap and narrow
+
+Plenty of criteria need no model. Validate JSON against a schema, exact-match a label, run
+the unit tests on generated code — that last one is the strongest proxy available, since it
+executes the code rather than reading it, though passing the tests you wrote is still not
+the same as being correct. These run out where an answer can be right in more than one
+wording.
+
+| | Rule-based scorer | LLM-as-judge |
+|:---|:---|:---|
+| Grades | schema, exact match, tests pass | tone, helpfulness, groundedness |
+| Cost per case | ~zero | an extra API call |
+| Repeatability | exact | varies run to run |
+| Fails by | scoring paraphrase as wrong | agreeing with you less than you assume |
+| Debugging | the assertion says what broke | a score, unless you ask for reasoning |
+
+## A judge is a prompt whose output happens to be a score
+
+Mechanically there is nothing exotic: a second prompt holding a rubric, the candidate output
+pasted in with whatever it should be judged against, and a verdict in parseable form.
+
+Take a support assistant over a company's own help-centre articles. A retriever pulls the
+three closest chunks, the prompt asks the model to answer using only those, and the property
+we want is **groundedness**: every claim traceable to a retrieved chunk. The example is
+illustrative, but the asymmetry is real — an ungrounded answer that *sounds* right is a
+confidently wrong instruction to a customer, costing far more than "I don't know". Lexical
+overlap cannot catch it: a hallucination phrased in the documentation's own vocabulary
+scores well on phrasing.
+
+```text
+You are checking whether an ANSWER is fully supported by the CONTEXT.
+
+CONTEXT:
+{retrieved_chunks}
+
+ANSWER:
+{candidate_answer}
+
+Decompose the ANSWER into individual factual claims. A claim is supported
+only if it is stated in or directly entailed by the CONTEXT. General
+knowledge does not count as support.
+
+Reply with JSON only:
+{"unsupported_claims": [...], "verdict": "pass" | "fail"}
+```
+
+The judge sees the context, so it grades support rather than truth. Claims come *before* the
+verdict, so a failure arrives with its reason. And the reply is JSON, so the harness parses
+`verdict` and treats a malformed answer as an error, not a score.
+
+## Three judge patterns cover most cases
+
+- **Single-output scoring** grades one output against a rubric — the pattern above. Cheap,
+  parallel, and the only one giving an absolute number you can track across releases.
+- **Pairwise comparison** shows the judge old and new outputs and asks which is better.
+  Models rank more reliably than they score, so this is sharper for "did my change help?",
+  while saying nothing about whether either output was any good.
+- **Groundedness checking** is the case above, and the RAG workhorse — but note what it
+  cannot tell you. An unsupported answer looks the same whether the chunk was never
+  retrieved or was retrieved and ignored; attributing that needs a second scorer on the
+  retrieval step.
+
+## Caveat: the judge is a model, so it fails like one
+
+- **Score drift.** Run the same judge over the same outputs twice and borderline cases flip.
+  A one-point improvement can be noise.
+- **Disagreement with humans.** The judge's rubric is yours only as far as your wording
+  carried. Untested, you don't know whether its "pass" and yours are the same set.
+- **Positional and verbosity bias.** In pairwise comparisons judges favour one slot
+  regardless of content, and reward length and confident phrasing as proxies for quality.
+- **Family effects.** Grading a model with a close relative of itself is a conflict of
+  interest you cannot inspect.
+
+## Calibrate against humans, then keep watching the gap
+
+Treat the judge as a component under test. Hand-label a reference set — fifty to a couple of
+hundred outputs, graded by whoever owns the quality bar — and run the judge against it. Its
+agreement with those labels is its accuracy; until measured, its scores are decoration. Read
+that agreement per class — against a set that is mostly passes, a judge that passes
+everything looks excellent. Disagreements usually mean an ambiguous rubric, not a stupid
+judge.
+
+Then keep it narrow. Three to five judges each grading one property — grounded, cited its
+source, answered the question, right tone — beat one judge rating "quality 1–5", because a
+narrow question has a defensible right answer and a broad one launders four criteria into an
+unaccountable digit. Separate scores also localise damage: you see what a change traded away.
+For pairwise, run both orderings and score the contradictions as ties: discarding them
+quietly filters out the close calls, and their rate is your measurement of the slot bias.
+
+Re-run the calibration set periodically, too. Providers update models underneath you, so
+judge–human agreement can regress on its own.
+
+## Passing offline evals is a merge gate, not a launch signal
+
+Wire the suite to the PR: any diff touching a prompt runs the eval set and reports
+per-criterion pass rates against the base branch. Gate on a drop that clears the judge's own
+noise band, which you get by running the suite twice against an unchanged prompt — otherwise
+the flakiness above blocks clean PRs. Reserve judges for the cases that need them, or CI gets
+slow enough that people stop running it. Grow the set from production too — sample traces users
+regenerated, abandoned or thumbs-downed, since real traffic produces inputs nobody would
+think to write.
+
+Keep the gate's scope honest, though. Offline evals measure output quality, one failure mode
+among many. A feature can score beautifully and go unused because it sits three clicks deep,
+takes eleven seconds, or answers a question users weren't asking.
+
+## What this actually buys you
+
+Back to the one-line prompt change. With a pipeline in place it produces a diff of numbers —
+groundedness held, citation discipline down four points — and the regression is caught in a
+pull request instead of a support queue. What makes that work is unglamorous: criteria
+specific enough to disagree about, a test set that grows every time reality surprises you,
+deterministic scorers wherever the property admits one, and a few narrow judges whose
+agreement with human labels you keep re-measuring. The judge is at the center not because
+model-graded scores are inherently trustworthy, but because for tone, helpfulness and
+groundedness there is no other scorer — and a calibrated judge is a different object from a
+deployed one.
