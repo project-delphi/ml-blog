@@ -4,69 +4,74 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A personal ML/data blog ("Synthetic Musings") built with [Quarto](https://quarto.org/) and published to GitHub Pages at https://project-delphi.github.io/ml-blog/. Each post is a self-contained `.qmd` or `.ipynb` file under `posts/<slug>/`; the rendered static site lives in `docs/` and is served from `main` (there is no CI workflow — `docs/` must be rendered locally and committed *in the same commit/PR* as the source change, otherwise the published site drifts from the source).
+A personal ML/data blog ("Synthetic Musings") built with [Quarto](https://quarto.org/) and published to GitHub Pages at https://project-delphi.github.io/ml-blog/. Each post is a self-contained `.qmd` or `.ipynb` under `posts/<slug>/`; the rendered site lives in `docs/` and is served from `main`. There is no CI workflow — `docs/` must be rendered locally and committed *in the same PR* as the source change, or the published site drifts from the source.
 
 ## Commands
 
-- Render one post: `quarto render posts/<slug>/index.qmd` (or `index.ipynb`). Narrow blast radius — it leaves every other built page untouched — but note it **always executes that post's code**: `freeze` is only honoured on a *project* render, never on a single document. So this needs the post's real venv, and it is the slow path for a code-heavy post.
-- Render the whole site: `QUARTO_PYTHON="$(pwd)/.venv/bin/python" quarto render .` (`make quatro` runs the bare form). This deletes and rebuilds `docs/`, but it *respects* `freeze: auto` (`posts/_metadata.yml`) — it re-executes only posts whose **source md5 has changed** since their `_freeze/` record was written, which today is none. It is the right tool for anything site-wide: nav, theme, `_quarto.yml`, or a stale `search.json`. Run `make check-posts` first; that is exactly what it checks.
-  - `QUARTO_PYTHON` is not optional here. A bare `quarto render .` resolves a Python that cannot see `--user`-registered kernelspecs, dies on the first post pinning a named kernel — and by then it has already deleted `docs/`. Recover with `git checkout -- docs`.
-  - Kernelspecs are resolved while Quarto *indexes* the project, before it ever consults `_freeze/`. A missing kernel therefore fails the whole render, frozen output or not. On a fresh clone run `make kernels-stub` first.
-- `.ipynb` posts are never executed by Quarto by default; their stored cell outputs are used as-is. That is why none of the 8 have a `_freeze/` record.
-- Preview: `quarto preview` (or `make preview`). Previewing the whole project indexes every post the first time, so prefer `quarto preview posts/<slug>/index.qmd` or serve the already-built `docs/` folder statically (e.g. `python -m http.server` from `docs/`) when you just need to eyeball one post.
-- `make install`: `uv sync` the base dev/lint toolchain into `.venv`, creating the venv if absent (this does *not* include per-post ML dependencies, see below). It installs from the committed root `uv.lock` rather than re-resolving, so every clone gets identical versions, and it *prunes* anything not in the lock — don't hand-install extras into `.venv` and expect them to survive. `make venv` still exists for a bare venv, but `make install` doesn't need it. `make lock` regenerates `uv.lock` from `pyproject.toml` without touching `.venv`, for reviewing a dependency change before installing it. `pyproject.toml` sets `requires-python = ">=3.11"`; lowering it re-forks the lock across interpreter versions, so raise it rather than lower it.
-- Lint/format tooling (black, ruff, mypy, pyupgrade, commitizen, codespell) is configured in `.pre-commit-config.yaml` and `pyproject.toml` (`[tool.ruff]`, `[tool.pydoclint]`, `[tool.codespell]`) but hooks aren't installed by default — run manually with `pre-commit run --all-files` if needed.
+- **Render one post**: `quarto render posts/<slug>/index.qmd`. Narrow blast radius, but it **always executes that post's code** — `freeze` is honoured only on a *project* render. Needs the post's real venv.
+- **Render the whole site**: `QUARTO_PYTHON="$(pwd)/.venv/bin/python" quarto render .` (`make quatro` runs the bare form). Deletes and rebuilds `docs/`, but *respects* `freeze: auto` — it re-executes only posts whose **source md5 changed** since their `_freeze/` record was written, which today is none. The right tool for anything site-wide: nav, theme, `_quarto.yml`, a stale `search.json`.
+  - `QUARTO_PYTHON` is not optional. A bare `quarto render .` resolves a Python that cannot see `--user`-registered kernelspecs and dies on the first post pinning a named kernel — after it has already deleted `docs/`. Recover with `git checkout -- docs`.
+  - Kernelspecs resolve while Quarto *indexes* the project, before it consults `_freeze/`. A missing kernel fails the whole render, frozen output or not. On a fresh clone run `make kernels-stub` first.
+- **Preview**: prefer `quarto preview posts/<slug>/index.qmd` — a whole-project preview indexes every post. Or serve the built output: `python -m http.server 8000 --directory docs`.
+- **Checks** (there is no test suite): `make check-posts` runs `scripts/check_posts.py` — stdlib-only, so it works on any interpreter — verifying that code posts pin a kernel + `requirements.txt`, that every pinned kernel appears in `make kernels-stub`, and that no post's frozen output has drifted from its source. Run it before any full render. `.claude/hooks/test-block-main-commit.sh` asserts the commit hook's allow/block matrix; run it after touching that hook.
+- **`make install`**: `uv sync` the base dev/lint toolchain into `.venv` (no per-post ML deps). Installs from the committed `uv.lock` rather than re-resolving, and *prunes* anything not in the lock — hand-installed extras will not survive. `make lock` regenerates the lock without touching `.venv`. `requires-python = ">=3.11"`; raise it rather than lower it, since lowering re-forks the lock across interpreter versions.
+- **Lint**: black, ruff, mypy, pyupgrade, commitizen, codespell are configured in `.pre-commit-config.yaml` and `pyproject.toml`, but hooks aren't installed — run `pre-commit run --all-files` manually.
+- `.ipynb` posts are never executed by Quarto; their stored cell outputs are used as-is, which is why none of the 8 have a `_freeze/` record.
 
 ## Workflow
 
-**Never commit to `main`.** Every change — new post, edit, fix, even a one-line typo — goes through: feature branch → commit (source *and* the re-rendered `docs/` output together) → push → open a PR with a real description of what changed and why → PR review → merge. `main` only ever advances via a merged PR. The `ship-pr` skill automates this loop.
+**Never commit to `main`.** Every change — new post, edit, one-line typo — goes: feature branch → commit (source *and* re-rendered `docs/` together) → push → PR with a real description → review → merge. The `ship-pr` skill automates this.
 
-This is enforced: `.claude/settings.json` registers a `PreToolUse` hook on `Bash` running `.claude/hooks/block-main-commit.sh`, which denies any command reaching `git commit` while HEAD is on `main`/`master`. Creating a branch first passes (`git switch -c rk/foo && git commit …`); switching onto `main` is not an escape hatch. Run `.claude/hooks/test-block-main-commit.sh` after touching the hook — it asserts the full allow/block matrix. To override deliberately, commit from your own terminal or disable the hook via `/hooks`.
+This is enforced. `.claude/settings.json` registers a `PreToolUse` hook on `Bash` running `.claude/hooks/block-main-commit.sh`, which denies any command reaching `git commit` while HEAD is on `main`/`master`. Branching first passes; switching onto `main` is not an escape hatch. To override deliberately, commit from your own terminal or disable the hook via `/hooks`.
 
-**Hand back a localhost preview link whenever a unit of work is complete** — a clickable URL, not just "done":
+**Hand back a localhost preview link whenever a unit of work is complete** — a clickable URL, not just "done": the URL `quarto preview posts/<slug>/index.qmd` prints, or `http://localhost:8000/posts/<slug>/index.html` from the static server above.
 
-- `quarto preview posts/<slug>/index.qmd`, reporting the URL it prints (typically `http://localhost:<port>/`) — prefer this single-post form, since a whole-project preview indexes and executes every post; or
-- serve the already-built output: `python -m http.server 8000 --directory docs` → `http://localhost:8000/posts/<slug>/index.html`.
-
-**Kill every running preview server once the change is merged**, so stale previews don't linger on their ports:
+**Kill every preview server once the change is merged**, then confirm nothing survives (`pgrep -fl "quarto preview"` silent; no Python listener rooted in this repo) and say so in the wrap-up:
 
 ```bash
-pkill -f "quarto.*preview"        # quarto preview servers
-# Static docs servers. Matching argv misses `cd docs && python -m http.server`
-# (no "docs" in its command line), so match on cwd — which also spares servers
-# belonging to other projects. Run from the repo root.
+pkill -f "quarto.*preview"
+# Match static servers on cwd, not argv: `cd docs && python -m http.server` has
+# no "docs" in its command line, and cwd-matching also spares other projects.
 pgrep -f "http\.server" | while read -r pid; do
   cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
   case "$cwd" in "$PWD"|"$PWD"/*) kill "$pid";; esac
 done
 ```
 
-Confirm nothing survives — `pgrep -fl "quarto preview"` prints nothing, and `lsof -nP -iTCP -sTCP:LISTEN | grep -i python` lists no server rooted in this repo — and say so in the wrap-up.
-
 ## Writing conventions
 
-**Give every post a spine.** A post is one argument, not a pile of sections. Name the core idea in a sentence before writing; every section advances it, and the reader always knows where they stand relative to it.
+**Give every post a spine.** A post is one argument, not a pile of sections. Name the core idea in a sentence before writing; every section advances it.
 
 - **Open on the core idea and the stakes** — the question, why it's non-obvious, what changes once the reader knows. No "in this post we will…" preamble.
 - **Headings state claims, not topics** — `## Efron's bootstrap is a weighted bootstrap in disguise`, not `## Background`, so the ToC reconstructs the argument.
 - **Each section earns the next.** If two could swap without damage, merge or cut one. `###` is for steps within one idea, not new ideas.
 - **Stitch every seam.** A section's first sentence links back to the previous result or the core idea; its last names the unresolved thing the next section answers — the gap, not the mechanics ("next, some code"). Same for code and figures: a sentence before saying what it will show, one after saying what happened. If an opening sentence reads identically with the previous section deleted, the seam isn't stitched.
-- **Close by returning to the core idea** — restate the opening claim now that it's earned, what it buys in practice, and where it stops holding. Not a summary of sections.
-- **Caveats inline**, as their own short section where the objection occurs (`## Caveat: the uniform is the posterior, not the prior`) — not a "Limitations" bin at the end.
+- **Close by returning to the core idea** — restate the opening claim now that it's earned, what it buys, where it stops holding. Not a summary of sections.
+- **Caveats inline**, as a short section where the objection occurs (`## Caveat: the uniform is the posterior, not the prior`) — not a "Limitations" bin at the end.
 
-**Always situate the data.** Any post that uses, plots, or even mentions a dataset must tell the reader where it came from before doing anything with it. Cover, in prose (not a bullet checklist bolted on):
+**Always situate the data.** Any post that uses, plots, or even mentions a dataset must say where it came from before doing anything with it — in prose, not a checklist bolted on:
 
-- **Provenance** — what the dataset actually is, and a link/citation to the source.
-- **Collector and motive** — who gathered it, under what program or institution, and why they went to the trouble. Instrument, survey, scrape, simulation: say which.
-- **Objective** — what question is being asked *of this data in this post*, and what the target/label means in the real world.
-- **Downstream impact** — what a decision made from this analysis would actually affect (a diagnosis, a loan, a forecast, a research conclusion), and what it costs to be wrong.
-- **Why this method** — what specific property of *this* data (sample size, noise, class imbalance, heavy tails, hierarchy, missingness, small-n uncertainty) makes the technique in the post the right tool, and which quantity we care about it improves.
+- **Provenance** — what the dataset is, with a link or citation.
+- **Collector and motive** — who gathered it, under what program, and why they went to the trouble. Instrument, survey, scrape, simulation: say which.
+- **Objective** — what is being asked *of this data in this post*, and what the target means in the real world.
+- **Downstream impact** — what a decision made from this analysis would affect (a diagnosis, a loan, a forecast, a research conclusion), and what being wrong costs.
+- **Why this method** — what property of *this* data (sample size, noise, class imbalance, heavy tails, hierarchy, missingness, small-n uncertainty) makes the post's technique the right tool, and which quantity it improves.
 
-Synthetic data is not exempt: state that it is synthetic, give the generating process, and explain what real-world situation it is standing in for and why simulating is preferable to a real dataset here.
+Synthetic data is not exempt: say it is synthetic, give the generating process, and explain what real situation it stands in for and why simulating beats a real dataset here.
 
 ## Architecture
 
-**Posts are independent, dependency-isolated documents.** `pyproject.toml` carries only dev/lint tooling — no numpy/sklearn/torch. Each code-heavy post gets its own gitignored `.venv-<slug>` at the repo root (e.g. `.venv-tda`, `.venv-tda-svm`), registered as a named Jupyter kernel, and pins execution to it via `jupyter: <kernel-name>` in frontmatter. **Never install into or execute with the system Python** — a bare `python`/`pip` is the system one and will pollute it (or fail on externally-managed environments). Always target the venv explicitly rather than relying on activation:
+### Three tiers of post
+
+Posts are dependency-isolated: `pyproject.toml` carries only dev/lint tooling, no numpy/sklearn/torch.
+
+1. **Executes at render** — its own gitignored `.venv-<slug>` at the repo root, a named Jupyter kernel, `jupyter: <kernel-name>` in frontmatter, and a committed `posts/<slug>/requirements.txt`. 27 posts. Venv and kernel names are historical abbreviations and often do **not** match the slug (`convex-optimization-interior-point-methods` → `.venv-ipm`/`ipm-blog`; `sir-training-vs-calibration` → `.venv-sir`/`sir-blog`) — read the post's `jupyter:` field rather than guessing.
+2. **Displays code only** — all cells `#| eval: false`. Pins `jupyter: blog-base`, a shared kernel over the base `.venv` (`make install && make kernel`). Four posts, all Claude-API ones: `claude-api-eval-pipeline`, `langgraph-vs-llamaindex`, `messages-api-streaming`, `structured-json-with-claude`. Quarto still needs *some* working kernel to structurally process `{python}` cells even when nothing runs. (`mermaid` and other diagram blocks go through Quarto's own filters and need no kernel.)
+3. **Assets generated ahead of the render** — see § `posts/<slug>/src/` below.
+
+### Building a post venv
+
+**Never install into or execute with the system Python** — a bare `python`/`pip` is the system one and will pollute it (or fail on externally-managed environments). Target the venv explicitly rather than relying on activation:
 
 ```bash
 uv venv .venv-<slug>
@@ -76,18 +81,20 @@ QUARTO_PYTHON="$(pwd)/.venv-<slug>/bin/python" quarto render posts/<slug>/index.
 uv pip freeze --python .venv-<slug>/bin/python > posts/<slug>/requirements.txt
 ```
 
-Each line above fixes a real failure. `ipykernel` alone is not enough — without Quarto's execution stack (`jupyter nbclient nbformat pyyaml`) a render dies with `ModuleNotFoundError: No module named 'yaml'` from Quarto's `jupyter.py` shim. And `quarto render` finds its kernel through whatever Python it defaults to, which usually cannot see a `--user`-registered kernel: without `QUARTO_PYTHON` it fails with `ERROR: Jupyter kernel '<name>' not found. Known kernels: python3`. If a render picks up the wrong environment, `jupyter kernelspec list` and the kernel's `argv[0]` say which interpreter it actually resolved to.
+Every line fixes a real failure. `ipykernel` alone is not enough — without Quarto's execution stack (`jupyter nbclient nbformat pyyaml`) a render dies with `ModuleNotFoundError: No module named 'yaml'` from Quarto's `jupyter.py` shim. Without `QUARTO_PYTHON`, `quarto render` resolves a Python that cannot see a `--user`-registered kernel and fails with `Jupyter kernel '<name>' not found. Known kernels: python3`. If a render picks up the wrong environment, `jupyter kernelspec list` and the kernel's `argv[0]` say which interpreter it actually resolved to.
 
-That last line is not optional: every post with a dedicated venv carries its exact versions in `posts/<slug>/requirements.txt`, because `_freeze/` is gitignored while `docs/` is committed — without it a re-render on drifted dependencies silently changes published output. Venvs predating uv still work, driven by `.venv-<slug>/bin/python -m pip` (a `uv venv` has no `pip`); recreate one in place from its lockfile to migrate it — kernel specs store an absolute path, so reusing the directory name keeps the registration valid.
+The freeze is not optional: `requirements.txt` is what lets a re-render be checked against the versions that produced the published output. **Also add the new kernel name to `kernels-stub` in the `Makefile`** — a name missing there fails a project render on any fresh clone, since kernelspecs resolve before `_freeze/` is consulted. `make check-posts` enforces this.
 
-Posts that only *display* code (all cells `#| eval: false` — e.g. `posts/langgraph-vs-llamaindex`) need no dedicated venv; they pin `jupyter: blog-base`, a shared kernel over the base `.venv` (`make install && make kernel`). Quarto still needs *some* working kernel to structurally process `{python}` cells even when nothing runs, so register it once on a fresh clone. (`mermaid` and other diagram blocks are handled by Quarto's own filters and need no kernel.)
+Venvs predating uv still work, driven by `.venv-<slug>/bin/python -m pip` (a `uv venv` has no `pip`); recreate one in place from its lockfile to migrate — kernel specs store an absolute path, so reusing the directory name keeps the registration valid.
 
-**The Hugging Face posts share two venvs, not thirteen.** Thirteen posts (the HuggingFace-era ones: `datasets`, `hub`, `tokenizers`, `peft`, `transformers-library`, `hugging-face-evaluate-library`, `optimum`, `setfit`, `diffusers`, `classifying_text_chunks`, `langchain`, `evaluation-metrics`, `soft-vs-hard-prompts`) share ~90% of their dependency closure, most of it `torch`. Each venv measures ~1.2 GB and `uv` copies rather than hardlinks into them here, so thirteen `.venv-<slug>` directories would be ~15 GB of near-identical wheels. They pin one of two shared kernels instead:
+### The Hugging Face posts share two venvs, not thirteen
+
+Thirteen posts (`datasets`, `hub`, `tokenizers`, `peft`, `transformers-library`, `hugging-face-evaluate-library`, `optimum`, `setfit`, `diffusers`, `classifying_text_chunks`, `langchain`, `evaluation-metrics`, `soft-vs-hard-prompts`) share ~90% of their dependency closure, most of it `torch`. Each venv is ~1.2 GB and `uv` copies rather than hardlinks here, so thirteen would be ~15 GB of near-identical wheels. They pin one of two shared kernels:
 
 - **`huggingface-blog`** over `.venv-huggingface` — `transformers` 5.x. Eleven posts.
-- **`huggingface-t4-blog`** over `.venv-huggingface-t4` — `transformers` 4.57.x. Two posts, `optimum` and `setfit`, and only because those two packages cap it. `optimum-onnx` declares `transformers<4.58.0`; `setfit` declares no upper bound at all but imports `transformers.training_args.default_logdir`, which 5.x removed — so it *resolves* against 5.x and then fails at import. A resolver-only check will not catch that; import the packages before trusting a resolve.
+- **`huggingface-t4-blog`** over `.venv-huggingface-t4` — `transformers` 4.57.x. Two posts, `optimum` and `setfit`, only because those packages cap it. `optimum-onnx` declares `transformers<4.58.0`; `setfit` declares no upper bound but imports `transformers.training_args.default_logdir`, which 5.x removed — so it *resolves* against 5.x and then fails at import. A resolver-only check misses that; import the packages before trusting a resolve.
 
-Build them with the § Architecture recipe above and these package sets — `posts/<slug>/requirements.txt` pins the exact resolved versions, but that is a freeze, not a spec, so the intent is recorded here:
+`requirements.txt` records a freeze, not intent, so the package sets live here:
 
 ```bash
 uv venv .venv-huggingface --python 3.12
@@ -108,19 +115,30 @@ uv pip install --python .venv-huggingface-t4/bin/python \
 .venv-huggingface-t4/bin/python -m ipykernel install --user --name huggingface-t4-blog
 ```
 
-Note that `setfit` is deliberately absent from the first set: installing it there resolves fine and then breaks the kernel at import, for the reason above.
+`setfit` is deliberately absent from the first set: it resolves fine there and then breaks the kernel at import.
 
-The trade this makes: `requirements.txt` is per-post as usual, but for these thirteen it is a copy of a shared freeze, so bumping a dependency for one post changes the versions recorded for all the posts on that kernel. `_freeze/` still hashes source only, so nothing silently re-executes — but the committed versions and the versions that produced a given post's output can drift apart. Re-render every post on a kernel when you bump that kernel's venv.
+The trade: for these thirteen, `requirements.txt` is a copy of a shared freeze, so bumping a dependency for one post changes the versions recorded for every post on that kernel. `_freeze/` hashes source only, so nothing silently re-executes — but committed versions and the versions that produced a post's output can drift apart. **Re-render every post on a kernel when you bump that kernel's venv.**
 
-**Two tiers of code post, and why `_freeze/` is committed.** Eleven posts are reproducible from source: dedicated `.venv-<slug>`, named kernel, committed `requirements.txt`. Eighteen older ones are not — no pinned kernel, no pinned versions, and dependencies (`diffusers`, `setfit`, `peft`, `transformers`, an `openai` client) pinned to nothing. Their committed `_freeze/` record is the only reproducible copy of what they compute, which is why `_freeze/` is tracked rather than ignored.
+### `posts/<slug>/src/` — assets built outside the render
 
-Thirteen of those eighteen are being migrated out of that tier by the Hugging Face repair work: the two shared venvs above are their replacement environment. A post leaves `LEGACY_NO_ENV` only once it pins a kernel, carries a `requirements.txt` and has been re-rendered, so the count in that set is the live measure of how far along this is.
+Fourteen posts carry a `src/` directory of scripts that run *ahead of* the render, with their output committed. Most hold a `make_cover.py`; some go further — `metagenomics/src/make_figs.py`, `open-source-tts-history/src/make_audio.py` (which writes the committed `audio/*.mp3`), and `bayesian-bootstrap/src/` with a full module set (`bootstrap.py`, `data.py`, `mnist_experiment.py`, `export_widget_data.py`).
 
-That has one consequence worth internalising: **editing a legacy post breaks it.** Quarto keys frozen output on an md5 of the source file, so *any* source edit — even a one-word prose fix — invalidates the record and makes the next project render try to execute a post that cannot execute. If you touch one, build it a venv + kernel + `requirements.txt` first, per the recipe above, and remove its entry from `LEGACY_NO_ENV` in `scripts/check_posts.py`. `make check-posts` enforces both halves of this; run it before any full render. This is not hypothetical — the cover-image commits edited 11 sources without re-rendering and left the freeze cache silently stale for months.
+These scripts are **not** executed by Quarto and are not covered by `_freeze/` or `make check-posts`. Regenerating an asset means running the script yourself and committing the result. They may also carry their own dependency pin (`open-source-tts-history/src/requirements-audio.txt`) and their own venv with no kernel and no post pinning it — `.venv-kokoro` exists solely to run `make_audio.py`, which is why it looks orphaned next to the kernel-backed venvs.
 
-**One post calls a live API.** `llm-agents-from-first-principles` executes an LLM agent against Groq's free tier, so re-executing it needs `GROQ_API_KEY` in the environment — its `.venv-llm-agents` holds only Quarto's execution stack, because `agent.py` is stdlib-only. A *project* render never re-executes it (`freeze: auto`, and its `_freeze/` record is committed), so a keyless clone renders the site fine; only `quarto render posts/llm-agents-from-first-principles/index.qmd` needs the key, since single-document renders always execute. Its captured transcripts are one sample from a stochastic policy, not a reproducible fixed point: re-rendering legitimately changes the published output even at `temperature=0`, so don't re-render it to "refresh" anything, and never edit the transcripts by hand.
+### Why `_freeze/` is committed
 
-**Frontmatter conventions** (see any existing post for a template):
+`_freeze/` is **tracked**, not ignored. Five posts still predate the venv-per-post convention — `data-types`, `features-importance-after-clustering`, `poor-persons-bayesian`, `post-with-code`, `working-with-quarto` — with no pinned kernel, no pinned versions, and dependencies pinned to nothing. Their committed `_freeze/` record is the only reproducible copy of what they compute. It is also what would let the site render in CI with no ML dependencies installed.
+
+`scripts/check_posts.py` grandfathers exactly those five in `LEGACY_NO_ENV`. **Shrink that set, never grow it.** A second exemption, `STALE_FREEZE_OK` (`pinecone-vs-weaviate`, `pyspark`), covers posts whose frozen output is knowingly stale but inert because they have no code cells at all; the checker cancels the exemption automatically if code cells later appear.
+
+**Editing a legacy post breaks it.** Quarto keys frozen output on an md5 of the source, so *any* edit — even a one-word prose fix — invalidates the record and makes the next project render try to execute a post that cannot execute. If you touch one, build it a venv + kernel + `requirements.txt` first and delete its `LEGACY_NO_ENV` entry. This is not hypothetical: the cover-image commits edited 11 sources without re-rendering and left the freeze cache silently stale for months.
+
+### One post calls a live API
+
+`llm-agents-from-first-principles` runs an LLM agent against Groq's free tier, so re-executing it needs `GROQ_API_KEY` — its `.venv-llm-agents` holds only Quarto's execution stack, since `agent.py` is stdlib-only. A *project* render never re-executes it, so a keyless clone renders the site fine; only a single-document render needs the key. Its captured transcripts are one sample from a stochastic policy, not a reproducible fixed point: re-rendering legitimately changes published output even at `temperature=0`. Don't re-render it to "refresh" anything, and never hand-edit the transcripts.
+
+### Frontmatter and assets
+
 ```yaml
 title: "..."
 author: "Ravi Kalia"
@@ -128,16 +146,15 @@ date: "YYYY-MM-DD"
 categories: [Some, Categories]
 image: "./cover.png"
 tags: [some, tags]
-jupyter: <kernel-name>       # only for code-heavy posts pinned to a dedicated venv
+jupyter: <kernel-name>       # tier 1 and tier 2 posts only
 format:
   html:
     toc: true
     code-fold: true
 ```
-The body conventionally opens with `![Title](./cover.png)` echoing the frontmatter `image`. `.ipynb` posts embed this same YAML in a raw first cell instead of a `.qmd` header.
 
-**Cover images**: every post directory should have `./cover.png`. For posts without a natural content-derived cover, the house style is a solid `#4A3AA7` purple card with a translucent rounded category-badge pill top-left (e.g. "ML THEORY & MATH"), a white triple-ring logomark, and bold centered title text (see `posts/topological-data-analysis-clustering/cover.png`). The site favicon (`favicon.png` at repo root, declared via `_quarto.yml`'s `website.favicon`) reuses the same triple-ring mark.
+The body conventionally opens with `![Title](./cover.png)` echoing the frontmatter `image`. `.ipynb` posts embed this same YAML in a raw first cell.
 
-**`posts/_metadata.yml`** applies `freeze: auto` (cache computed output so re-rendering an unchanged post is a no-op) and `title-block-banner: true` to every post.
+**Cover images**: every *new* post gets a `./cover.png` (older posts predate the convention and many have none — not a defect to go fix). Without a natural content-derived cover, the house style is a solid `#4A3AA7` purple card with a translucent rounded category-badge pill top-left (e.g. "ML THEORY & MATH"), a white triple-ring logomark, and bold centered title text — see `posts/topological-data-analysis-clustering/cover.png`, and the `make_cover.py` scripts under `posts/*/src/`. The site favicon (`favicon.png`, declared via `_quarto.yml`'s `website.favicon`) reuses the triple-ring mark.
 
-**`_quarto.yml`** sets `output-dir: docs` and excludes `notes/` from rendering (`render: ["*.qmd", "*.ipynb", "!notes/"]`) — that's a scratch/drafts area, not published content.
+**`posts/_metadata.yml`** applies `freeze: auto` and `title-block-banner: true` to every post. **`_quarto.yml`** sets `output-dir: docs` and excludes `notes/` from rendering — that's a scratch area, not published content.
