@@ -1,0 +1,204 @@
+---
+title: "Wiring an Eval Pipeline to the Claude API"
+subtitle: "The judge becomes a component when its verdict has a type"
+description: "\"Reply with JSON only\" is a request, not a guarantee. Structured outputs turn the rubric into a contract the API enforces — and once the verdict is a typed object, the rest of the pipeline is a batch job and two ratios."
+author: "Ravi Kalia"
+date: "2026-08-10"
+categories: [LLM, Evaluation, AI Engineering]
+image: "./cover.png"
+tags: [evals, llm-as-judge, claude-api, structured-outputs, batches, groundedness]
+jupyter: blog-base
+format:
+  html:
+    toc: true
+    code-fold: false
+---
+
+![Wiring an Eval Pipeline to the Claude API](./cover.png)
+
+You have the groundedness judge from [the previous post](../prompt-evaluation-pipelines/index.qmd), ending in a
+line that asks for JSON only. You `json.loads()` the reply and it works — until one answer arrives wrapped in a
+markdown fence and the harness dies at case 37 of 200.
+
+"Reply with JSON only" is a request. A judge becomes a component the moment its verdict is a typed object the
+harness can fail on.
+
+## A schema turns the rubric into a contract
+
+`messages.parse()` constrains the response to a Pydantic model, so the format instruction leaves the rubric
+entirely and the parse step disappears:
+
+```{python}
+#| eval: false
+from typing import Literal
+
+from anthropic import Anthropic
+from pydantic import BaseModel, ConfigDict
+
+client = Anthropic()
+
+RUBRIC = """You are checking whether an ANSWER is fully supported by the CONTEXT.
+
+CONTEXT:
+{context}
+
+ANSWER:
+{answer}
+
+Decompose the ANSWER into individual factual claims. A claim is supported only
+if it is stated in or directly entailed by the CONTEXT. General knowledge does
+not count as support."""
+
+
+class Verdict(BaseModel):
+    """One judge's reading of one answer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    unsupported_claims: list[str]
+    verdict: Literal["pass", "fail"]
+
+
+def judge(context: str, answer: str) -> Verdict:
+    """Score one answer for groundedness against its retrieved context."""
+    response = client.messages.parse(
+        model="claude-opus-5",
+        max_tokens=16000,
+        messages=[
+            {"role": "user", "content": RUBRIC.format(context=context, answer=answer)}
+        ],
+        output_format=Verdict,
+    )
+    if response.parsed_output is None:
+        raise RuntimeError(f"no verdict for this case: {response.stop_reason}")
+    return response.parsed_output
+```
+
+Field order carries weight: `unsupported_claims` is generated before `verdict`, so the model commits to
+evidence before label. `max_tokens` is generous because it caps thinking and reply *together*: truncate a judge
+mid-reason and `parsed_output` comes back `None`. Illustratively:
+
+```text
+Verdict(unsupported_claims=['Refunds can also be issued as store credit.'],
+        verdict='fail')
+```
+
+A typed verdict is worth only as much as the cases you feed it.
+
+## The test set is the instrument, not the input
+
+The data is synthetic: six hand-written `(context, answer)` pairs standing in for a support assistant over a
+company's help-centre articles — the context is what a retriever pulled, the label what a human reviewer said.
+Three are grounded; three carry one fabricated claim phrased in the documentation's own vocabulary — an
+invented processing SLA, say. That is the failure with money behind it: a confidently wrong instruction to a
+customer costs more than "I don't know". Synthetic wins here because the quantity we want, judge–human
+agreement, needs known labels.
+
+```{python}
+#| eval: false
+CASES = [
+    {
+        "id": "refund-window-grounded",
+        "context": "Refunds are available within 30 days of purchase. Once "
+        "approved, the amount returns to the original payment method.",
+        "answer": "You can request a refund within 30 days, and it goes back "
+        "to the card you paid with.",
+        "label": "pass",
+    },
+    {
+        "id": "refund-window-invented-sla",
+        "context": "Refunds are available within 30 days of purchase. Once "
+        "approved, the amount returns to the original payment method.",
+        "answer": "You can request a refund within 30 days. Refunds are "
+        "processed within 3 business days.",
+        "label": "fail",
+    },
+    # ...four more, three grounded and three ungrounded in total.
+]
+```
+
+## Batches turn the scoring loop into a job
+
+Judges are the expensive part of a suite. The Batches API submits every case at once, at half the per-token
+price:
+
+```{python}
+#| eval: false
+import time
+
+from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+from anthropic.types.messages.batch_create_params import Request
+
+batch = client.messages.batches.create(
+    requests=[
+        Request(
+            custom_id=case["id"],
+            params=MessageCreateParamsNonStreaming(
+                model="claude-opus-5",
+                max_tokens=16000,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": RUBRIC.format(
+                            context=case["context"], answer=case["answer"]
+                        ),
+                    }
+                ],
+                output_config={
+                    "format": {
+                        "type": "json_schema",
+                        "schema": Verdict.model_json_schema(),
+                    }
+                },
+            ),
+        )
+        for case in CASES
+    ]
+)
+
+while client.messages.batches.retrieve(batch.id).processing_status != "ended":
+    time.sleep(30)
+```
+
+The batch path takes the canonical `output_config.format` rather than `parse()`'s `output_format=`, so you hand
+it a raw schema — and `extra="forbid"` is what makes that schema legal, since the API's strict subset requires
+`additionalProperties: false`. Results arrive in **any** order, so cases are keyed by `custom_id`, never by
+position:
+
+```{python}
+#| eval: false
+verdicts = {}
+for result in client.messages.batches.results(batch.id):
+    if result.result.type != "succeeded":
+        raise RuntimeError(f"{result.custom_id}: {result.result.type}")
+    message = result.result.message
+    text = next((b.text for b in message.content if b.type == "text"), None)
+    if text is None or message.stop_reason != "end_turn":
+        raise RuntimeError(f"{result.custom_id}: {message.stop_reason}")
+    verdicts[result.custom_id] = Verdict.model_validate_json(text)
+
+labels = {case["id"]: case["label"] for case in CASES}
+pass_rate = sum(v.verdict == "pass" for v in verdicts.values()) / len(verdicts)
+agreement = sum(verdicts[i].verdict == labels[i] for i in labels) / len(labels)
+```
+
+`succeeded` is a transport verdict, not a content one — a refused or truncated case lands there carrying no
+text block, or half of one, which is why the guard checks `stop_reason` rather than trusting a string that
+parses. Every raise carries the `custom_id`, so a failure names the case instead of dying anonymously at 37 of
+200. The six cases would plausibly give:
+
+```text
+pass rate                   0.67
+agreement with labels       0.83  (5/6)
+disagreement                refund-window-invented-sla: judged pass, labelled fail
+```
+
+## What the two numbers are for
+
+The pass rate is the number people quote; agreement is what licenses quoting it. The case the judge missed is
+the invented SLA — the hallucination wearing the documentation's vocabulary, the failure this exists to catch.
+One disagreement in six is how you learn you haven't caught it.
+
+Which is where this stops. Six cases is a demonstration; a calibration set is fifty to a couple of hundred,
+re-run whenever the provider updates the model underneath you. And none of it measures the retriever. Typed
+verdicts buy a pipeline that fails loudly, not a judge you can trust unmeasured.
