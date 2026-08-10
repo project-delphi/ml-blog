@@ -27,8 +27,8 @@ kernel:
 # would silently repoint them at the dependency-free .venv and break every
 # targeted render. Only missing names are registered.
 kernels-stub: install
-	@for k in bayesian-bootstrap-blog explainability-blog ipm-blog sir-blog \
-	          skills-vs-commands svm-margin-blog tda-blog tda-filtered-blog \
+	@for k in bayesian-bootstrap-blog causality-blog explainability-blog ipm-blog \
+	          sir-blog skills-vs-commands svm-margin-blog tda-blog tda-filtered-blog \
 	          tda-svm-blog tribes-blog huggingface-blog huggingface-t4-blog \
 	          llm-agents llm-agent-memory recursive-inversion blog-base; do \
 	  if .venv/bin/python -c "import sys;from jupyter_client.kernelspec import KernelSpecManager as K;sys.exit(0 if '$$k' in K().find_kernel_specs() else 1)"; then \
