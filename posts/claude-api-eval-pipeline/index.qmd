@@ -33,7 +33,7 @@ entirely and the parse step disappears:
 from typing import Literal
 
 from anthropic import Anthropic
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 client = Anthropic()
 
@@ -47,7 +47,7 @@ ANSWER:
 
 Decompose the ANSWER into individual factual claims. A claim is supported only
 if it is stated in or directly entailed by the CONTEXT. General knowledge does
-not count as support."""
+not count as support. The verdict is "fail" if any claim is unsupported."""
 
 
 class Verdict(BaseModel):
@@ -61,22 +61,26 @@ class Verdict(BaseModel):
 
 def judge(context: str, answer: str) -> Verdict:
     """Score one answer for groundedness against its retrieved context."""
-    response = client.messages.parse(
-        model="claude-opus-5",
-        max_tokens=16000,
-        messages=[
-            {"role": "user", "content": RUBRIC.format(context=context, answer=answer)}
-        ],
-        output_format=Verdict,
-    )
-    if response.parsed_output is None:
-        raise RuntimeError(f"no verdict for this case: {response.stop_reason}")
+    try:
+        response = client.messages.parse(
+            model="claude-opus-5",
+            max_tokens=16000,
+            messages=[
+                {"role": "user", "content": RUBRIC.format(context=context, answer=answer)}
+            ],
+            output_format=Verdict,
+        )
+    except ValidationError as exc:  # budget ran out mid-JSON: parse() raises
+        raise RuntimeError(f"unparseable verdict: {exc}") from exc
+    if response.parsed_output is None:  # refusal, or budget spent inside thinking
+        raise RuntimeError(f"no verdict: {response.stop_reason}")
     return response.parsed_output
 ```
 
 Field order carries weight: `unsupported_claims` is generated before `verdict`, so the model commits to
-evidence before label. `max_tokens` is generous because it caps thinking and reply *together*: truncate a judge
-mid-reason and `parsed_output` comes back `None`. Illustratively:
+evidence before label. `max_tokens` is generous because it caps thinking and reply *together* — and running out
+fails two ways one guard can't cover: spend it inside the thinking and there is no text, so `parsed_output` is
+`None`; spend it mid-JSON and `parse()` raises before you have a response to inspect. Illustratively:
 
 ```text
 Verdict(unsupported_claims=['Refunds can also be issued as store credit.'],
@@ -88,11 +92,10 @@ A typed verdict is worth only as much as the cases you feed it.
 ## The test set is the instrument, not the input
 
 The data is synthetic: six hand-written `(context, answer)` pairs standing in for a support assistant over a
-company's help-centre articles — the context is what a retriever pulled, the label what a human reviewer said.
-Three are grounded; three carry one fabricated claim phrased in the documentation's own vocabulary — an
-invented processing SLA, say. That is the failure with money behind it: a confidently wrong instruction to a
-customer costs more than "I don't know". Synthetic wins here because the quantity we want, judge–human
-agreement, needs known labels.
+company's help-centre articles — context is what a retriever pulled, the label what a human reviewer said.
+Three are grounded; three carry one fabricated claim in the documentation's own vocabulary, an invented
+processing SLA say. That is the failure with money behind it: a confidently wrong instruction costs more than
+"I don't know". Synthetic wins because the quantity we want, judge–human agreement, needs known labels.
 
 ```{python}
 #| eval: false
@@ -160,21 +163,24 @@ while client.messages.batches.retrieve(batch.id).processing_status != "ended":
     time.sleep(30)
 ```
 
-The batch path takes the canonical `output_config.format` rather than `parse()`'s `output_format=`, so you hand
-it a raw schema — and `extra="forbid"` is what makes that schema legal, since the API's strict subset requires
-`additionalProperties: false`. Results arrive in **any** order, so cases are keyed by `custom_id`, never by
-position:
+The batch path takes `output_config.format` rather than `parse()`'s `output_format=`, so you hand it a raw
+schema — and `extra="forbid"` makes that schema legal, since the strict subset requires
+`additionalProperties: false`. Results arrive in **any** order, so cases key on `custom_id`, never position:
 
 ```{python}
 #| eval: false
 verdicts = {}
 for result in client.messages.batches.results(batch.id):
+    if result.result.type == "errored":
+        raise RuntimeError(f"{result.custom_id}: {result.result.error}")
     if result.result.type != "succeeded":
         raise RuntimeError(f"{result.custom_id}: {result.result.type}")
     message = result.result.message
+    if message.stop_reason != "end_turn":
+        raise RuntimeError(f"{result.custom_id}: stopped on {message.stop_reason}")
     text = next((b.text for b in message.content if b.type == "text"), None)
-    if text is None or message.stop_reason != "end_turn":
-        raise RuntimeError(f"{result.custom_id}: {message.stop_reason}")
+    if text is None:
+        raise RuntimeError(f"{result.custom_id}: completed turn with no text block")
     verdicts[result.custom_id] = Verdict.model_validate_json(text)
 
 labels = {case["id"]: case["label"] for case in CASES}
@@ -182,10 +188,10 @@ pass_rate = sum(v.verdict == "pass" for v in verdicts.values()) / len(verdicts)
 agreement = sum(verdicts[i].verdict == labels[i] for i in labels) / len(labels)
 ```
 
-`succeeded` is a transport verdict, not a content one — a refused or truncated case lands there carrying no
-text block, or half of one, which is why the guard checks `stop_reason` rather than trusting a string that
-parses. Every raise carries the `custom_id`, so a failure names the case instead of dying anonymously at 37 of
-200. The six cases would plausibly give:
+`succeeded` is a transport verdict, not a content one: a refused or truncated case lands there with no text
+block, or half of one — hence the `stop_reason` check rather than trusting a string that parses. Each raise
+names the case and what distinguished it, so failures are diagnosable rather than anonymous. The six cases
+would plausibly give:
 
 ```text
 pass rate                   0.67
