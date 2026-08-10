@@ -6,6 +6,11 @@
 2. Every post's frozen output must match its current source, because a
    project render re-executes anything whose source hash has drifted --
    and for the legacy posts there is no environment left to execute in.
+3. Every kernel a post pins must be registered by `make kernels-stub`.
+   Quarto resolves kernelspecs while *indexing* the project, before it
+   consults _freeze/, so one missing name fails the entire render on a
+   fresh clone -- while passing silently on the laptop that happens to
+   have the real kernel installed.
 
 Invariant 2 is the one that actually bit: the cover-image commits edited
 11 post sources without re-rendering, silently marking their frozen output
@@ -25,6 +30,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 POSTS = ROOT / "posts"
 FREEZE = ROOT / "_freeze" / "posts"
+MAKEFILE = ROOT / "Makefile"
+
+# The kernel list inside the kernels-stub recipe: `@for k in a b \<newline> c; do`
+STUB_LIST_RE = re.compile(r"for k in\s+(.*?);\s*do", re.S)
 
 CELL_RE = re.compile(r"^```\{(\w+)\}\n(.*?)^```", re.S | re.M)
 EVAL_FALSE_RE = re.compile(r"#\|\s*eval:\s*false")
@@ -122,29 +131,59 @@ def check_freeze(slug: str, source: Path, executes: bool) -> list[str]:
     ]
 
 
+def stubbed_kernels() -> set[str]:
+    """Read the kernel names `make kernels-stub` registers."""
+    match = STUB_LIST_RE.search(MAKEFILE.read_text())
+    if not match:
+        return set()
+    return set(match.group(1).replace("\\", "").split())
+
+
+def check_kernel_stubs(pinned: dict[str, str]) -> list[str]:
+    """Require every pinned kernel to be one `make kernels-stub` registers."""
+    stubbed = stubbed_kernels()
+    if not stubbed:
+        return ["could not parse the kernel list out of the kernels-stub recipe."]
+    return [
+        f"`{kernel}` is pinned by posts/{slug}/index.qmd but is not in the "
+        "kernels-stub list, so a fresh clone cannot render *any* page. Add it "
+        "to the Makefile."
+        for slug, kernel in sorted(pinned.items())
+        if kernel not in stubbed
+    ]
+
+
 def main() -> int:
     failures: dict[str, list[str]] = {}
+    pinned: dict[str, str] = {}
     for post_dir in sorted(p for p in POSTS.iterdir() if p.is_dir()):
         source = post_dir / "index.qmd"
         if not source.exists():
             continue  # .ipynb posts carry their own stored outputs
         text = source.read_text(errors="ignore")
         executes = executes_code(text)
+        kernel = KERNEL_RE.search(text)
+        if kernel:
+            pinned[post_dir.name] = kernel.group(1)
         problems = check_freeze(post_dir.name, source, executes)
         if executes:
             problems += check_environment(post_dir.name, text, post_dir)
         if problems:
-            failures[post_dir.name] = problems
+            failures[f"posts/{post_dir.name}/index.qmd"] = problems
+
+    stub_problems = check_kernel_stubs(pinned)
+    if stub_problems:
+        failures["Makefile (kernels-stub)"] = stub_problems
 
     if not failures:
         print(f"check-posts: OK ({len(LEGACY_NO_ENV)} legacy posts grandfathered)")
         return 0
 
-    for slug, problems in failures.items():
-        print(f"\nposts/{slug}/index.qmd")
+    for where, problems in failures.items():
+        print(f"\n{where}")
         for p in problems:
             print(f"  - {p}")
-    print(f"\ncheck-posts: {len(failures)} post(s) need attention")
+    print(f"\ncheck-posts: {len(failures)} file(s) need attention")
     return 1
 
 
