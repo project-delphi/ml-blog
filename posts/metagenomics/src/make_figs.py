@@ -340,8 +340,14 @@ def fig_pipeline() -> None:
     ax.text(
         50,
         7.5,
+        # Only the shotgun route is drawn above, so only nf-core/mag can be
+        # claimed to wrap it. QIIME 2 is an amplicon workflow and processes no
+        # branch in this figure -- say so rather than implying it sits here.
+        # Two lines: one long enough to overflow the axes forces tight_layout
+        # to widen them past the figure edge and clip the boxes above.
         "Wrapped end to end, with a record of exactly what ran:   "
-        "QIIME 2 (amplicon)   ·   nf-core/mag (assembly → binning → annotation)",
+        "nf-core/mag (assembly → binning → annotation).\n"
+        "QIIME 2 wraps the amplicon route, which this figure does not draw.",
         ha="center",
         va="center",
         fontsize=9.2,

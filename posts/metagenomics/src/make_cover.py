@@ -29,7 +29,7 @@ WHITE = "#FFFFFF"
 WIDTH, HEIGHT = 1200, 630
 DPI = 100
 
-BADGE = "GENOMICS & DATA"
+BADGE = "BIOLOGY & GENOMICS"
 TITLE = ["Metagenomics", "Reading the Life That Won't Grow"]
 
 
@@ -48,7 +48,7 @@ def main() -> int:
     ax.set_facecolor(PURPLE)
 
     # Category pill, top-left.
-    pill_w = 252
+    pill_w = 296
     ax.add_patch(
         FancyBboxPatch(
             (54, 40),
@@ -93,7 +93,7 @@ def main() -> int:
             446 + k * 74,
             line,
             color=WHITE,
-            fontsize=42,
+            fontsize=34,
             fontweight="bold",
             ha="center",
             va="center",
