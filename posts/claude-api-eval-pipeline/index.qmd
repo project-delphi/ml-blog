@@ -63,17 +63,21 @@ def judge(context: str, answer: str) -> Verdict:
     """Score one answer for groundedness against its retrieved context."""
     response = client.messages.parse(
         model="claude-opus-5",
-        max_tokens=1024,
+        max_tokens=8192,
         messages=[
             {"role": "user", "content": RUBRIC.format(context=context, answer=answer)}
         ],
         output_format=Verdict,
     )
+    if response.parsed_output is None:
+        raise RuntimeError(f"no verdict for this case: {response.stop_reason}")
     return response.parsed_output
 ```
 
 Field order carries weight: `unsupported_claims` is generated before `verdict`, so the model commits to
-evidence before label and a failure arrives with its reason. Illustratively:
+evidence before label. `max_tokens` is generous because it caps thinking and reply *together* — truncate a
+judge mid-reason and you get back the malformed JSON this was all meant to eliminate, with `parsed_output` set
+to `None`. Illustratively:
 
 ```text
 Verdict(unsupported_claims=['Refunds are processed within 3 business days.'],
@@ -87,9 +91,9 @@ A typed verdict is worth only as much as the cases you feed it.
 The data is synthetic: six hand-written `(context, answer)` pairs standing in for a support assistant over a
 company's help-centre articles — the context is what a retriever pulled, the label what a human reviewer said.
 Three are grounded; three carry one fabricated claim phrased in the documentation's own vocabulary — an
-invented processing SLA, a support channel that doesn't exist — the failure with money behind it, since a
-confidently wrong instruction to a customer costs more than "I don't know". Synthetic wins here because the
-quantity we want, judge–human agreement, needs known labels.
+invented processing SLA, say. That is the failure with money behind it: a confidently wrong instruction to a
+customer costs more than "I don't know". Synthetic wins here because the quantity we want, judge–human
+agreement, needs known labels.
 
 ```{python}
 #| eval: false
@@ -132,7 +136,7 @@ batch = client.messages.batches.create(
             custom_id=case["id"],
             params=MessageCreateParamsNonStreaming(
                 model="claude-opus-5",
-                max_tokens=1024,
+                max_tokens=8192,
                 messages=[
                     {
                         "role": "user",
@@ -168,7 +172,10 @@ verdicts = {}
 for result in client.messages.batches.results(batch.id):
     if result.result.type != "succeeded":
         raise RuntimeError(f"{result.custom_id}: {result.result.type}")
-    text = next(b.text for b in result.result.message.content if b.type == "text")
+    message = result.result.message
+    text = next((b.text for b in message.content if b.type == "text"), None)
+    if text is None:
+        raise RuntimeError(f"{result.custom_id}: no text ({message.stop_reason})")
     verdicts[result.custom_id] = Verdict.model_validate_json(text)
 
 labels = {case["id"]: case["label"] for case in CASES}
@@ -176,8 +183,9 @@ pass_rate = sum(v.verdict == "pass" for v in verdicts.values()) / len(verdicts)
 agreement = sum(verdicts[i].verdict == labels[i] for i in labels) / len(labels)
 ```
 
-A malformed reply now raises rather than scoring — a stack trace instead of a number that looks fine. The six
-cases would plausibly give:
+`succeeded` is a transport verdict, not a content one — a refused or truncated case lands there carrying no
+text block. Both guards raise and name the case, so a failure is a stack trace rather than a number that looks
+fine. The six cases would plausibly give:
 
 ```text
 pass rate                   0.67
@@ -187,10 +195,10 @@ disagreement                refund-window-invented-sla: judged pass, labelled fa
 
 ## What the two numbers are for
 
-The pass rate is the number people quote; agreement is what licenses quoting it. The one case the judge missed
-is the invented SLA — the hallucination wearing the documentation's vocabulary, which is the failure the
-exercise exists to catch. One disagreement in six is how you learn you haven't caught it.
+The pass rate is the number people quote; agreement is what licenses quoting it. The case the judge missed is
+the invented SLA — the hallucination wearing the documentation's vocabulary, the failure this exists to catch.
+One disagreement in six is how you learn you haven't caught it.
 
 Which is where this stops. Six cases is a demonstration; a calibration set is fifty to a couple of hundred,
 re-run whenever the provider updates the model underneath you. And none of it measures the retriever. Typed
-verdicts buy a pipeline that fails loudly and aggregates honestly, not a judge you can trust unmeasured.
+verdicts buy a pipeline that fails loudly, not a judge you can trust unmeasured.
