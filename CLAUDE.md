@@ -28,7 +28,7 @@ This is enforced. `.claude/settings.json` registers a `PreToolUse` hook on `Bash
 
 **Put that link last.** It goes at the very end of the reply, after the summary, caveats and any list of what was skipped — the final thing on screen, on its own line, so it is never buried mid-message and never needs scrolling back to find. One link per reply; if several posts changed, link the one the work was about and mention the others by slug.
 
-Once the change is merged the preview server is gone (see below), so there is no localhost link left to give. On that final reply, end with the published URL instead — `https://project-delphi.github.io/ml-blog/posts/<slug>/` — after the confirmation that no server survived.
+Once the change is merged the preview server is gone (see below), so there is no localhost link left to give. On that final reply, end with the published URL instead — `https://project-delphi.github.io/ml-blog/posts/<slug>/` — after the confirmation that no server survived. Say that it goes live once Pages rebuilds: the deploy is asynchronous, so that URL 404s for a minute or two after the merge commit lands.
 
 **Kill every preview server once the change is merged**, then confirm nothing survives (`pgrep -fl "quarto preview"` silent; no Python listener rooted in this repo) and say so in the wrap-up:
 
