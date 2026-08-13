@@ -1,0 +1,154 @@
+---
+title: "The Directions a Matrix Refuses to Turn"
+author: "Ravi Kalia"
+date: "2026-08-13"
+categories: [Linear Algebra, Mathematics]
+image: "./cover.png"
+tags: [eigenvalues, eigenvectors, eigendecomposition, linear algebra]
+jupyter: eigen-blog
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: show
+---
+
+![The Directions a Matrix Refuses to Turn](./cover.png)
+
+A matrix does two things to a vector: it turns it and stretches it. Feed in
+almost any direction and you get both. But most matrices have a few directions
+that come back pointing *exactly where they started*, just longer or shorter.
+Those are the **eigenvectors**, and the stretch is the **eigenvalue**.
+
+## Every matrix has a few directions it only stretches
+
+$A = \begin{bmatrix} 4 & 1 \\ 2 & 3 \end{bmatrix}$ is made up, not measured —
+one step of a two-group population model. These four whole numbers give
+eigenvalues of exactly 5 and 2, keeping the arithmetic out of the way. A real
+one would have hundreds of dimensions and messy decimal eigenvalues, which you
+could not draw — and drawing it is the point. Also, $A$ is not symmetric — that
+matters shortly.
+
+`numpy.linalg.eig` hands you both at once:
+
+```{python}
+import numpy as np
+
+np.set_printoptions(precision=3, suppress=True)
+
+A = np.array([[4.0, 1.0], [2.0, 3.0]])
+vals, vecs = np.linalg.eig(A)
+
+# numpy 2.x returns complex dtype from eig even when every eigenvalue is real,
+# as they are here. It also returns unit-length eigenvectors; since these are
+# defined only up to scale, rescale each to start with a 1 so the whole numbers
+# below match the text. (Fine here -- a zero first entry would need another
+# pivot, and a rotation matrix has no real eigenvector to rescale at all.)
+vals, vecs = vals.real, vecs.real
+vecs = vecs / vecs[0]
+
+for lam, v in zip(vals, vecs.T):
+    print(f"lambda = {lam:5.2f}   eigenvector = {v}   A @ v = {A @ v}")
+```
+
+Both do what they promise: `A @ v` is `v` with every number multiplied by the
+same amount.
+
+## $A = PDP^{-1}$ is that idea written as a formula
+
+Put the eigenvectors in the columns of $P$, their eigenvalues down the diagonal
+of $D$, and you can rebuild the matrix:
+
+$$A = PDP^{-1}, \qquad P = \begin{bmatrix} v_1 & v_2 \end{bmatrix}, \qquad D =
+\begin{bmatrix} \lambda_1 & 0 \\ 0 & \lambda_2 \end{bmatrix}.$$
+
+Read it right to left: $P^{-1}$ redescribes a vector in eigenvector terms, $D$
+stretches each part by its own eigenvalue, and $P$ converts back. The eigenvalues come from the characteristic equation
+$\det(A - \lambda I) = 0$, here $\lambda^2 - 7\lambda + 10 = 0$.
+
+Multiplying the three back together gives $A$. Drawing the map on a circle of
+unit vectors shows why the eigenvectors are special:
+
+```{python}
+import matplotlib.pyplot as plt
+
+ACCENT = "#4A3AA7"
+GREY = "#999999"
+
+P = vecs
+D = np.diag(vals)
+print(f"max |A - P D P^-1| = {np.abs(A - P @ D @ np.linalg.inv(P)).max():.2e}")
+
+theta = np.linspace(0, 2 * np.pi, 400)
+circle = np.vstack([np.cos(theta), np.sin(theta)])
+image = A @ circle
+
+fig, ax = plt.subplots(figsize=(6.2, 6.2))
+ax.axhline(0, color="0.85", lw=1, zorder=0)
+ax.axvline(0, color="0.85", lw=1, zorder=0)
+ax.plot(*circle, color=GREY, lw=1.3, label="unit circle")
+ax.plot(*image, color="#444444", lw=1.6, label="image under $A$")
+
+for k, (lam, v) in enumerate(zip(vals, vecs.T)):
+    u = v / np.linalg.norm(v)
+    ax.annotate(
+        "",
+        xy=lam * u,
+        xytext=(0, 0),
+        arrowprops=dict(arrowstyle="-|>", color=ACCENT, lw=2.2, shrinkA=0, shrinkB=0),
+        zorder=3,
+    )
+    # Mark where the eigenvector meets the unit circle: the arrow is that same
+    # point scaled by lambda, and its tip lands back on the ellipse.
+    ax.plot(*u, marker="o", ms=6, color="white", mec=ACCENT, mew=1.8, zorder=5)
+    ax.plot([], [], color=ACCENT, lw=2.2, label=f"eigenvector, $\\lambda = {lam:.0f}$")
+    ax.annotate(
+        f"$\\lambda_{k + 1} = {lam:.0f}$",
+        xy=lam * u,
+        xytext=(16, 12 * np.sign(u[1])),
+        textcoords="offset points",
+        color=ACCENT,
+        fontsize=11,
+        va="center",
+    )
+
+ax.set_aspect("equal")
+ax.set_xlim(-6, 6)
+ax.set_ylim(-6, 6)
+ax.grid(False)
+for side in ("top", "right"):
+    ax.spines[side].set_visible(False)
+ax.legend(frameon=False, loc="upper left", fontsize=10)
+ax.set_title("Dots: unit eigenvectors on the circle. Arrows: their images under $A$.",
+             fontsize=10, color="0.3")
+plt.show()
+```
+
+The circle becomes an ellipse, and the purple arrows land near its long and
+short axes but not on them. That near miss is real, not a bug: those axes belong
+to $A$'s *singular* vectors, which match the eigenvectors only for a symmetric
+matrix.
+
+## Diagonal matrices turn repeated work into simple arithmetic
+
+The payoff comes when you apply $A$ repeatedly. Each inner $P^{-1}P$ cancels,
+leaving $A^k = PD^kP^{-1}$ — raising a matrix to the hundredth power becomes
+raising two *numbers* to that power, and the bigger eigenvalue soon takes over.
+That is why it appears wherever a map runs again and again.
+
+| Concept | What it is | Where it shows up |
+|---|---|---|
+| Eigenvector | a direction $v$ with $Av = \lambda v$ | PCA's principal axes |
+| Eigenvalue | the scale factor $\lambda$ along $v$ | variance explained |
+| Characteristic equation | $\det(A - \lambda I) = 0$ | finding the spectrum |
+| Decomposition | $A = PDP^{-1}$ | Markov chain steady states |
+| When it exists | $n$ independent eigenvectors (diagonalizable) | vibration normal modes |
+
+So the directions a matrix refuses to turn give you the viewpoint where it stops
+being a matrix and becomes a short list of numbers. It breaks for a rotation,
+which turns every direction and has no real eigenvector at all, and for
+defective matrices, which lack the independent eigenvectors to fill $P$. And
+since this $A$ is not symmetric, its eigenvectors are not at right angles, so
+$P^{-1} \neq P^{\top}$ and the switch can go numerically wobbly — the reason
+[Matrix Factorizations as Optimization Problems](../matrix-factorizations/)
+reaches for the SVD instead.
