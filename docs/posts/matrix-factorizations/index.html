@@ -244,7 +244,7 @@ window.Quarto = {
 </figure>
 </div>
 <p>Every factorization here is the closed-form answer to a constrained optimization problem — you just don’t usually see the constraint written down. QR is OLS refusing to square its condition number. Truncated SVD is the provably best solution to “compress this matrix.” Eigendecomposition falls out of maximizing variance along one direction instead of building two orthogonal bases. NMF is SVD’s optimum with a sign constraint bolted on. Cholesky is a positive-definite solve that stops re-deriving the inverse every time. Picking a factorization is picking which constraint buys stability, compression, or interpretability.</p>
-<div id="be5553e6" class="cell" data-execution_count="1">
+<div id="c3ec2545" class="cell" data-execution_count="1">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> io</span>
@@ -268,8 +268,21 @@ window.Quarto = {
 </div>
 <section id="squaring-the-condition-number-is-the-hidden-cost-of-the-normal-equations" class="level2">
 <h2 class="anchored" data-anchor-id="squaring-the-condition-number-is-the-hidden-cost-of-the-normal-equations">Squaring the condition number is the hidden cost of the normal equations</h2>
-<p>Ordinary least squares minimizes <span class="math inline">\(\|y-X\beta\|_2^2\)</span>, solved by the normal equations <span class="math inline">\(\hat\beta=(X^TX)^{-1}X^Ty\)</span>. The catch is conditioning: since <span class="math inline">\(X^TX\)</span>’s eigenvalues are <span class="math inline">\(X\)</span>’s squared singular values, <span class="math inline">\(\kappa(X^TX)=\kappa(X)^2\)</span> — that’s the one-line proof, straight from the definition of <span class="math inline">\(A^TA\)</span>’s eigenvalues. Solving with a matrix that ill-conditioned amplifies floating-point error roughly as <span class="math inline">\(\kappa(X)^2\varepsilon\)</span> instead of <span class="math inline">\(\kappa(X)\varepsilon\)</span>. Factor <span class="math inline">\(X=QR\)</span> with <span class="math inline">\(Q\)</span> orthonormal (<span class="math inline">\(\kappa(Q)=1\)</span>) and substitute into the normal equations: <span class="math inline">\(R^TQ^TQR\beta=R^TQ^Ty \Rightarrow R^TR\beta=R^TQ^Ty\)</span>, and since <span class="math inline">\(R^T\)</span> is invertible, <span class="math inline">\(R\beta=Q^Ty\)</span>. Back-substitution solves this in <span class="math inline">\(O(n^2)\)</span>, conditioned on <span class="math inline">\(\kappa(X)\)</span> — never <span class="math inline">\(\kappa(X)^2\)</span> — because <span class="math inline">\(X^TX\)</span> is never formed.</p>
-<div id="db2ccea4" class="cell" data-execution_count="2">
+<p>Ordinary least squares minimizes the residual</p>
+<p><span class="math display">\[\min_\beta \|y-X\beta\|_2^2,\]</span></p>
+<p>solved by the normal equations</p>
+<p><span class="math display">\[\hat\beta=(X^TX)^{-1}X^Ty.\]</span></p>
+<p>The catch is conditioning. <span class="math inline">\(X^TX\)</span>’s eigenvalues are <span class="math inline">\(X\)</span>’s squared singular values, so</p>
+<p><span class="math display">\[\kappa(X^TX)=\kappa(X)^2\]</span></p>
+<p>— the whole proof, from the definition of <span class="math inline">\(A^TA\)</span>’s eigenvalues. An ill-conditioned solve amplifies floating-point error roughly as <span class="math inline">\(\kappa(X)^2\varepsilon\)</span> instead of <span class="math inline">\(\kappa(X)\varepsilon\)</span>, where <span class="math inline">\(\varepsilon\)</span> is machine precision.</p>
+<p>Factor <span class="math inline">\(X=QR\)</span> with <span class="math inline">\(Q\)</span> orthonormal (<span class="math inline">\(\kappa(Q)=1\)</span>) and substitute:</p>
+<p><span class="math display">\[R^TQ^TQR\beta=R^TQ^Ty.\]</span></p>
+<p><span class="math inline">\(Q^TQ=I\)</span> gives</p>
+<p><span class="math display">\[R^TR\beta=R^TQ^Ty,\]</span></p>
+<p>and since <span class="math inline">\(R^T\)</span> is invertible, both sides cancel it, leaving</p>
+<p><span class="math display">\[R\beta=Q^Ty.\]</span></p>
+<p>Back-substitution solves this in <span class="math inline">\(O(n^2)\)</span>, conditioned on <span class="math inline">\(\kappa(X)\)</span> — never <span class="math inline">\(\kappa(X)^2\)</span> — because <span class="math inline">\(X^TX\)</span> is never formed.</p>
+<div id="c2c6a108" class="cell" data-execution_count="2">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Build X with a controlled condition number instead of a raw high-degree</span></span>
@@ -305,8 +318,14 @@ cond(X.T@X) = 1.000e+12
 </section>
 <section id="truncating-the-svd-is-the-only-rank-k-approximation-optimization-cant-beat" class="level2">
 <h2 class="anchored" data-anchor-id="truncating-the-svd-is-the-only-rank-k-approximation-optimization-cant-beat">Truncating the SVD is the only rank-k approximation optimization can’t beat</h2>
-<p>Truncated SVD isn’t just a good low-rank approximation — Eckart-Young-Mirsky says it’s the <em>best</em> one, full stop. For <span class="math inline">\(A=U\Sigma V^T\)</span> and any <span class="math inline">\(B\)</span> with rank<span class="math inline">\((B)\le k\)</span>, <span class="math inline">\(\|A-B\|_F\ge\sqrt{\sum_{i&gt;k}\sigma_i^2}\)</span>, with equality exactly at <span class="math inline">\(A_k=\sum_{i\le k}\sigma_iu_iv_i^T\)</span>. The proof runs through Courant-Fischer: any rank-<span class="math inline">\(k\)</span> <span class="math inline">\(B\)</span> vanishes on some <span class="math inline">\((n-k)\)</span>-dimensional subspace, which lower-bounds its residual by the tail singular values no matter how <span class="math inline">\(B\)</span> is chosen. That’s a statement about <em>every</em> rank-<span class="math inline">\(k\)</span> matrix, not just other factorizations — nothing beats truncated SVD on Frobenius error at a given rank.</p>
-<div id="6695ecc8" class="cell" data-execution_count="3">
+<p>Truncated SVD isn’t just a good low-rank approximation — Eckart-Young-Mirsky says it’s the <em>best</em> one, full stop. Write the SVD as</p>
+<p><span class="math display">\[A=U\Sigma V^T.\]</span></p>
+<p>For any <span class="math inline">\(B\)</span> with rank<span class="math inline">\((B)\le k\)</span>, the theorem bounds the error:</p>
+<p><span class="math display">\[\|A-B\|_F \ge \sqrt{\sum_{i&gt;k}\sigma_i^2},\]</span></p>
+<p>with equality exactly at the truncation</p>
+<p><span class="math display">\[A_k=\sum_{i\le k}\sigma_i u_i v_i^T.\]</span></p>
+<p>The proof runs through Courant-Fischer: any rank-<span class="math inline">\(k\)</span> <span class="math inline">\(B\)</span> vanishes on some <span class="math inline">\((n-k)\)</span>-dimensional subspace, which lower-bounds its residual by the tail singular values no matter how <span class="math inline">\(B\)</span> is chosen. That’s a statement about <em>every</em> rank-<span class="math inline">\(k\)</span> matrix, not just other factorizations — nothing beats truncated SVD on Frobenius error at a given rank.</p>
+<div id="ca33cd0c" class="cell" data-execution_count="3">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>A <span class="op">=</span> rng.normal(size<span class="op">=</span>(<span class="dv">60</span>, <span class="dv">40</span>))</span>
@@ -327,8 +346,14 @@ sqrt(sum tail^2) = 32.942888</code></pre>
 </section>
 <section id="the-same-variational-argument-that-optimizes-svd-also-diagonalizes-a-symmetric-matrix" class="level2">
 <h2 class="anchored" data-anchor-id="the-same-variational-argument-that-optimizes-svd-also-diagonalizes-a-symmetric-matrix">The same variational argument that optimizes SVD also diagonalizes a symmetric matrix</h2>
-<p>That same Courant-Fischer argument, applied to one symmetric matrix instead of two orthogonal bases, gives eigendecomposition. Maximize projected variance <span class="math inline">\(v^TAv\)</span> subject to <span class="math inline">\(\|v\|=1\)</span>; the Lagrangian <span class="math inline">\(\mathcal L(v,\lambda)=v^TAv-\lambda(v^Tv-1)\)</span> has stationarity condition <span class="math inline">\(\nabla_v\mathcal L=2Av-2\lambda v=0\Rightarrow Av=\lambda v\)</span> — eigenvectors are exactly the Rayleigh quotient’s stationary points, eigenvalues the stationary values, and <span class="math inline">\(A=Q\Lambda Q^T\)</span> falls out by repeating the maximization on the orthogonal complement already found. For <span class="math inline">\(\Sigma=X^TX\)</span>, eigenvalues of <span class="math inline">\(\Sigma\)</span> are <span class="math inline">\(\sigma_i(X)^2\)</span> — the same identity from above. Eigendecomposing a covariance matrix directly inherits the normal equations’ <span class="math inline">\(\kappa(X)^2\)</span> instability; SVD on the centered data instead sidesteps it, the same fix as before.</p>
-<div id="5add9fa4" class="cell" data-execution_count="4">
+<p>That same Courant-Fischer argument, applied to one symmetric matrix instead of two orthogonal bases, gives eigendecomposition. Maximize projected variance subject to unit length:</p>
+<p><span class="math display">\[\max_{\|v\|=1} v^TAv.\]</span></p>
+<p>The Lagrangian is</p>
+<p><span class="math display">\[\mathcal L(v,\lambda)=v^TAv-\lambda(v^Tv-1),\]</span></p>
+<p>with stationarity condition</p>
+<p><span class="math display">\[\nabla_v\mathcal L=2Av-2\lambda v=0 \implies Av=\lambda v\]</span></p>
+<p>— eigenvectors are the Rayleigh quotient’s stationary points, eigenvalues the stationary values. <span class="math inline">\(A=Q\Lambda Q^T\)</span> falls out by repeating the maximization on the orthogonal complement already found. For <span class="math inline">\(\Sigma=X^TX\)</span>, eigenvalues of <span class="math inline">\(\Sigma\)</span> are <span class="math inline">\(\sigma_i(X)^2\)</span> — the same identity from above. Eigendecomposing a covariance matrix directly inherits the normal equations’ <span class="math inline">\(\kappa(X)^2\)</span> instability; SVD on the centered data instead sidesteps it, the same fix as before.</p>
+<div id="43394087" class="cell" data-execution_count="4">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>Xc <span class="op">=</span> X <span class="op">-</span> X.mean(axis<span class="op">=</span><span class="dv">0</span>)</span>
@@ -350,8 +375,12 @@ cond(Sigma) = 9.911e+11   cond(Xc) = 9.955e+05</code></pre>
 </section>
 <section id="forcing-nonnegativity-trades-optimality-for-interpretability" class="level2">
 <h2 class="anchored" data-anchor-id="forcing-nonnegativity-trades-optimality-for-interpretability">Forcing nonnegativity trades optimality for interpretability</h2>
-<p>SVD’s optimum is sign-unconstrained, so its components routinely cancel — a factor can subtract as much signal as it adds, a poor model of “parts.” NMF restores interpretability by adding a constraint: <span class="math inline">\(\min_{W,H\ge0}\|V-WH\|_F^2\)</span>. Lee and Seung’s multiplicative update preserves nonnegativity automatically and provably decreases the objective every step: <span class="math display">\[H\leftarrow H\odot\frac{W^TV}{W^TWH},\qquad W\leftarrow W\odot\frac{VH^T}{WHH^T}\]</span> The cost: the objective is only biconvex, not jointly convex, so this converges to <em>a</em> stationary point, not the global one, and it’s sensitive to initialization — <code>nndsvda</code> is a deterministic fix for that, not a guarantee.</p>
-<div id="f32c98af" class="cell" data-execution_count="5">
+<p>SVD’s optimum is sign-unconstrained, so its components routinely cancel — a factor can subtract as much signal as it adds, a poor model of “parts.” NMF restores interpretability by adding one constraint to the same objective:</p>
+<p><span class="math display">\[\min_{W,H\ge0} \|V-WH\|_F^2.\]</span></p>
+<p>Lee and Seung’s multiplicative update rescales gradient descent so nonnegativity holds automatically:</p>
+<p><span class="math display">\[H \leftarrow H \odot \frac{W^TV}{W^TWH}, \qquad W \leftarrow W \odot \frac{VH^T}{WHH^T},\]</span></p>
+<p>and it provably decreases the objective monotonically. The cost: it’s only biconvex, not jointly convex, so it converges to <em>a</em> stationary point, not the global one, and it’s sensitive to initialization — <code>nndsvda</code> is a deterministic fix for that, not a guarantee.</p>
+<div id="e029911a" class="cell" data-execution_count="5">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>V_demo <span class="op">=</span> rng.gamma(shape<span class="op">=</span><span class="fl">2.0</span>, scale<span class="op">=</span><span class="fl">1.0</span>, size<span class="op">=</span>(<span class="dv">50</span>, <span class="dv">30</span>))</span>
@@ -369,8 +398,14 @@ W, H nonnegative: True, True</code></pre>
 </section>
 <section id="factor-once-solve-many-times-cholesky-turns-on3-into-on2-per-query" class="level2">
 <h2 class="anchored" data-anchor-id="factor-once-solve-many-times-cholesky-turns-on3-into-on2-per-query">Factor once, solve many times: Cholesky turns O(n^3) into O(n^2) per query</h2>
-<p>A symmetric <span class="math inline">\(A\)</span> factors as <span class="math inline">\(A=LL^T\)</span> with positive diagonal <span class="math inline">\(L\)</span> iff it’s SPD — equivalently, citing the spectral theorem above rather than asserting it fresh, iff every eigenvalue of <span class="math inline">\(A\)</span> is positive. Cholesky costs <span class="math inline">\(O(n^3/3)\)</span>, half of general LU, by exploiting symmetry; each subsequent solve is <span class="math inline">\(O(n^2)\)</span> via substitution. For <span class="math inline">\(m\)</span> right-hand sides sharing <span class="math inline">\(A\)</span>: <span class="math inline">\(O(n^3+mn^2)\)</span> total, versus forming <span class="math inline">\(A^{-1}\)</span> explicitly at similar asymptotic cost but worse constants and worse conditioning — never invert to solve. For covariance-structured data, <span class="math inline">\(x=Lz\)</span> with <span class="math inline">\(z\sim\mathcal N(0,I)\)</span> gives <span class="math inline">\(x\sim\mathcal N(0,\Sigma)\)</span>: Cholesky is the sampling mechanism, not just the solver.</p>
-<div id="17fb5470" class="cell" data-execution_count="6">
+<p>A symmetric <span class="math inline">\(A\)</span> factors as</p>
+<p><span class="math display">\[A=LL^T\]</span></p>
+<p>with positive diagonal <span class="math inline">\(L\)</span> iff it’s SPD — equivalently, by the spectral theorem above, iff every eigenvalue of <span class="math inline">\(A\)</span> is positive. Cholesky costs <span class="math inline">\(O(n^3/3)\)</span>, half of general LU, by exploiting symmetry; each subsequent solve is <span class="math inline">\(O(n^2)\)</span> via substitution. For <span class="math inline">\(m\)</span> right-hand sides sharing <span class="math inline">\(A\)</span>, the total cost is</p>
+<p><span class="math display">\[O(n^3+mn^2),\]</span></p>
+<p>versus forming <span class="math inline">\(A^{-1}\)</span> explicitly, similar asymptotic cost but worse constants and conditioning — never invert to solve. For covariance-structured data,</p>
+<p><span class="math display">\[x=Lz, \quad z\sim\mathcal N(0,I) \implies x\sim\mathcal N(0,\Sigma):\]</span></p>
+<p>Cholesky is the sampling mechanism, not just the solver.</p>
+<div id="d80a9191" class="cell" data-execution_count="6">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>sizes <span class="op">=</span> [<span class="dv">50</span>, <span class="dv">100</span>, <span class="dv">200</span>, <span class="dv">400</span>, <span class="dv">800</span>]</span>
@@ -410,7 +445,7 @@ W, H nonnegative: True, True</code></pre>
 <section id="a-real-ec2-fleets-telemetry-is-a-low-rank-signal-plus-a-spike-svd-isolates" class="level2">
 <h2 class="anchored" data-anchor-id="a-real-ec2-fleets-telemetry-is-a-low-rank-signal-plus-a-spike-svd-isolates">A real EC2 fleet’s telemetry is a low-rank signal plus a spike SVD isolates</h2>
 <p>Numenta built the <a href="https://github.com/numenta/NAB">NAB benchmark</a> to test anomaly detection against real streaming metrics, not synthetic ones: its <code>realAWSCloudwatch</code> category is CPU utilization from eight actual production EC2 instances via AmazonCloudwatch, each with human-verified anomaly timestamps. Eight instances, not thousands — worth saying plainly. <em>(This section and the two after it fetch real data live at render time; a future re-render depends on those repositories staying up, though a project-wide render never re-executes this page once frozen.)</em></p>
-<div id="36374726" class="cell" data-execution_count="7">
+<div id="f2a3a337" class="cell" data-execution_count="7">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>base <span class="op">=</span> <span class="st">"https://raw.githubusercontent.com/numenta/NAB/master"</span></span>
@@ -435,7 +470,7 @@ W, H nonnegative: True, True</code></pre>
 </div>
 </div>
 <p>Stack all eight as columns of one real matrix and take the SVD; the scree plot’s elbow says a handful of factors carry the fleet’s shared regime structure:</p>
-<div id="5dfc2e0b" class="cell" data-execution_count="8">
+<div id="36464a1d" class="cell" data-execution_count="8">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>X_tel <span class="op">=</span> telemetry.to_numpy()</span>
@@ -457,7 +492,7 @@ W, H nonnegative: True, True</code></pre>
 </div>
 </div>
 </div>
-<div id="058c1f3b" class="cell" data-execution_count="9">
+<div id="72f83b71" class="cell" data-execution_count="9">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>fig, ax <span class="op">=</span> plt.subplots(figsize<span class="op">=</span>(<span class="dv">8</span>, <span class="fl">2.8</span>))</span>
@@ -476,7 +511,7 @@ W, H nonnegative: True, True</code></pre>
 </div>
 </div>
 <p>The residual after truncating isn’t just visually busy near the labeled anomalies — it’s the anomaly <em>score</em>, and here it’s checked against timestamps a human actually flagged, not injected ones:</p>
-<div id="6a2f28e6" class="cell" data-execution_count="10">
+<div id="8d1a3beb" class="cell" data-execution_count="10">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>k_tel <span class="op">=</span> <span class="dv">4</span></span>
@@ -507,7 +542,7 @@ W, H nonnegative: True, True</code></pre>
 <section id="linkage-disequilibrium-is-collinearity-with-a-biological-name-and-qr-survives-it" class="level2">
 <h2 class="anchored" data-anchor-id="linkage-disequilibrium-is-collinearity-with-a-biological-name-and-qr-survives-it">Linkage disequilibrium is collinearity with a biological name, and QR survives it</h2>
 <p>CIMMYT’s Global Wheat Program genotyped 599 real breeding lines at 1279 real DArT markers and recorded real grain yield across four field environments, distributed for reuse via the BGLR R package.</p>
-<div id="4bb398b2" class="cell" data-execution_count="11">
+<div id="4ba4b1e4" class="cell" data-execution_count="11">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>resp <span class="op">=</span> requests.get(<span class="st">"https://raw.githubusercontent.com/gdlc/BGLR-R/master/data/wheat.RData"</span>, timeout<span class="op">=</span><span class="dv">60</span>)</span>
@@ -524,7 +559,7 @@ W, H nonnegative: True, True</code></pre>
 </div>
 </div>
 <p>With <span class="math inline">\(p=1279\)</span> markers exceeding <span class="math inline">\(n=599\)</span> lines, the full marker matrix makes <span class="math inline">\(X^TX\)</span> singular outright — normal equations can’t even be inverted. Subsetting by variance and sweeping how many markers enter the regression shows two real effects at once:</p>
-<div id="e34fcfcf" class="cell" data-execution_count="12">
+<div id="9075ecfa" class="cell" data-execution_count="12">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb18"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a>marker_var <span class="op">=</span> X_markers.var(axis<span class="op">=</span><span class="dv">0</span>)</span>
@@ -563,7 +598,7 @@ cond(X):       ['2.28e+01', '8.56e+01', '2.37e+02', '5.25e+02', '1.13e+03', '2.2
 cond(X.T@X):   ['5.19e+02', '7.33e+03', '5.62e+04', '2.75e+05', '1.27e+06', '4.88e+06', '3.57e+08']</code></pre>
 </div>
 </div>
-<div id="7ae03f5a" class="cell" data-execution_count="13">
+<div id="e8e6ba6a" class="cell" data-execution_count="13">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb20"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>fig, axes <span class="op">=</span> plt.subplots(<span class="dv">1</span>, <span class="dv">3</span>, figsize<span class="op">=</span>(<span class="dv">14</span>, <span class="dv">4</span>))</span>
@@ -599,7 +634,7 @@ cond(X.T@X):   ['5.19e+02', '7.33e+03', '5.62e+04', '2.75e+05', '1.27e+06', '4.8
 </div>
 <p>Held-out accuracy degrades toward zero as marker count nears the 450 training lines — real overfitting, the reason genomic selection never runs plain OLS at genome-wide marker density. Conditioning explains the risk underneath: <span class="math inline">\(\kappa(X)\)</span> and <span class="math inline">\(\kappa(X^TX)\)</span> both grow by orders of magnitude as <span class="math inline">\(p\to n\)</span>, but <span class="math inline">\(\kappa(X^TX)\)</span> — normal equations’ effective conditioning — outpaces <span class="math inline">\(\kappa(X)\)</span> by exactly the squaring from the opening section, burning through double precision’s <span class="math inline">\(\sim\!10^{16}\)</span> margin at roughly half the marker count QR can still handle. That’s the real mechanism behind why breeding programs use ridge-shrunk GBLUP instead of raw least squares — exactly what the same real markers do next.</p>
 <p>The same 350 markers build <span class="math inline">\(G\propto XX^T\)</span>, the genomic relationship matrix. Cholesky-factoring <span class="math inline">\(G\)</span> and sampling <span class="math inline">\(x=Lz\)</span> is the actual mechanism GBLUP uses to simulate correlated breeding values:</p>
-<div id="94d65837" class="cell" data-execution_count="14">
+<div id="a787a544" class="cell" data-execution_count="14">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>G <span class="op">=</span> (X_sub <span class="op">@</span> X_sub.T) <span class="op">/</span> X_sub.shape[<span class="dv">1</span>]</span>
@@ -613,7 +648,7 @@ cond(X.T@X):   ['5.19e+02', '7.33e+03', '5.62e+04', '2.75e+05', '1.27e+06', '4.8
 </div>
 </div>
 <p>Eigendecomposing that same <span class="math inline">\(G\)</span> — the identity from two sections above, now applied instead of proved — recovers population-structure axes among the 599 real lines:</p>
-<div id="6a26a1a8" class="cell" data-execution_count="15">
+<div id="95ae988f" class="cell" data-execution_count="15">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>eigvals_G, eigvecs_G <span class="op">=</span> eigh(G)</span>
@@ -640,7 +675,7 @@ cond(X.T@X):   ['5.19e+02', '7.33e+03', '5.62e+04', '2.75e+05', '1.27e+06', '4.8
 <section id="nonnegative-factors-split-real-leukemia-expression-into-the-diagnosis-nobody-told-the-model" class="level2">
 <h2 class="anchored" data-anchor-id="nonnegative-factors-split-real-leukemia-expression-into-the-diagnosis-nobody-told-the-model">Nonnegative factors split real leukemia expression into the diagnosis nobody told the model</h2>
 <p>Golub et al.&nbsp;profiled real bone-marrow samples from 72 leukemia patients on Affymetrix microarrays in 1999, founding molecular cancer classification; Brunet et al.&nbsp;reused this exact data in 2004 to introduce NMF-based tumor subtyping.</p>
-<div id="655bbd6e" class="cell" data-execution_count="16">
+<div id="3ee63626" class="cell" data-execution_count="16">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb24"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>gbase <span class="op">=</span> <span class="st">"https://raw.githubusercontent.com/dharsandip/Classification_of_Cancer_by_Gene_Expression_Dataset/master"</span></span>
@@ -668,7 +703,7 @@ cond(X.T@X):   ['5.19e+02', '7.33e+03', '5.62e+04', '2.75e+05', '1.27e+06', '4.8
 </div>
 </div>
 <p>NMF needs <span class="math inline">\(V\ge0\)</span>, so raw intensities — which include negative background noise — get floored to a small positive value, then log-transformed and subset to the most variable genes: standard microarray preprocessing, and the step Brunet et al.&nbsp;also applied before fitting NMF to this exact data:</p>
-<div id="c9fdb14b" class="cell" data-execution_count="17">
+<div id="13ad0b03" class="cell" data-execution_count="17">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb26"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a>expr_log <span class="op">=</span> np.log2(np.clip(expr, <span class="fl">1.0</span>, <span class="va">None</span>))</span>
@@ -690,7 +725,7 @@ AML                25   0</code></pre>
 </div>
 </div>
 <p>Fitting NMF with <span class="math inline">\(k=2\)</span> and never showing the model a diagnosis, one metagene comes out as an ALL-only signature — every patient it dominates is real ALL, zero are AML — while the other is a near-base-rate mix that carries no such signal:</p>
-<div id="d784bc80" class="cell" data-execution_count="18">
+<div id="4d2dcd68" class="cell" data-execution_count="18">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb28"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a>fig, axes <span class="op">=</span> plt.subplots(<span class="dv">1</span>, <span class="dv">2</span>, figsize<span class="op">=</span>(<span class="dv">11</span>, <span class="fl">4.5</span>))</span>
