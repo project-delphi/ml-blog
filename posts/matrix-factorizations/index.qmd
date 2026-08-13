@@ -39,7 +39,33 @@ rng = np.random.default_rng(7)
 
 ## Squaring the condition number is the hidden cost of the normal equations
 
-Ordinary least squares minimizes $\|y-X\beta\|_2^2$, solved by the normal equations $\hat\beta=(X^TX)^{-1}X^Ty$. The catch is conditioning: since $X^TX$'s eigenvalues are $X$'s squared singular values, $\kappa(X^TX)=\kappa(X)^2$ — that's the one-line proof, straight from the definition of $A^TA$'s eigenvalues. Solving with a matrix that ill-conditioned amplifies floating-point error roughly as $\kappa(X)^2\varepsilon$ instead of $\kappa(X)\varepsilon$. Factor $X=QR$ with $Q$ orthonormal ($\kappa(Q)=1$) and substitute into the normal equations: $R^TQ^TQR\beta=R^TQ^Ty \Rightarrow R^TR\beta=R^TQ^Ty$, and since $R^T$ is invertible, $R\beta=Q^Ty$. Back-substitution solves this in $O(n^2)$, conditioned on $\kappa(X)$ — never $\kappa(X)^2$ — because $X^TX$ is never formed.
+Ordinary least squares minimizes the residual
+
+$$\min_\beta \|y-X\beta\|_2^2,$$
+
+solved by the normal equations
+
+$$\hat\beta=(X^TX)^{-1}X^Ty.$$
+
+The catch is conditioning. $X^TX$'s eigenvalues are $X$'s squared singular values, so
+
+$$\kappa(X^TX)=\kappa(X)^2$$
+
+— the whole proof, from the definition of $A^TA$'s eigenvalues. An ill-conditioned solve amplifies floating-point error roughly as $\kappa(X)^2\varepsilon$ instead of $\kappa(X)\varepsilon$, where $\varepsilon$ is machine precision.
+
+Factor $X=QR$ with $Q$ orthonormal ($\kappa(Q)=1$) and substitute:
+
+$$R^TQ^TQR\beta=R^TQ^Ty.$$
+
+$Q^TQ=I$ gives
+
+$$R^TR\beta=R^TQ^Ty,$$
+
+and since $R^T$ is invertible, both sides cancel it, leaving
+
+$$R\beta=Q^Ty.$$
+
+Back-substitution solves this in $O(n^2)$, conditioned on $\kappa(X)$ — never $\kappa(X)^2$ — because $X^TX$ is never formed.
 
 ```{python}
 # Build X with a controlled condition number instead of a raw high-degree
@@ -68,7 +94,19 @@ print(f"||beta_qr - beta_true||     = {np.linalg.norm(beta_qr - beta_true):.2e}"
 
 ## Truncating the SVD is the only rank-k approximation optimization can't beat
 
-Truncated SVD isn't just a good low-rank approximation — Eckart-Young-Mirsky says it's the *best* one, full stop. For $A=U\Sigma V^T$ and any $B$ with rank$(B)\le k$, $\|A-B\|_F\ge\sqrt{\sum_{i>k}\sigma_i^2}$, with equality exactly at $A_k=\sum_{i\le k}\sigma_iu_iv_i^T$. The proof runs through Courant-Fischer: any rank-$k$ $B$ vanishes on some $(n-k)$-dimensional subspace, which lower-bounds its residual by the tail singular values no matter how $B$ is chosen. That's a statement about *every* rank-$k$ matrix, not just other factorizations — nothing beats truncated SVD on Frobenius error at a given rank.
+Truncated SVD isn't just a good low-rank approximation — Eckart-Young-Mirsky says it's the *best* one, full stop. Write the SVD as
+
+$$A=U\Sigma V^T.$$
+
+For any $B$ with rank$(B)\le k$, the theorem bounds the error:
+
+$$\|A-B\|_F \ge \sqrt{\sum_{i>k}\sigma_i^2},$$
+
+with equality exactly at the truncation
+
+$$A_k=\sum_{i\le k}\sigma_i u_i v_i^T.$$
+
+The proof runs through Courant-Fischer: any rank-$k$ $B$ vanishes on some $(n-k)$-dimensional subspace, which lower-bounds its residual by the tail singular values no matter how $B$ is chosen. That's a statement about *every* rank-$k$ matrix, not just other factorizations — nothing beats truncated SVD on Frobenius error at a given rank.
 
 ```{python}
 A = rng.normal(size=(60, 40))
@@ -84,7 +122,19 @@ print(f"sqrt(sum tail^2) = {tail_bound:.6f}")
 
 ## The same variational argument that optimizes SVD also diagonalizes a symmetric matrix
 
-That same Courant-Fischer argument, applied to one symmetric matrix instead of two orthogonal bases, gives eigendecomposition. Maximize projected variance $v^TAv$ subject to $\|v\|=1$; the Lagrangian $\mathcal L(v,\lambda)=v^TAv-\lambda(v^Tv-1)$ has stationarity condition $\nabla_v\mathcal L=2Av-2\lambda v=0\Rightarrow Av=\lambda v$ — eigenvectors are exactly the Rayleigh quotient's stationary points, eigenvalues the stationary values, and $A=Q\Lambda Q^T$ falls out by repeating the maximization on the orthogonal complement already found. For $\Sigma=X^TX$, eigenvalues of $\Sigma$ are $\sigma_i(X)^2$ — the same identity from above. Eigendecomposing a covariance matrix directly inherits the normal equations' $\kappa(X)^2$ instability; SVD on the centered data instead sidesteps it, the same fix as before.
+That same Courant-Fischer argument, applied to one symmetric matrix instead of two orthogonal bases, gives eigendecomposition. Maximize projected variance subject to unit length:
+
+$$\max_{\|v\|=1} v^TAv.$$
+
+The Lagrangian is
+
+$$\mathcal L(v,\lambda)=v^TAv-\lambda(v^Tv-1),$$
+
+with stationarity condition
+
+$$\nabla_v\mathcal L=2Av-2\lambda v=0 \implies Av=\lambda v$$
+
+— eigenvectors are the Rayleigh quotient's stationary points, eigenvalues the stationary values. $A=Q\Lambda Q^T$ falls out by repeating the maximization on the orthogonal complement already found. For $\Sigma=X^TX$, eigenvalues of $\Sigma$ are $\sigma_i(X)^2$ — the same identity from above. Eigendecomposing a covariance matrix directly inherits the normal equations' $\kappa(X)^2$ instability; SVD on the centered data instead sidesteps it, the same fix as before.
 
 ```{python}
 Xc = X - X.mean(axis=0)
@@ -100,9 +150,15 @@ print(f"cond(Sigma) = {cond(Sigma):.3e}   cond(Xc) = {cond(Xc):.3e}")
 
 ## Forcing nonnegativity trades optimality for interpretability
 
-SVD's optimum is sign-unconstrained, so its components routinely cancel — a factor can subtract as much signal as it adds, a poor model of "parts." NMF restores interpretability by adding a constraint: $\min_{W,H\ge0}\|V-WH\|_F^2$. Lee and Seung's multiplicative update preserves nonnegativity automatically and provably decreases the objective every step:
-$$H\leftarrow H\odot\frac{W^TV}{W^TWH},\qquad W\leftarrow W\odot\frac{VH^T}{WHH^T}$$
-The cost: the objective is only biconvex, not jointly convex, so this converges to *a* stationary point, not the global one, and it's sensitive to initialization — `nndsvda` is a deterministic fix for that, not a guarantee.
+SVD's optimum is sign-unconstrained, so its components routinely cancel — a factor can subtract as much signal as it adds, a poor model of "parts." NMF restores interpretability by adding one constraint to the same objective:
+
+$$\min_{W,H\ge0} \|V-WH\|_F^2.$$
+
+Lee and Seung's multiplicative update rescales gradient descent so nonnegativity holds automatically:
+
+$$H \leftarrow H \odot \frac{W^TV}{W^TWH}, \qquad W \leftarrow W \odot \frac{VH^T}{WHH^T},$$
+
+and it provably decreases the objective monotonically. The cost: it's only biconvex, not jointly convex, so it converges to *a* stationary point, not the global one, and it's sensitive to initialization — `nndsvda` is a deterministic fix for that, not a guarantee.
 
 ```{python}
 V_demo = rng.gamma(shape=2.0, scale=1.0, size=(50, 30))
@@ -115,7 +171,19 @@ print(f"W, H nonnegative: {(W_demo >= 0).all()}, {(H_demo >= 0).all()}")
 
 ## Factor once, solve many times: Cholesky turns O(n^3) into O(n^2) per query
 
-A symmetric $A$ factors as $A=LL^T$ with positive diagonal $L$ iff it's SPD — equivalently, citing the spectral theorem above rather than asserting it fresh, iff every eigenvalue of $A$ is positive. Cholesky costs $O(n^3/3)$, half of general LU, by exploiting symmetry; each subsequent solve is $O(n^2)$ via substitution. For $m$ right-hand sides sharing $A$: $O(n^3+mn^2)$ total, versus forming $A^{-1}$ explicitly at similar asymptotic cost but worse constants and worse conditioning — never invert to solve. For covariance-structured data, $x=Lz$ with $z\sim\mathcal N(0,I)$ gives $x\sim\mathcal N(0,\Sigma)$: Cholesky is the sampling mechanism, not just the solver.
+A symmetric $A$ factors as
+
+$$A=LL^T$$
+
+with positive diagonal $L$ iff it's SPD — equivalently, by the spectral theorem above, iff every eigenvalue of $A$ is positive. Cholesky costs $O(n^3/3)$, half of general LU, by exploiting symmetry; each subsequent solve is $O(n^2)$ via substitution. For $m$ right-hand sides sharing $A$, the total cost is
+
+$$O(n^3+mn^2),$$
+
+versus forming $A^{-1}$ explicitly, similar asymptotic cost but worse constants and conditioning — never invert to solve. For covariance-structured data,
+
+$$x=Lz, \quad z\sim\mathcal N(0,I) \implies x\sim\mathcal N(0,\Sigma):$$
+
+Cholesky is the sampling mechanism, not just the solver.
 
 ```{python}
 sizes = [50, 100, 200, 400, 800]
