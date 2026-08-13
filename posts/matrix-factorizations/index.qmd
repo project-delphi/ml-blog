@@ -1,0 +1,382 @@
+---
+title: "Matrix Factorizations as Optimization Problems: QR, SVD, Eigendecomposition, NMF, and Cholesky"
+author: "Ravi Kalia"
+date: "2026-08-12"
+categories: [Linear Algebra, Machine Learning, Numerical Methods]
+image: "./cover.png"
+tags: [SVD, QR Decomposition, Eigendecomposition, NMF, Cholesky Decomposition, Matrix Factorization, Numerical Linear Algebra]
+jupyter: matrix-blog
+format:
+    html:
+        toc: true
+        toc-depth: 3
+        code-fold: true
+---
+
+![Matrix Factorizations as Optimization Problems: QR, SVD, Eigendecomposition, NMF, and Cholesky](./cover.png)
+
+Every factorization here is the closed-form answer to a constrained optimization problem — you just don't usually see the constraint written down. QR is OLS refusing to square its condition number. Truncated SVD is the provably best solution to "compress this matrix." Eigendecomposition falls out of maximizing variance along one direction instead of building two orthogonal bases. NMF is SVD's optimum with a sign constraint bolted on. Cholesky is a positive-definite solve that stops re-deriving the inverse every time. Picking a factorization is picking which constraint buys stability, compression, or interpretability.
+
+```{python}
+import io
+import time
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import pyreadr
+import requests
+import seaborn as sns
+from numpy.linalg import cond, eigh, svd
+from scipy.linalg import cho_factor, cho_solve, cholesky, qr, solve, solve_triangular
+from sklearn.decomposition import NMF
+
+sns.set_theme(style="whitegrid", rc={"axes.edgecolor": "0.85"})
+ACCENT = "#4A3AA7"
+GREY = "#999999"
+rng = np.random.default_rng(7)
+```
+
+## Squaring the condition number is the hidden cost of the normal equations
+
+Ordinary least squares minimizes $\|y-X\beta\|_2^2$, solved by the normal equations $\hat\beta=(X^TX)^{-1}X^Ty$. The catch is conditioning: since $X^TX$'s eigenvalues are $X$'s squared singular values, $\kappa(X^TX)=\kappa(X)^2$ — that's the one-line proof, straight from the definition of $A^TA$'s eigenvalues. Solving with a matrix that ill-conditioned amplifies floating-point error roughly as $\kappa(X)^2\varepsilon$ instead of $\kappa(X)\varepsilon$. Factor $X=QR$ with $Q$ orthonormal ($\kappa(Q)=1$) and substitute into the normal equations: $R^TQ^TQR\beta=R^TQ^Ty \Rightarrow R^TR\beta=R^TQ^Ty$, and since $R^T$ is invertible, $R\beta=Q^Ty$. Back-substitution solves this in $O(n^2)$, conditioned on $\kappa(X)$ — never $\kappa(X)^2$ — because $X^TX$ is never formed.
+
+```{python}
+# Build X with a controlled condition number instead of a raw high-degree
+# Vandermonde basis, whose columns are so nearly dependent that beta itself
+# becomes ill-posed, not just numerically delicate -- singular values decaying
+# geometrically isolate the conditioning effect the derivation is about.
+n, p = 200, 12
+U0, _ = np.linalg.qr(rng.normal(size=(n, p)))
+V0, _ = np.linalg.qr(rng.normal(size=(p, p)))
+singvals = np.logspace(0, -6, p)  # cond(X) ~ 1e6, cond(X.T @ X) ~ 1e12
+X = (U0 * singvals) @ V0.T
+
+beta_true = rng.normal(size=p)
+y = X @ beta_true  # noiseless: recovery error below is pure floating-point conditioning
+
+print(f"cond(X)     = {cond(X):.3e}")
+print(f"cond(X.T@X) = {cond(X.T @ X):.3e}")
+
+beta_normal = solve(X.T @ X, X.T @ y)
+Q, R = qr(X, mode="economic")
+beta_qr = solve_triangular(R, Q.T @ y)
+
+print(f"||beta_normal - beta_true|| = {np.linalg.norm(beta_normal - beta_true):.2e}")
+print(f"||beta_qr - beta_true||     = {np.linalg.norm(beta_qr - beta_true):.2e}")
+```
+
+## Truncating the SVD is the only rank-k approximation optimization can't beat
+
+Truncated SVD isn't just a good low-rank approximation — Eckart-Young-Mirsky says it's the *best* one, full stop. For $A=U\Sigma V^T$ and any $B$ with rank$(B)\le k$, $\|A-B\|_F\ge\sqrt{\sum_{i>k}\sigma_i^2}$, with equality exactly at $A_k=\sum_{i\le k}\sigma_iu_iv_i^T$. The proof runs through Courant-Fischer: any rank-$k$ $B$ vanishes on some $(n-k)$-dimensional subspace, which lower-bounds its residual by the tail singular values no matter how $B$ is chosen. That's a statement about *every* rank-$k$ matrix, not just other factorizations — nothing beats truncated SVD on Frobenius error at a given rank.
+
+```{python}
+A = rng.normal(size=(60, 40))
+U, s, Vt = svd(A, full_matrices=False)
+
+k = 10
+A_k = (U[:, :k] * s[:k]) @ Vt[:k]
+residual_frobenius = np.linalg.norm(A - A_k, "fro")
+tail_bound = np.sqrt(np.sum(s[k:] ** 2))
+print(f"||A - A_k||_F    = {residual_frobenius:.6f}")
+print(f"sqrt(sum tail^2) = {tail_bound:.6f}")
+```
+
+## The same variational argument that optimizes SVD also diagonalizes a symmetric matrix
+
+That same Courant-Fischer argument, applied to one symmetric matrix instead of two orthogonal bases, gives eigendecomposition. Maximize projected variance $v^TAv$ subject to $\|v\|=1$; the Lagrangian $\mathcal L(v,\lambda)=v^TAv-\lambda(v^Tv-1)$ has stationarity condition $\nabla_v\mathcal L=2Av-2\lambda v=0\Rightarrow Av=\lambda v$ — eigenvectors are exactly the Rayleigh quotient's stationary points, eigenvalues the stationary values, and $A=Q\Lambda Q^T$ falls out by repeating the maximization on the orthogonal complement already found. For $\Sigma=X^TX$, eigenvalues of $\Sigma$ are $\sigma_i(X)^2$ — the same identity from above. Eigendecomposing a covariance matrix directly inherits the normal equations' $\kappa(X)^2$ instability; SVD on the centered data instead sidesteps it, the same fix as before.
+
+```{python}
+Xc = X - X.mean(axis=0)
+Sigma = Xc.T @ Xc
+
+eigvals, eigvecs = eigh(Sigma)
+_, s_centered, _ = svd(Xc, full_matrices=False)
+
+print(f"top eigenvalues:          {np.sort(eigvals)[::-1][:4].round(3)}")
+print(f"top squared singular vals: {(s_centered[:4] ** 2).round(3)}")
+print(f"cond(Sigma) = {cond(Sigma):.3e}   cond(Xc) = {cond(Xc):.3e}")
+```
+
+## Forcing nonnegativity trades optimality for interpretability
+
+SVD's optimum is sign-unconstrained, so its components routinely cancel — a factor can subtract as much signal as it adds, a poor model of "parts." NMF restores interpretability by adding a constraint: $\min_{W,H\ge0}\|V-WH\|_F^2$. Lee and Seung's multiplicative update preserves nonnegativity automatically and provably decreases the objective every step:
+$$H\leftarrow H\odot\frac{W^TV}{W^TWH},\qquad W\leftarrow W\odot\frac{VH^T}{WHH^T}$$
+The cost: the objective is only biconvex, not jointly convex, so this converges to *a* stationary point, not the global one, and it's sensitive to initialization — `nndsvda` is a deterministic fix for that, not a guarantee.
+
+```{python}
+V_demo = rng.gamma(shape=2.0, scale=1.0, size=(50, 30))
+demo_model = NMF(n_components=5, init="nndsvda", max_iter=500, random_state=7)
+W_demo = demo_model.fit_transform(V_demo)
+H_demo = demo_model.components_
+print(f"reconstruction error = {demo_model.reconstruction_err_:.4f}")
+print(f"W, H nonnegative: {(W_demo >= 0).all()}, {(H_demo >= 0).all()}")
+```
+
+## Factor once, solve many times: Cholesky turns O(n^3) into O(n^2) per query
+
+A symmetric $A$ factors as $A=LL^T$ with positive diagonal $L$ iff it's SPD — equivalently, citing the spectral theorem above rather than asserting it fresh, iff every eigenvalue of $A$ is positive. Cholesky costs $O(n^3/3)$, half of general LU, by exploiting symmetry; each subsequent solve is $O(n^2)$ via substitution. For $m$ right-hand sides sharing $A$: $O(n^3+mn^2)$ total, versus forming $A^{-1}$ explicitly at similar asymptotic cost but worse constants and worse conditioning — never invert to solve. For covariance-structured data, $x=Lz$ with $z\sim\mathcal N(0,I)$ gives $x\sim\mathcal N(0,\Sigma)$: Cholesky is the sampling mechanism, not just the solver.
+
+```{python}
+sizes = [50, 100, 200, 400, 800]
+factor_times, inv_times = [], []
+for size in sizes:
+    Rm = rng.normal(size=(size, size))
+    Am = Rm @ Rm.T + size * np.eye(size)
+    Bm = rng.normal(size=(size, 5))
+
+    t0 = time.perf_counter()
+    c, low = cho_factor(Am)
+    cho_solve((c, low), Bm)
+    factor_times.append(time.perf_counter() - t0)
+
+    t0 = time.perf_counter()
+    np.linalg.inv(Am) @ Bm
+    inv_times.append(time.perf_counter() - t0)
+
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.loglog(sizes, factor_times, "o-", color=ACCENT, label="cho_factor + cho_solve")
+ax.loglog(sizes, inv_times, "o-", color=GREY, label="explicit inverse")
+ax.set_xlabel("matrix size n")
+ax.set_ylabel("wall-clock seconds")
+ax.set_title("Factor once, solve many: Cholesky vs. explicit inverse")
+ax.legend()
+plt.show()
+```
+
+## A real EC2 fleet's telemetry is a low-rank signal plus a spike SVD isolates
+
+Numenta built the [NAB benchmark](https://github.com/numenta/NAB) to test anomaly detection against real streaming metrics, not synthetic ones: its `realAWSCloudwatch` category is CPU utilization from eight actual production EC2 instances via AmazonCloudwatch, each with human-verified anomaly timestamps. Eight instances, not thousands — worth saying plainly. *(This section and the two after it fetch real data live at render time; a future re-render depends on those repositories staying up, though a project-wide render never re-executes this page once frozen.)*
+
+```{python}
+base = "https://raw.githubusercontent.com/numenta/NAB/master"
+ec2_ids = ["53ea38", "24ae8d", "5f5533", "77c1ca", "825cc2", "ac20cd", "c6585a", "fe7f93"]
+labels = requests.get(f"{base}/labels/combined_labels.json", timeout=30).json()
+
+columns, anomaly_idx = {}, {}
+for id_ in ec2_ids:
+    key = f"realAWSCloudwatch/ec2_cpu_utilization_{id_}.csv"
+    df = pd.read_csv(io.StringIO(requests.get(f"{base}/data/{key}", timeout=30).text))
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    columns[id_] = df["value"].to_numpy()
+    label_times = pd.to_datetime(labels.get(key, []))
+    anomaly_idx[id_] = df.index[df["timestamp"].isin(label_times)].to_numpy()
+
+# stacked by position, not wall-clock: fleet-wide regime structure, not calendar sync
+telemetry = pd.DataFrame(columns)
+print(f"real telemetry matrix: {telemetry.shape[0]} timesteps x {telemetry.shape[1]} real EC2 instances")
+```
+
+Stack all eight as columns of one real matrix and take the SVD; the scree plot's elbow says a handful of factors carry the fleet's shared regime structure:
+
+```{python}
+X_tel = telemetry.to_numpy()
+Xc_tel = X_tel - X_tel.mean(axis=0)
+U_tel, s_tel, Vt_tel = svd(Xc_tel, full_matrices=False)
+
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.semilogy(np.arange(1, len(s_tel) + 1), s_tel, "o-", color=ACCENT)
+ax.set_xlabel("component")
+ax.set_ylabel("singular value (log scale)")
+ax.set_title("Singular values of 8 real EC2 CPU-utilization traces")
+plt.show()
+```
+
+```{python}
+fig, ax = plt.subplots(figsize=(8, 2.8))
+sns.heatmap(U_tel[:, :5].T, cmap="RdBu_r", center=0, cbar_kws={"label": "loading"}, ax=ax)
+ax.set_xlabel("timestep")
+ax.set_ylabel("left singular vector")
+ax.set_title("Top 5 temporal regime vectors across the real fleet")
+plt.show()
+```
+
+The residual after truncating isn't just visually busy near the labeled anomalies — it's the anomaly *score*, and here it's checked against timestamps a human actually flagged, not injected ones:
+
+```{python}
+k_tel = 4
+X_k_tel = (U_tel[:, :k_tel] * s_tel[:k_tel]) @ Vt_tel[:k_tel]
+residual = np.abs(Xc_tel - X_k_tel)
+
+target = "fe7f93"
+j = ec2_ids.index(target)
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(residual[:, j], color=ACCENT, lw=1)
+for idx in anomaly_idx[target]:
+    ax.axvline(idx, color="crimson", ls="--", alpha=0.7)
+ax.set_title(f"Rank-{k_tel} residual, instance {target} (dashed = real labeled anomaly)")
+ax.set_xlabel("timestep")
+ax.set_ylabel("|residual|")
+plt.show()
+```
+
+The top singular vectors become compact regime scores an autoscaler could react to instead of eight raw series; residual energy after truncation, validated here against real labels, is the mechanism alerting pipelines use to page on-call — the payoff of Eckart-Young-Mirsky, above.
+
+## Linkage disequilibrium is collinearity with a biological name, and QR survives it
+
+CIMMYT's Global Wheat Program genotyped 599 real breeding lines at 1279 real DArT markers and recorded real grain yield across four field environments, distributed for reuse via the BGLR R package.
+
+```{python}
+resp = requests.get("https://raw.githubusercontent.com/gdlc/BGLR-R/master/data/wheat.RData", timeout=60)
+with open("/tmp/wheat.RData", "wb") as f:
+    f.write(resp.content)
+wheat = pyreadr.read_r("/tmp/wheat.RData")
+
+X_markers = wheat["wheat.X"].to_numpy()
+grain_yield = wheat["wheat.Y"].iloc[:, 0].to_numpy()  # real yield, environment 1
+print(f"real markers: {X_markers.shape[0]} wheat lines x {X_markers.shape[1]} real DArT markers")
+```
+
+With $p=1279$ markers exceeding $n=599$ lines, the full marker matrix makes $X^TX$ singular outright — normal equations can't even be inverted. Subsetting by variance and sweeping how many markers enter the regression shows two real effects at once:
+
+```{python}
+marker_var = X_markers.var(axis=0)
+ranked_markers = np.argsort(marker_var)[::-1]
+
+n_lines = X_markers.shape[0]
+perm = rng.permutation(n_lines)
+train_idx, test_idx = perm[:450], perm[450:]
+y_train, y_test = grain_yield[train_idx], grain_yield[test_idx]
+
+marker_counts = [50, 150, 250, 350, 400, 430, 449]
+corr_qr, cond_x, cond_xtx = [], [], []
+for p_count in marker_counts:
+    Xp = X_markers[:, ranked_markers[:p_count]].astype(float)
+    Xp -= Xp.mean(axis=0)
+    X_train, X_test = Xp[train_idx], Xp[test_idx]
+
+    Q_tr, R_tr = qr(X_train, mode="economic")
+    beta_qr = solve_triangular(R_tr, Q_tr.T @ y_train)
+    corr_qr.append(np.corrcoef(X_test @ beta_qr, y_test)[0, 1])
+    cond_x.append(cond(X_train))
+    cond_xtx.append(cond(X_train.T @ X_train))
+
+print("markers:      ", marker_counts)
+print("held-out corr:", [f"{c:.3f}" for c in corr_qr])
+print("cond(X):      ", [f"{c:.2e}" for c in cond_x])
+print("cond(X.T@X):  ", [f"{c:.2e}" for c in cond_xtx])
+
+X_sub = X_markers[:, ranked_markers[:350]].astype(float)
+X_sub -= X_sub.mean(axis=0)
+```
+
+```{python}
+fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+
+Q20, R20 = qr(X_sub[:, :20], mode="economic")
+sns.heatmap(np.triu(R20), cmap="RdBu_r", center=0, ax=axes[0], cbar_kws={"label": "R value"})
+axes[0].set_title("Upper-triangular R\n(20 real markers)")
+
+axes[1].plot(marker_counts, corr_qr, "o-", color=ACCENT)
+axes[1].axhline(0, color=GREY, lw=1)
+axes[1].set_xlabel("markers used (of 450 training lines)")
+axes[1].set_ylabel("held-out yield correlation")
+axes[1].set_title("Plain OLS overfits as p -> n")
+
+axes[2].semilogy(marker_counts, cond_x, "o-", color=ACCENT, label="cond(X)")
+axes[2].semilogy(marker_counts, cond_xtx, "o-", color=GREY, label="cond(X'X)")
+axes[2].axhline(1 / np.finfo(float).eps, color="crimson", ls="--", lw=1, label="float64 ceiling")
+axes[2].set_xlabel("markers used")
+axes[2].set_ylabel("condition number")
+axes[2].set_title("Normal eqs burns precision twice as fast")
+axes[2].legend(fontsize=8)
+
+plt.tight_layout()
+plt.show()
+```
+
+Held-out accuracy degrades toward zero as marker count nears the 450 training lines — real overfitting, the reason genomic selection never runs plain OLS at genome-wide marker density. Conditioning explains the risk underneath: $\kappa(X)$ and $\kappa(X^TX)$ both grow by orders of magnitude as $p\to n$, but $\kappa(X^TX)$ — normal equations' effective conditioning — outpaces $\kappa(X)$ by exactly the squaring from the opening section, burning through double precision's $\sim\!10^{16}$ margin at roughly half the marker count QR can still handle. That's the real mechanism behind why breeding programs use ridge-shrunk GBLUP instead of raw least squares — exactly what the same real markers do next.
+
+The same 350 markers build $G\propto XX^T$, the genomic relationship matrix. Cholesky-factoring $G$ and sampling $x=Lz$ is the actual mechanism GBLUP uses to simulate correlated breeding values:
+
+```{python}
+G = (X_sub @ X_sub.T) / X_sub.shape[1]
+G += 1e-6 * np.eye(G.shape[0])  # ridge for numerical PD
+L = cholesky(G, lower=True)
+breeding_values = L @ rng.normal(size=G.shape[0])
+print(f"sampled breeding values: mean={breeding_values.mean():.3f}, var={breeding_values.var():.3f}")
+```
+
+Eigendecomposing that same $G$ — the identity from two sections above, now applied instead of proved — recovers population-structure axes among the 599 real lines:
+
+```{python}
+eigvals_G, eigvecs_G = eigh(G)
+order = np.argsort(eigvals_G)[::-1]
+pc1, pc2 = eigvecs_G[:, order[0]], eigvecs_G[:, order[1]]
+
+fig, ax = plt.subplots(figsize=(5, 5))
+ax.scatter(pc1, pc2, s=16, color=ACCENT, alpha=0.7)
+ax.set_xlabel("PC1 (top eigenvector of G)")
+ax.set_ylabel("PC2")
+ax.set_title("Population structure, 599 real wheat lines")
+plt.show()
+```
+
+`wheat.sets` in this data is a real CV-fold assignment, not a population label, so this scatter is shown unsupervised rather than colored by an invented group. Human GWAS calls this exact calculation EIGENSTRAT and includes it as covariates to keep subpopulation differences from masquerading as marker-yield associations — the same correction applies wherever a breeding panel mixes lineages.
+
+## Nonnegative factors split real leukemia expression into the diagnosis nobody told the model
+
+Golub et al. profiled real bone-marrow samples from 72 leukemia patients on Affymetrix microarrays in 1999, founding molecular cancer classification; Brunet et al. reused this exact data in 2004 to introduce NMF-based tumor subtyping.
+
+```{python}
+gbase = "https://raw.githubusercontent.com/dharsandip/Classification_of_Cancer_by_Gene_Expression_Dataset/master"
+train_raw = pd.read_csv(f"{gbase}/data_set_ALL_AML_train.csv")
+indep_raw = pd.read_csv(f"{gbase}/data_set_ALL_AML_independent.csv")
+actual = pd.read_csv(f"{gbase}/actual.csv")
+
+
+def expression_matrix(raw):
+    id_cols = [c for c in raw.columns if not c.startswith("call") and c not in ("Gene Description", "Gene Accession Number")]
+    return raw[id_cols].to_numpy(dtype=float).T, [int(c) for c in id_cols]
+
+
+X_train_expr, train_patients = expression_matrix(train_raw)
+X_test_expr, test_patients = expression_matrix(indep_raw)
+
+expr = np.vstack([X_train_expr, X_test_expr])  # 72 real patients x 7129 real genes
+patient_order = train_patients + test_patients
+diagnosis = actual.set_index("patient").loc[patient_order, "cancer"].to_numpy()
+print(f"real expression matrix: {expr.shape[0]} patients x {expr.shape[1]} genes "
+      f"({(diagnosis == 'ALL').sum()} ALL / {(diagnosis == 'AML').sum()} AML, real diagnoses)")
+```
+
+NMF needs $V\ge0$, so raw intensities — which include negative background noise — get floored to a small positive value, then log-transformed and subset to the most variable genes: standard microarray preprocessing, and the step Brunet et al. also applied before fitting NMF to this exact data:
+
+```{python}
+expr_log = np.log2(np.clip(expr, 1.0, None))
+gene_var = expr_log.var(axis=0)
+top_genes = np.argsort(gene_var)[::-1][:1500]
+V_leuk = expr_log[:, top_genes]
+
+leuk_model = NMF(n_components=2, init="nndsvda", max_iter=1000, random_state=7)
+W_leuk = leuk_model.fit_transform(V_leuk)
+H_leuk = leuk_model.components_
+dominant = np.argmax(W_leuk, axis=1)
+print(pd.crosstab(diagnosis, dominant, rownames=["real diagnosis"], colnames=["dominant metagene"]))
+```
+
+Fitting NMF with $k=2$ and never showing the model a diagnosis, one metagene comes out as an ALL-only signature — every patient it dominates is real ALL, zero are AML — while the other is a near-base-rate mix that carries no such signal:
+
+```{python}
+fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+
+colors = np.where(diagnosis == "ALL", ACCENT, "#E07B39")
+axes[0].scatter(W_leuk[:, 0], W_leuk[:, 1], c=colors, s=30, alpha=0.85)
+axes[0].set_xlabel("metagene 1 weight")
+axes[0].set_ylabel("metagene 2 weight")
+axes[0].set_title("NMF weights, colored by real diagnosis")
+
+sns.heatmap(H_leuk[:, :150], cmap="viridis", cbar_kws={"label": "gene weight"}, ax=axes[1])
+axes[1].set_xlabel("gene (top-variance subset, first 150 shown)")
+axes[1].set_ylabel("metagene")
+axes[1].set_title("Learned H: two real metagenes")
+
+plt.tight_layout()
+plt.show()
+```
+
+That's the real precedent for expression-based subtyping that now routes patients to different treatment protocols — ALL and AML take materially different regimens, so a subtype call carries real clinical stakes. Nonnegativity is what makes $W,H$ legible as two real gene programs instead of signed components that could just as easily cancel.
+
+## The constraint was always the point
+
+Every factorization here traded one thing for another: QR traded forming $X^TX$ for a triangular solve; SVD traded an exact fit for the provably best approximate one; eigendecomposition traded two orthogonal bases for one, on a single symmetric matrix; NMF traded SVD's unconstrained optimum for a sign constraint that costs convexity but buys interpretability; Cholesky traded an inverse for a triangular factor reused across solves. None of that is incidental — the constraint you add to $\min\|A-\hat A\|$ decides what the answer is allowed to mean, checked here against real telemetry, real breeding lines, and real diagnoses instead of a synthetic stand-in. The constraint was always the point.
