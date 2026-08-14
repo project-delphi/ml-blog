@@ -1,0 +1,135 @@
+---
+title: "Everyone's Name on Every Paper"
+author: "Ravi Kalia"
+date: "2026-08-14"
+categories: [Metascience, Statistics, Research Integrity]
+image: "./cover.png"
+tags: [citations, authorship, bibliometrics, simulation]
+jupyter: authorship-blog
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: show
+---
+
+![Everyone's Name on Every Paper](./cover.png)
+
+[Brian Ripley](https://www.stats.ox.ac.uk/~ripley/),
+[my doctoral supervisor](../brian-ripley-rousseeuw-prize/), published far fewer papers
+than his influence would suggest: he was among R core's most active committers for two
+decades, and none of that work is a paper. He used to say code mattered more than
+citations — writing code debugs your thinking. Such counts are sums over a chosen
+author list.
+
+## Adding names multiplies papers by n, citations by more
+
+Take $n$ researchers with one solo paper each, drawing $c_i$ citations, who put all
+$n$ names on every paper. No new work exists, yet every paper count goes 1 → $n$ and
+every citation count $c_i$ → $S = \sum_j c_j$:
+
+$$\frac{S}{c_i} = n \cdot \frac{\bar{c}}{c_i}.$$
+
+Papers multiply by exactly $n$; citations by more, since heavy tails put the mean far
+above the median.
+
+## Simulated citations, because the tail decides
+
+The counts are synthetic — $c_i$ lognormal ($\mu = 1.5$, $\sigma = 1.2$ on the log
+scale), median near 4.5 with a long right tail, standing in for one field's citations.
+The question is counterfactual, so only simulation has both branches; what rides on it
+is a hiring panel's read of a CV.
+
+```{python}
+#| label: multipliers
+import numpy as np
+
+RNG = np.random.default_rng(0)
+MU, SIGMA = 1.5, 1.2          # lognormal, on the log scale
+GROUPS = (5, 10, 20)
+REPS = 20_000                 # many draws, so the medians are not a fluke of one
+
+print(f"{'n':>3}  {'papers':>7}  {'median':>9}  {'share above':>12}  {'large-n':>8}")
+print(f"{'':>3}  {'':>7}  {'citations':>9}  {'n times':>12}  {'limit':>8}")
+for n in GROUPS:
+    c = RNG.lognormal(MU, SIGMA, size=(REPS, n))
+    # Everyone is credited with the group total, so the multiplier is S / c_i.
+    mult = c.sum(axis=1, keepdims=True) / c
+    limit = n * np.exp(SIGMA**2 / 2)   # what median(S / c_i) tends to as n grows
+    print(f"{n:>3}  {n:>6}x  {np.median(mult):>8.1f}x  {np.mean(mult > n):>11.0%}"
+          f"  {limit:>7.1f}x")
+```
+
+The median beats $n\times$ at every size — 7.3× at $n = 5$, 37× at $n = 20$ — but
+hides who pays.
+
+## The gain is unequal, making it a transaction
+
+Everyone ends on the same total $S$, whatever they brought.
+
+```{python}
+#| label: fig-inflation
+#| fig-cap: "One draw per group size. Left ends are what each researcher earned alone; right ends are what all of them are credited with after combining. The orange tick marks n times the solo count: left of the total, that researcher beat n times; right of it, they did worse."
+import matplotlib.pyplot as plt
+
+SOLO, COMBINED, REF = "#6b7280", "#4a3aa7", "#eb6834"
+rng = np.random.default_rng(1)
+
+fig, axes = plt.subplots(3, 1, figsize=(7.4, 8.2), sharex=True,
+                         gridspec_kw={"height_ratios": GROUPS, "hspace": 0.16})
+
+for ax, n in zip(axes, GROUPS):
+    c = np.sort(rng.lognormal(MU, SIGMA, size=n))
+    total, y = c.sum(), np.arange(n)
+    ax.hlines(y, c, total, color=SOLO, lw=1.2, alpha=0.55, zorder=1)
+    ax.scatter(c, y, s=34, color=SOLO, zorder=3, label="solo: own paper only")
+    ax.scatter(np.full(n, total), y, s=34, color=COMBINED, zorder=3,
+               label="combined: credited the group total")
+    ax.scatter(n * c, y, s=52, marker="|", color=REF, lw=1.8, zorder=4,
+               label=r"$n \times$ the solo count")
+    ax.set_xscale("log")
+    ax.set_ylim(-0.9, n - 0.1)
+    ax.set_yticks([])
+    ax.set_ylabel(f"$n = {n}$", fontsize=11)
+    ax.grid(axis="x", color="0.9", lw=0.7)
+    ax.set_axisbelow(True)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+for ax in axes[:-1]:
+    ax.spines["bottom"].set_visible(False)
+    ax.tick_params(axis="x", which="both", bottom=False)
+
+axes[0].legend(frameon=False, fontsize=9, loc="upper left",
+               bbox_to_anchor=(0.0, 1.6))
+axes[-1].set_xlabel("credited citations (log scale)", fontsize=10)
+plt.show()
+```
+
+Across the 20,000 draws above, two thirds clear $n\times$ — and the most-cited member
+never can, since $S \le n\,c_{\max}$. The swap costs whoever brought the tail, so the
+strong party must be paid.
+
+## Real publishing runs the same sum
+
+**Authors** — seniority. A 2024
+[meta-analysis](https://doi.org/10.1038/s41598-024-54909-w) put honorary authorship in
+health sciences at 26% with no criteria supplied, 18% when shown ICMJE criteria, 51%
+when declared contributions were checked against them.
+
+**Journals** — reciprocity. By 2019 the Journal Citation Reports had suspended 46
+journal pairs — 55 journals — for excessive pairwise citation, which
+[CIDRE](https://doi.org/10.1038/s41598-021-93572-3) detects from citation flow.
+
+**Institutions** — cash. In 2011
+[*Science*](https://doi.org/10.1126/science.334.6061.1344) reported 60-plus highly
+cited researchers adding King Abdulaziz University as a paid second affiliation; by
+2014 it ranked second worldwide on the highly cited list.
+
+## Caveat: the temptation needs no conspiracy
+
+No arrangement is needed to feel this. Teams already produce more-cited work than solo
+authors — [Wuchty, Jones and Uzzi](https://doi.org/10.1126/science.1136099) across
+19.9 million papers — so the honest incentive and the dishonest one point the same
+way: add names. Most author lists are exactly what they look like; none of the cases
+above is the model at full strength. But the arithmetic cannot tell an earned
+name from a gifted one, and neither can the counts. Ripley's could not see him.
