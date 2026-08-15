@@ -2,8 +2,7 @@
 
 ## Where these rules apply
 
-These rules govern new posts, and edits to posts that already carry their own
-venv, pinned kernel, and `requirements.txt`.
+These rules govern new posts and edits to existing ones, with one exception.
 
 They do **not** license a rewrite of the five legacy posts — `data-types`,
 `features-importance-after-clustering`, `poor-persons-bayesian`,

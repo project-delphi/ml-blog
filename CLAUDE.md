@@ -44,7 +44,7 @@ done
 
 ## Writing conventions
 
-For blog posts, read and follow `STYLE.md` before writing.
+For blog posts, read and follow `STYLE.md` before writing or editing one.
 
 **Give every post a spine.** A post is one argument, not a pile of sections. Name the core idea in a sentence before writing; every section advances it.
 
