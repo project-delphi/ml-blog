@@ -45,13 +45,13 @@ so the next section tests it where the right answer is known in advance.
 
 ## Six freehand copies of the same three pencils
 
-The data is synthetic, deliberately. Each configuration is three pencil outlines — eight
-landmarks each, 24 in total — and I made six copies, jittering every landmark by about 3% of
+The data is synthetic, deliberately. Each configuration is three pencil outlines — ten
+landmarks each, 30 in total — and I made six copies, jittering every landmark by about 3% of
 pencil length before applying a random rotation, a random scale between 0.6 and 1.8, and a
 random translation.
 
 That stands in for freehand tracings, where the tracer's hand position, the paper's angle
-and the camera's zoom vary between sittings and none of it is signal.
+and the camera's zoom vary between sittings — none of it signal.
 Simulating beats a real tracing dataset for one reason: I know the truth. Every copy came
 from one template, so they *must* land on top of each other, and any residual is jitter I put
 there rather than a fact about pencils.
@@ -61,17 +61,32 @@ there rather than a fact about pencils.
 import numpy as np
 import matplotlib.pyplot as plt
 
-rng = np.random.default_rng(11)
+rng = np.random.default_rng(20)
 
-# One pencil: 8 landmarks tracing a closed outline, tip upwards.
+# One pencil: 10 landmarks tracing a closed outline clockwise from the tip. Every
+# one is a corner of the silhouette -- a point you could find again on another
+# drawing of the same pencil -- rather than an arbitrary mark along a straight edge.
 PENCIL = np.array([
-    [-0.25, 0.0], [0.0, 0.0], [0.25, 0.0], [0.25, 1.5],
-    [0.25, 2.4], [0.0, 3.0], [-0.25, 2.4], [-0.25, 1.5],
+    [0.00, 3.00],    # 0  graphite tip
+    [0.25, 2.45],    # 1  right shoulder, where the sharpened cone meets the barrel
+    [0.25, 0.62],    # 2  right barrel/ferrule joint
+    [0.25, 0.20],    # 3  right ferrule/eraser joint
+    [0.17, 0.02],    # 4  right corner of the eraser cap
+    [0.00, -0.06],   # 5  eraser crown
+    [-0.17, 0.02],   # 6  left corner of the eraser cap
+    [-0.25, 0.20],   # 7  left ferrule/eraser joint
+    [-0.25, 0.62],   # 8  left barrel/ferrule joint
+    [-0.25, 2.45],   # 9  left shoulder
 ])
+K = len(PENCIL)
+
+# Interior detail lines, as chords between landmarks already in the set: the
+# sharpening line, then the two edges of the ferrule band.
+CHORDS = [(1, 9), (2, 8), (3, 7)]
 
 
 def template():
-    """Three similar-but-not-identical pencils side by side, as one 24x2 configuration."""
+    """Three similar-but-not-identical pencils side by side, as one 30x2 configuration."""
     pencils = []
     for offset, length in zip([-1.3, 0.0, 1.3], [1.0, 0.92, 1.08]):
         p = PENCIL * np.array([1.0, length])
@@ -97,7 +112,7 @@ copies = np.stack([freehand_copy(base, rng) for _ in range(6)])
 print(f"{copies.shape[0]} copies of a {copies.shape[1]} x {copies.shape[2]} configuration")
 ```
 
-Plotted as drawn, the six copies share no frame of reference at all.
+Plotted as drawn, they share no frame of reference.
 
 ```{python}
 #| label: fig-pencils-raw
@@ -106,10 +121,13 @@ COLOURS = plt.cm.viridis(np.linspace(0.05, 0.85, 6))
 
 
 def draw(ax, config, colour, lw=1.4, alpha=0.9):
-    """Draw a 24x2 configuration as three closed 8-landmark outlines."""
-    for start in range(0, 24, 8):
-        loop = np.vstack([config[start:start + 8], config[start]])
+    """Draw a configuration as three closed pencil outlines plus their detail lines."""
+    for start in range(0, len(config), K):
+        pencil = config[start:start + K]
+        loop = np.vstack([pencil, pencil[0]])
         ax.plot(loop[:, 0], loop[:, 1], color=colour, lw=lw, alpha=alpha)
+        for i, j in CHORDS:
+            ax.plot(*pencil[[i, j]].T, color=colour, lw=lw * 0.8, alpha=alpha)
 
 
 fig, ax = plt.subplots(figsize=(6.5, 5))
@@ -161,8 +179,8 @@ print(f"residual distance to the mean shape: {residual.round(3)}")
 ```
 
 Each copy now sits 0.06 to 0.08 from the mean, on configurations of size exactly 1 — under a
-tenth of the shape's own extent, and all of it jitter I put in. Overlaid, the six drawings
-are one.
+tenth of the shape's own extent, all of it jitter I put in. Overlaid, the six drawings are
+one.
 
 ```{python}
 #| label: fig-pencils-aligned
@@ -181,16 +199,20 @@ nobody knows the answer.
 
 ## Eleven monkeys, twenty-two optic nerve heads
 
-For that, a real dataset shipped with [`geomstats`](https://geomstats.github.io/): landmarks
-on the optic nerve head, from Patrangenaru and Ellingson's work on nonparametric statistics
-for object data (2015). Eleven rhesus monkeys, both eyes each, experimental glaucoma induced
+For that, a real dataset shipped with [`geomstats`](https://geomstats.github.io/): optic
+nerve head landmarks from Patrangenaru and Ellingson (2015). Eleven rhesus monkeys, both
+eyes each, experimental glaucoma induced
 in one eye and the fellow eye kept as control — 22 configurations of five landmarks in 3D,
 digitised by vision researchers asking whether raised pressure *deforms* the nerve head.
 
-The question here is the one that pairing was designed for: does nerve-head shape differ
-between a glaucomatous eye and its own control? Glaucoma is staged from the optic disc's
-appearance, so misreading one means treating a healthy eye or letting a diseased one go
-blind.
+The damage is visible before any mathematics: the glaucomatous disc goes pale and
+excavated, its cup widening at the rim's expense.
+
+![Normal and glaucomatous optic nerve heads from this study. Image: [geomstats tutorial](https://geomstats.github.io/notebooks/15_real_world_applications__optic_nerve_heads_analysis_in_kendall_shape_space.html) (Miolane et al., MIT licence); data from Patrangenaru and Ellingson (2015).](./optic-nerves.png){width=560 fig-align="center"}
+
+The question here is the one that pairing was designed for: does nerve-head *shape* differ
+between a glaucomatous eye and its own control? Glaucoma is staged from that appearance, so
+misreading one means treating a healthy eye or letting a diseased one go blind.
 
 Shape analysis fits for a specific reason: five landmarks and 22 configurations is far too
 little to fit anything, and most of the raw variation is the digitiser's coordinate frame —
@@ -322,8 +344,8 @@ rotation are gone.
 
 ### Caveat: the flat map is only honest locally
 
-A tangent plane is exact where it touches and progressively wrong away from it, the way
-Mercator is fine for a city and absurd for Greenland. That is safe here only because these
+A tangent plane is exact where it touches and wrong away from it — Mercator is fine for a
+city, absurd for Greenland. That is safe here only because these
 shapes cluster tightly around the mean. Spread them widely and tangent PCA quietly distorts
 what it measures; the distances to trust then are geodesic ones, computed on the manifold.
 
