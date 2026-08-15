@@ -44,6 +44,8 @@ done
 
 ## Writing conventions
 
+For blog posts, read and follow `notes/blog-style.md` before writing.
+
 **Give every post a spine.** A post is one argument, not a pile of sections. Name the core idea in a sentence before writing; every section advances it.
 
 - **Open on the core idea and the stakes** — the question, why it's non-obvious, what changes once the reader knows. No "in this post we will…" preamble.
