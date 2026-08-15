@@ -1,0 +1,454 @@
+---
+title: "What's Left When You Take Away Position, Size and Angle"
+subtitle: "Kendall shape analysis: a deterministic pipeline, two datasets, and why PCA always turns up right behind it"
+author: "Ravi Kalia"
+date: "2026-08-14"
+categories: [Statistics, Geometry, Computational Biology]
+image: "./cover.png"
+tags: [kendall-shape-analysis, procrustes, morphometrics, phenomics, geomstats, pca]
+jupyter: kendall-blog
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: show
+---
+
+![What's Left When You Take Away Position, Size and Angle](./cover.png)
+
+Yesterday, at a week-long computational phenomics workshop at the Universidad Nacional de
+Colombia in Bogotá, the day went to Kendall shape analysis. I had a personal stake: my
+doctoral supervisor was
+[Brian Ripley](../brian-ripley-rousseeuw-prize/index.qmd), and *his* was
+[David Kendall](https://en.wikipedia.org/wiki/David_George_Kendall). That makes Kendall my
+academic grandfather, and this method family silver I had never taken out of the cupboard.
+Until now.
+
+## Shape is what survives moving, resizing and turning
+
+Nothing is estimated or fitted: this is a deterministic geometric transformation. Its input is
+a $k \times m$ matrix per specimen — $k$ landmarks, $m$ coordinates, landmark $i$ the same
+anatomical point every time. Three nuisances come off it, in order:
+
+- **Translation**, by centring on the landmark centroid: $X_c = CX$, where
+  $C = I_k - \frac{1}{k}\mathbf{1}\mathbf{1}^\top$.
+- **Scale**, by dividing by centroid size, the Frobenius norm
+  $\lVert X_c \rVert_F = \sqrt{\sum_{ij} x_{ij}^2}$, leaving every configuration at size one.
+- **Rotation**, by least squares against a target $Y$: take the SVD
+  $Y^\top X = U\Sigma V^\top$, and $R = VU^\top$ is the rotation minimising
+  $\lVert XR - Y \rVert_F$ (Gower, 1975).
+
+What survives is shape (Kendall, 1984) — easy to claim, so the next section tests it where
+the answer is known.
+
+## Six freehand copies of the same three pencils
+
+The data is synthetic, deliberately: three pencil outlines, ten landmarks each, copied six
+times with every landmark jittered by 3% of pencil length and the whole thing then rotated,
+scaled and shifted at random. It stands in for freehand tracings, where hand position, paper
+angle and camera zoom vary between sittings — none of it signal. Simulating wins because I
+know the truth: every copy came from one template, so any residual is jitter I put there.
+
+```{python}
+#| label: pencil-data
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(20)
+
+# One pencil: 10 landmarks tracing a closed outline clockwise from the tip. Every
+# one is a corner of the silhouette -- a point you could find again on another
+# drawing of the same pencil -- rather than an arbitrary mark along a straight edge.
+PENCIL = np.array([
+    [0.00, 3.00],    # 0  graphite tip
+    [0.25, 2.45],    # 1  right shoulder, where the sharpened cone meets the barrel
+    [0.25, 0.62],    # 2  right barrel/ferrule joint
+    [0.25, 0.20],    # 3  right ferrule/eraser joint
+    [0.17, 0.02],    # 4  right corner of the eraser cap
+    [0.00, -0.06],   # 5  eraser crown
+    [-0.17, 0.02],   # 6  left corner of the eraser cap
+    [-0.25, 0.20],   # 7  left ferrule/eraser joint
+    [-0.25, 0.62],   # 8  left barrel/ferrule joint
+    [-0.25, 2.45],   # 9  left shoulder
+])
+K = len(PENCIL)
+
+# Interior detail lines, as chords between landmarks already in the set: the
+# sharpening line, then the two edges of the ferrule band.
+CHORDS = [(1, 9), (2, 8), (3, 7)]
+
+
+def template():
+    """Three similar-but-not-identical pencils side by side, as one 30x2 configuration."""
+    pencils = []
+    for offset, length in zip([-1.3, 0.0, 1.3], [1.0, 0.92, 1.08]):
+        p = PENCIL * np.array([1.0, length])
+        pencils.append(p + np.array([offset, 0.0]))
+    return np.vstack(pencils)
+
+
+def rotation(theta):
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array([[c, -s], [s, c]])
+
+
+def freehand_copy(base, rng):
+    """Jitter the landmarks, then move, resize and turn the whole thing."""
+    drawn = base + rng.normal(0.0, 0.09, base.shape)
+    scale = rng.uniform(0.6, 1.8)
+    shift = rng.uniform(-4.0, 4.0, size=2)
+    return scale * (drawn @ rotation(rng.uniform(0, 2 * np.pi)).T) + shift
+
+
+base = template()
+copies = np.stack([freehand_copy(base, rng) for _ in range(6)])
+print(f"{copies.shape[0]} copies of a {copies.shape[1]} x {copies.shape[2]} configuration")
+```
+
+Plotted as drawn, they share no frame of reference.
+
+```{python}
+#| label: fig-pencils-raw
+#| fig-cap: "Six freehand copies of the same three pencils, before alignment. Same shape, six coordinate systems."
+from matplotlib.colors import to_rgb
+
+COLOURS = plt.cm.viridis(np.linspace(0.05, 0.85, 6))
+
+
+def draw(ax, config, colour, lw=1.4, alpha=0.9, detail=True):
+    """Draw a configuration as three pencils.
+
+    Everything drawn here is a function of the landmarks -- the barrel facets and
+    the nib are interpolated between them, not extra points -- so the whole
+    picture moves with the configuration and GPA still sees only the 30 landmarks.
+    `detail=False` drops the facets and the nib, for overlays where six pencils'
+    worth of interior lines would be a thicket.
+    """
+    for start in range(0, len(config), K):
+        pencil = config[start:start + K]
+        loop = np.vstack([pencil, pencil[0]])
+        ax.plot(loop[:, 0], loop[:, 1], color=colour, lw=lw, alpha=alpha)
+        for i, j in CHORDS:
+            ax.plot(*pencil[[i, j]].T, color=colour, lw=lw * 0.8, alpha=alpha)
+        if not detail:
+            continue
+        # Facets of the hexagonal barrel: two lines from the shoulder down to the
+        # ferrule, at a third and two thirds of the way across.
+        for f in (1 / 3, 2 / 3):
+            top = pencil[1] + f * (pencil[9] - pencil[1])
+            bottom = pencil[2] + f * (pencil[8] - pencil[2])
+            ax.plot(*np.array([top, bottom]).T, color=colour, lw=lw * 0.7, alpha=alpha * 0.8)
+        # The graphite nib, filled solid: the tip and a third of the way down each
+        # cone edge, in a darkened version of the copy's own colour.
+        nib = np.array([pencil[0],
+                        pencil[0] + 0.34 * (pencil[1] - pencil[0]),
+                        pencil[0] + 0.34 * (pencil[9] - pencil[0])])
+        graphite = [0.4 * channel for channel in to_rgb(colour)]
+        ax.fill(nib[:, 0], nib[:, 1], color=graphite, alpha=min(1.0, alpha + 0.1))
+
+
+fig, ax = plt.subplots(figsize=(6.5, 5))
+for config, colour in zip(copies, COLOURS):
+    draw(ax, config, colour)
+ax.set_aspect("equal")
+ax.set_title("Raw configurations")
+plt.show()
+```
+
+Generalised Procrustes analysis removes all three jointly. There being no closed form for a
+mean shape, it iterates: centre and scale once, then rotate everything onto the current mean
+and recompute it until it stops moving (Goodall, 1991).
+
+```{python}
+#| label: gpa
+def centre_and_scale(config):
+    """Remove translation (centring matrix) and scale (Frobenius norm)."""
+    centred = config - config.mean(axis=0)
+    return centred / np.linalg.norm(centred)
+
+
+def rotate_onto(config, target):
+    """Least-squares rotation of `config` onto `target`, via the SVD of the cross-product."""
+    u, _, vt = np.linalg.svd(target.T @ config)
+    R = vt.T @ u.T
+    if np.linalg.det(R) < 0:  # a reflection is not a rotation; flip the last axis back
+        vt[-1] *= -1
+        R = vt.T @ u.T
+    return config @ R
+
+
+def gpa(configs, tol=1e-10, max_iter=100):
+    """Generalised Procrustes analysis: centre, scale, then iterate rotate-to-mean."""
+    aligned = np.stack([centre_and_scale(c) for c in configs])
+    mean = aligned[0]
+    for _ in range(max_iter):
+        aligned = np.stack([rotate_onto(c, mean) for c in aligned])
+        new_mean = centre_and_scale(aligned.mean(axis=0))
+        if np.linalg.norm(new_mean - mean) < tol:
+            break
+        mean = new_mean
+    return aligned, mean
+
+
+aligned, mean_shape = gpa(copies)
+residual = np.linalg.norm(aligned - mean_shape, axis=(1, 2))
+print(f"residual distance to the mean shape: {residual.round(3)}")
+```
+
+Each copy now sits 0.06 to 0.08 from the mean, on configurations of size 1 — under a tenth of
+its extent, all of it my jitter.
+
+```{python}
+#| label: fig-pencils-aligned
+#| fig-cap: "The same six copies after generalised Procrustes analysis, with the mean shape in black. What is left is the freehand jitter."
+fig, ax = plt.subplots(figsize=(6.5, 5))
+for config, colour in zip(aligned, COLOURS):
+    draw(ax, config, colour, lw=1.1, alpha=0.75, detail=False)
+draw(ax, mean_shape, "black", lw=2.2, alpha=1.0)
+ax.set_aspect("equal")
+ax.set_title("After generalised Procrustes analysis")
+plt.show()
+```
+
+But pencils are rigged. The method has to earn its keep where nobody knows the answer.
+
+## Eleven monkeys, twenty-two optic nerve heads
+
+For that, a real dataset shipped with [`geomstats`](https://geomstats.github.io/): optic nerve
+head landmarks from Patrangenaru and Ellingson (2015). Eleven rhesus monkeys, both eyes each,
+experimental glaucoma induced in one eye and the fellow kept as control, digitised by vision
+researchers asking whether raised pressure *deforms* the nerve head.
+
+The damage shows before any mathematics — the glaucomatous disc goes pale and excavated, its
+cup widening at the rim's expense.
+
+![Normal and glaucomatous optic nerve heads from this study. Image: [geomstats tutorial](https://geomstats.github.io/notebooks/15_real_world_applications__optic_nerve_heads_analysis_in_kendall_shape_space.html) (Miolane et al., MIT licence); data from Patrangenaru and Ellingson (2015).](./optic-nerves.png){width=560 fig-align="center"}
+
+That appearance is how glaucoma is staged, so misreading a disc costs an eye. The question the
+pairing was built for: does nerve-head *shape* differ between a glaucomatous eye and its
+control?
+
+### From a laser scan to a 5 × 3 matrix
+
+Four of the landmarks — superior, temporal, nasal, inferior — are compass points around the
+disc margin. The fifth, the deepest point of the cup, is a *depth*, and no photograph has one.
+So these coordinates were never read off an image: they come from a topographic scan of the
+nerve head surface — confocal scanning laser tomography, which returns a height map (Derado
+et al., 2004).
+
+```{python}
+#| label: nerve-data
+#| warning: false
+# pip install "geomstats<3" "numpy<2"   # geomstats 2.8 still imports numpy.trapz
+from geomstats.datasets.utils import load_optical_nerves
+
+LANDMARKS = ["S", "T", "N", "I", "V"]
+
+nerves, labels, monkeys = load_optical_nerves()  # 0 = control, 1 = glaucoma
+print(f"array shape {nerves.shape} = (configurations, k landmarks, m coordinates)")
+print(f"{len(nerves)} nerve heads from {len(set(monkeys.tolist()))} monkeys, two eyes each\n")
+
+print("one configuration -- monkey 0, control eye, microns:")
+for name, (x, y, z) in zip(LANDMARKS, nerves[0]):
+    print(f"  {name}   across {x:7.0f}  {y:7.0f}   depth {z:8.1f}")
+```
+
+The units are microns: the four rim landmarks sit within 135 µm of one plane, the fifth 540 µm
+below it. That last number is the cup, and the whole reason $m = 3$: drop the third coordinate
+and you delete what glaucoma destroys.
+
+So one nerve head is a $5 \times 3$ matrix, the $k \times m$ input from the top of this post,
+and 22 of them stack into `(22, 5, 3)`. The pencils were the same object at $k = 30$, $m = 2$:
+paper has no depth.
+
+### Fifteen numbers, eight dimensions of shape
+
+Those fifteen numbers are not fifteen dimensions of *shape*: centring costs $m$, scaling one
+more, and quotienting out rotation costs $\dim SO(m) = m(m-1)/2$. What survives is the
+dimension of Kendall shape space:
+
+$$\dim \Sigma^k_m = km - m - 1 - \frac{m(m-1)}{2}$$
+
+```{python}
+#| label: dims
+def shape_space_dim(k, m):
+    """Raw coordinates, less translation, scale, and the rotations quotiented out."""
+    return k * m - m - 1 - m * (m - 1) // 2
+
+
+for k, m, what in [(5, 3, "nerve heads"), (30, 2, "pencil configurations"), (3, 2, "triangles")]:
+    print(f"k={k:2d}, m={m}:  {k * m:2d} raw numbers  ->  "
+          f"{shape_space_dim(k, m):2d} dimensions of shape   ({what})")
+```
+
+For the nerve heads that is $15 - 3 - 1 - 3 = 8$: twenty-two specimens on an eight-dimensional
+curved space. A triangle in the plane gives 2, a surface the next section needs.
+
+Which is also why shape analysis rather than a model: 22 specimens in eight dimensions is too
+little to fit anything, and most of the raw variation is the scanner's frame, not clinical
+signal — which the pipeline deletes before any statistics happen.
+
+```{python}
+#| label: nerve-align
+#| warning: false
+from geomstats.geometry.pre_shape import PreShapeSpace
+from geomstats.learning.frechet_mean import FrechetMean
+
+space = PreShapeSpace(k_landmarks=5, ambient_dim=3)
+space.equip_with_group_action("rotations")   # the group we quotient out
+space.equip_with_quotient()                  # ... giving Kendall shape space
+
+preshape = space.projection(nerves)          # centre + scale, exactly as above
+mean_nerve = FrechetMean(space.quotient).fit(preshape).estimate_
+aligned_nerves = space.fiber_bundle.align(preshape, mean_nerve)
+
+paired = [
+    space.quotient.metric.dist(aligned_nerves[i], aligned_nerves[i + 1])
+    for i in range(0, len(aligned_nerves), 2)
+]
+print(f"within-monkey shape distance, control vs glaucoma: {np.round(paired, 3)}")
+```
+
+All 22, aligned to that mean:
+
+```{python}
+#| label: fig-nerves
+#| fig-cap: "The 22 aligned nerve-head configurations (5 landmarks in 3D) with the Frechet mean in black. Landmark labels: S superior, T temporal, N nasal, I inferior, V nerve-head deepest point."
+RIM = [0, 1, 3, 2, 0]  # S -> T -> I -> N -> S, the four rim points as a closed loop
+
+fig = plt.figure(figsize=(7, 5.5))
+ax = fig.add_subplot(projection="3d")
+for config, label in zip(aligned_nerves, labels):
+    ax.scatter(*config.T, s=26, alpha=0.8, edgecolors="none",
+               color="#C0392B" if label == 1 else "#2E86C1")
+ax.plot(*mean_nerve[RIM].T, color="black", lw=1.8)
+ax.scatter(*mean_nerve.T, s=55, color="black", depthshade=False)
+for name, point in zip(LANDMARKS, mean_nerve):
+    ax.text(*point, f"   {name}", fontsize=12, fontweight="bold")
+ax.view_init(elev=24, azim=-64)
+ax.set_title("Aligned nerve heads: glaucoma (red), control (blue), mean (black)")
+plt.show()
+```
+
+The clouds overlap heavily and the within-monkey distances swing from 0.03 to 0.29. Reading
+more out of that needs ordinary multivariate statistics, and there the geometry pushes back.
+
+## Curvature lives one level up, not in the pictures
+
+::: {.callout-note}
+## What exactly is curved here?
+
+Nothing in the plots above: those landmarks sit in flat, ordinary 2D and 3D. Curvature appears
+one level up, where a configuration collapses to a *single point* — thirty landmarks in 2D is
+one point in $\mathbb{R}^{60}$, five in 3D one point in $\mathbb{R}^{15}$.
+
+Two of the three steps bend that space: unit Frobenius norm confines every configuration to a
+hypersphere, and quotienting by rotation folds it further.
+
+The triangle is the case to hold on to. The count above gave 2, and that surface is a literal
+2-sphere — each *point on it one whole triangle shape*, not a triangle drawn on the surface.
+Equilateral at the poles, collinear around the equator.
+:::
+
+Shape space is curved; covariances and linear models are flat-space ideas. Morphometrics
+settles this as cartographers did — a flat map, accurate near where you stand (Dryden and
+Mardia, 2016). Log-map every aligned shape into the tangent space at the Fréchet mean, run
+plain PCA, push the components back out with the exponential map: those are the modes of shape
+variation.
+
+```{python}
+#| label: fig-modes
+#| fig-cap: "Left: variance explained by each tangent-space principal component. Right: the first mode of variation, mean shape (black) pushed two standard deviations along PC1 (orange) and back (green), viewed down the depth axis."
+from scipy.stats import ttest_rel
+from sklearn.decomposition import PCA
+
+tangent = space.quotient.metric.log(aligned_nerves, mean_nerve).reshape(len(aligned_nerves), -1)
+print("numerical rank of the tangent vectors:", np.linalg.matrix_rank(tangent - tangent.mean(0)))
+
+pca = PCA().fit(tangent)
+evr = pca.explained_variance_ratio_
+
+sd = np.sqrt(pca.explained_variance_[0])
+pc1 = pca.components_[0].reshape(5, 3)
+plus = space.quotient.metric.exp(2 * sd * pc1, mean_nerve)
+minus = space.quotient.metric.exp(-2 * sd * pc1, mean_nerve)
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
+ax1.bar(np.arange(1, 7), evr[:6], color="#4A3AA7")
+ax1.set_xlabel("tangent-space principal component")
+ax1.set_ylabel("variance explained")
+
+for shape, colour, name in [(minus, "#27AE60", "-2 sd"),
+                            (mean_nerve, "black", "mean"),
+                            (plus, "#E67E22", "+2 sd")]:
+    rim = shape[RIM]
+    ax2.plot(rim[:, 0], rim[:, 1], "o-", color=colour, label=name, alpha=0.85)
+    ax2.plot(*shape[4, :2], "*", color=colour, markersize=17)  # V, the deepest point
+for name, point in zip(LANDMARKS, mean_nerve):
+    ax2.annotate(name, point[:2], textcoords="offset points", xytext=(7, 5),
+                 fontsize=11, fontweight="bold")
+ax2.set_aspect("equal")
+ax2.legend(loc="lower right")
+ax2.set_xlabel("nasal - temporal")
+ax2.set_ylabel("superior - inferior")
+ax2.set_title("First mode: rim (lines) and V (stars)")
+plt.show()
+
+print(f"PC1 {evr[0]:.1%}, PC2 {evr[1]:.1%}, first two together {evr[:2].sum():.1%}")
+
+# Does either leading mode track the disease? Rows alternate control, glaucoma
+# within each monkey, so the groups are already paired.
+scores = pca.transform(tangent)
+for c in (0, 1):
+    gap = scores[labels == 1, c].mean() - scores[labels == 0, c].mean()
+    p_value = ttest_rel(scores[labels == 1, c], scores[labels == 0, c]).pvalue
+    print(f"PC{c + 1}: glaucoma vs control gap {abs(gap) / scores[:, c].std(ddof=1):.2f} sd, "
+          f"paired t-test p = {p_value:.2f}")
+```
+
+The tangent vectors come back with numerical rank exactly 8, that dimension count showing up
+in the data. Two components carry 88% of the variation, and the leading mode is almost entirely
+one landmark: V sliding across the disc while the rim drifts the other way. That mode is not
+the disease — it splits glaucomatous from control eyes by 0.12 standard deviations, near
+enough nothing. PC2 does better, at 0.61, but across eleven pairs a paired test puts it at
+p = 0.21: suggestive, not a finding. Which is the honest result for 22 eyes, and only
+visible at all once position, size and rotation are gone.
+
+### Caveat: the flat map is only honest locally
+
+A tangent plane is exact where it touches and wrong away from it: Mercator is fine for a city,
+absurd for Greenland. That is safe here only because these shapes cluster tightly around the
+mean. Spread them widely and tangent PCA distorts what it measures — trust geodesic distances
+instead.
+
+## Procrustes had the same idea, and much worse manners
+
+The name is a warning. Procrustes was a bandit innkeeper on the road to Athens who promised
+every traveller a perfect fit and delivered by adjusting the guest: too short, the rack; too
+tall, the axe. Theseus killed him by his own method, cut down to his own bed.
+
+The mathematics inherited the name honestly — it too forces one object into another's frame,
+and nothing about the target is negotiable. What differs is the fate of the part that will not
+fit: the myth removed it, least squares keeps it as the residual. That is the entire point,
+since everything the method cannot rotate away is what the shapes had to say. Kendall saw that
+those leftovers live on a manifold whose curvature tells you how far a flat map can be
+trusted.
+
+## References
+
+- Derado, G., Mardia, K. V., Patrangenaru, V. and Thompson, H. W. (2004). A shape-based
+  glaucoma index for tomographic images. *Journal of Applied Statistics* 31(10), 1241–1248.
+  [doi:10.1080/0266476042000285530](https://doi.org/10.1080/0266476042000285530)
+- Dryden, I. L. and Mardia, K. V. (2016). *Statistical Shape Analysis, with Applications in
+  R*, 2nd edition. Wiley. [doi:10.1002/9781119072492](https://doi.org/10.1002/9781119072492)
+- Goodall, C. (1991). Procrustes methods in the statistical analysis of shape. *JRSS B*
+  53(2), 285–339. [doi:10.1111/j.2517-6161.1991.tb01825.x](https://doi.org/10.1111/j.2517-6161.1991.tb01825.x)
+- Gower, J. C. (1975). Generalized Procrustes analysis. *Psychometrika* 40, 33–51.
+  [doi:10.1007/BF02291478](https://doi.org/10.1007/BF02291478)
+- Kendall, D. G. (1984). Shape manifolds, Procrustean metrics, and complex projective spaces.
+  *Bulletin of the LMS* 16(2), 81–121. [doi:10.1112/blms/16.2.81](https://doi.org/10.1112/blms/16.2.81)
+- Miolane, N. et al. (2020). Geomstats: a Python package for Riemannian geometry in machine
+  learning. *JMLR* 21(223), 1–9. [jmlr.org/papers/v21/19-027.html](https://jmlr.org/papers/v21/19-027.html)
+- Patrangenaru, V. and Ellingson, L. (2015). *Nonparametric Statistics on Manifolds and Their
+  Applications to Object Data Analysis*. CRC Press.
+  [doi:10.1201/b18969](https://doi.org/10.1201/b18969)
