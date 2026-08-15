@@ -16,17 +16,32 @@ format:
 
 ![Wiring an Eval Pipeline to the Claude API](./cover.png)
 
-You have the groundedness judge from [the previous post](../prompt-evaluation-pipelines/index.qmd), ending in a
-line that asks for JSON only. You `json.loads()` the reply and it works — until one answer arrives wrapped in a
-markdown fence and the harness dies at case 37 of 200.
+You have a prompt whose output quality you cannot write an `assert` for. "Did it answer
+the question?" and "did it stick to the source?" have no regex, so the usual move is to
+hand the grading to a second model: you write down what a good answer looks like — a
+*rubric* — paste in the candidate output, and ask for a verdict. The property this post
+grades is **groundedness**: every factual claim in an answer traceable to the text the
+system retrieved, with nothing invented in between.
 
-"Reply with JSON only" is a request. A judge becomes a component the moment its verdict is a typed object the
-harness can fail on.
+The rubric ends in a line asking for JSON only. You `json.loads()` the reply and it
+works, for thirty-six cases. At case thirty-seven the answer arrives wrapped in a
+markdown fence and the harness dies.
+
+"Reply with JSON only" is a request. A judge becomes a component the moment its verdict
+is a typed object the harness can fail on. (For how the surrounding pipeline is put
+together — criteria, test sets, where judges go wrong — see
+[the previous post](../prompt-evaluation-pipelines/index.qmd); nothing here depends on
+having read it.)
 
 ## A schema turns the rubric into a contract
 
-`messages.parse()` constrains the response to a Pydantic model, so the format instruction leaves the rubric
-entirely and the parse step disappears:
+The fix is not a firmer instruction. The Claude API can constrain generation itself: you
+hand it a description of the shape you want, and the only text the model is allowed to
+produce is text that fits. That description is a JSON schema, and the easiest way to
+write one in Python is a Pydantic model — a class whose fields declare the types you
+expect. `messages.parse()` sends the schema along with the prompt and hands back a
+validated instance of that class, so the format instruction leaves the rubric entirely
+and the parse step disappears:
 
 ```{python}
 #| eval: false
@@ -77,10 +92,16 @@ def judge(context: str, answer: str) -> Verdict:
     return response.parsed_output
 ```
 
-Field order carries weight: `unsupported_claims` is generated before `verdict`, so the model commits to
-evidence before label. `max_tokens` is generous because it caps thinking and reply *together* — and running out
-fails two ways one guard can't cover: spend it inside the thinking and there is no text, so `parsed_output` is
-`None`; spend it mid-JSON and `parse()` raises before you have a response to inspect. Illustratively:
+Field order carries weight. The schema fixes the order the model writes in, and
+`unsupported_claims` comes before `verdict`, so the judge commits to its evidence before
+it commits to a label.
+
+`max_tokens` is generous for a reason. On this model it caps the reasoning the model does
+before answering *and* the reply itself, drawn from one budget. Running out fails two
+ways, and no single guard covers both: spend the budget inside the reasoning and there is
+no text at all, so `parsed_output` is `None`; spend it halfway through the JSON and
+`parse()` raises before there is a response object to inspect. A returned verdict looks
+like this:
 
 ```text
 Verdict(unsupported_claims=['Refunds can also be issued as store credit.'],
@@ -91,11 +112,23 @@ A typed verdict is worth only as much as the cases you feed it.
 
 ## The test set is the instrument, not the input
 
-The data is synthetic: six hand-written `(context, answer)` pairs standing in for a support assistant over a
-company's help-centre articles — context is what a retriever pulled, the label what a human reviewer said.
-Three are grounded; three carry one fabricated claim in the documentation's own vocabulary, an invented
-processing SLA say. That is the failure with money behind it: a confidently wrong instruction costs more than
-"I don't know". Synthetic wins because the quantity we want, judge–human agreement, needs known labels.
+The data here is synthetic: six `(context, answer)` pairs I wrote by hand for this post.
+They stand in for a support assistant answering customer questions over a company's own
+help-centre articles — `context` is the passage a retriever pulled from those articles,
+`answer` is what the assistant replied, and the label is the verdict a human reviewer
+gave it.
+
+Three of the six are grounded. The other three each carry exactly one fabricated claim,
+phrased in the documentation's own vocabulary — an invented processing time, say. That is
+the failure with money behind it: a customer told confidently that refunds land in three
+business days will act on it, and being wrong costs more than "I don't know" would have.
+It is also the failure that no string-matching check catches, because a hallucination
+borrowing the source's phrasing looks like the source.
+
+Synthetic wins here because of what is being measured. The number this post is after is
+how often the judge agrees with a human, and that comparison needs cases whose correct
+verdict is already known — which is a labelled set, not a sample of production traffic.
+Two of the six, one of each kind:
 
 ```{python}
 #| eval: false
@@ -120,10 +153,32 @@ CASES = [
 ]
 ```
 
+## Caveat: six cases is a demonstration, not a calibration set
+
+Six cases are enough to show the machinery and not enough to trust a number from. A
+calibration set — the labelled cases you measure the judge against — runs to fifty or a
+couple of hundred, and it is not a one-off: providers update models underneath you, so
+agreement has to be re-measured on a schedule rather than established once.
+
+The scope is narrow in a second way. This measures the judge against the answers, and
+says nothing about the retriever that fetched the context in the first place. An answer
+can be perfectly grounded in a passage that was the wrong passage to pull, and this
+pipeline will call it a pass. Attributing that failure needs a separate scorer on the
+retrieval step.
+
+Both limits are about how many cases you run and what you point them at, not about how
+you run them. The mechanics stay the same at six cases or two hundred — and at two
+hundred, how you run them starts to matter.
+
 ## Batches turn the scoring loop into a job
 
-Judges are the expensive part of a suite. The Batches API submits every case at once, at half the per-token
-price:
+Judges are the expensive part of a suite. Each case is its own API call, so a
+two-hundred-case suite scored in a loop is two hundred round trips, paid at full price
+and waited on one at a time. That cost is what quietly stops teams from running the suite
+on every change. The Batches API takes the other route: you submit every case at once as
+a single job, poll until it finishes, and pay half the per-token price for the privilege
+of not needing the answers immediately. Each request carries a `custom_id`, a label you
+choose that ties a result back to the case it came from:
 
 ```{python}
 #| eval: false
@@ -163,9 +218,16 @@ while client.messages.batches.retrieve(batch.id).processing_status != "ended":
     time.sleep(30)
 ```
 
-The batch path takes `output_config.format` rather than `parse()`'s `output_format=`, so you hand it a raw
-schema — and `extra="forbid"` makes that schema legal, since the strict subset requires
-`additionalProperties: false`. Results arrive in **any** order, so cases key on `custom_id`, never position:
+The batch path asks for the schema differently. Instead of `parse()`'s `output_format=`,
+which takes the Pydantic class, it takes `output_config.format` and a raw JSON schema —
+hence the `model_json_schema()` call. `extra="forbid"` on the model is what makes that
+schema legal: the API only accepts schemas from a strict subset, and the strict subset
+requires `additionalProperties: false`, which is the JSON-schema way of saying no keys
+beyond the declared ones. Pydantic writes that line into the schema only when the model
+forbids extras.
+
+Results come back in whatever order they finished, not the order you submitted, so every
+case is looked up by `custom_id`:
 
 ```{python}
 #| eval: false
@@ -188,10 +250,15 @@ pass_rate = sum(v.verdict == "pass" for v in verdicts.values()) / len(verdicts)
 agreement = sum(verdicts[i].verdict == labels[i] for i in labels) / len(labels)
 ```
 
-`succeeded` is a transport verdict, not a content one: a refused or truncated case lands there with no text
-block, or half of one — hence the `stop_reason` check rather than trusting a string that parses. Each raise
-names the case and what distinguished it, so failures are diagnosable rather than anonymous. The six cases
-would plausibly give:
+`succeeded` is a transport verdict, not a content one. It means the request reached the
+model and came back, which is not the same as the model having produced a usable answer:
+a case the model refused, or one that ran out of budget mid-sentence, still lands in
+`succeeded` with no text block or half of one. That is what the `stop_reason` check is
+for — `stop_reason` is the API's account of why the model stopped, and `end_turn` is the
+only value that means it finished on its own terms. Checking it beats trusting a string
+that happens to parse. Each `raise` names the case and what was wrong with it, so a
+failure is diagnosable rather than anonymous. Run over the six cases, the two ratios at
+the bottom would plausibly come out as:
 
 ```text
 pass rate                   0.67
@@ -201,10 +268,24 @@ disagreement                refund-window-invented-sla: judged pass, labelled fa
 
 ## What the two numbers are for
 
-The pass rate is the number people quote; agreement is what licenses quoting it. The case the judge missed is
-the invented SLA — the hallucination wearing the documentation's vocabulary, the failure this exists to catch.
-One disagreement in six is how you learn you haven't caught it.
+The first number is the fraction of answers the judge passed: four of six, here. It is
+the number that gets quoted in a standup, because it is about the system under test.
 
-Which is where this stops. Six cases is a demonstration; a calibration set is fifty to a couple of hundred,
-re-run whenever the provider updates the model underneath you. And none of it measures the retriever. Typed
-verdicts buy a pipeline that fails loudly, not a judge you can trust unmeasured.
+The second is the fraction of cases where the judge's verdict matched the human label —
+five of six. It is not about the system under test at all. It is about the judge, and it
+is the thing that decides whether the first number means anything. A judge that agrees
+with you eight times in ten gets one verdict in five wrong, and if those errors lean one
+way the reported pass rate is off by up to twenty points. Until you have measured
+agreement you do not know how wide that band is, only that it exists.
+
+Look at *which* case the judge missed and the point sharpens. It is the invented
+processing time — the hallucination wearing the documentation's vocabulary, the exact
+failure this pipeline exists to catch. One disagreement in six is how you find out you
+haven't caught it yet, and there is no way to find that out from the pass rate alone.
+
+Which is what a typed verdict buys. Not a judge you can trust: a pipeline whose failures
+are the kind you can see. The verdict arrives as an object with a shape the harness
+checks, so a refusal, a truncated reply and a fenced-off blob of JSON all stop the run
+and name the case instead of being averaged into a number. Everything after that — the
+batch job, the two ratios — is ordinary code, and the judge is finally something you can
+measure rather than something you hope about.
