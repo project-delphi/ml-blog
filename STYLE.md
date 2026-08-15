@@ -1,5 +1,23 @@
 # Blog Writing Style
 
+## Where these rules apply
+
+These rules govern new posts, and edits to posts that already carry their own
+venv, pinned kernel, and `requirements.txt`.
+
+They do **not** license a rewrite of the five legacy posts — `data-types`,
+`features-importance-after-clustering`, `poor-persons-bayesian`,
+`post-with-code`, `working-with-quarto` (the `LEGACY_NO_ENV` set in
+`scripts/check_posts.py`). Quarto keys frozen output on an md5 of the source,
+so even a one-word prose fix there invalidates the `_freeze/` record and makes
+the next project render try to execute a post that has no environment to
+execute in. To bring one of those up to this style, build it a venv + kernel +
+`requirements.txt` and drop its `LEGACY_NO_ENV` entry first, as CLAUDE.md
+describes.
+
+Nothing here is a mandate to sweep the existing corpus. Apply it to what you
+are already writing.
+
 ## Structure
 - Before any code block, diagram, or example, write 2–4 sentences of
   plain-language warm-up: what problem this solves, why it matters, and
