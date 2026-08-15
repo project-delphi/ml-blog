@@ -23,14 +23,10 @@ are already writing.
   write 2–4 sentences of plain-language warm-up before the code block,
   diagram, or example: what problem this solves, why it matters, and what
   the reader should hold in mind before seeing the mechanics.
-- Every *other* code block and figure keeps CLAUDE.md's seam rule instead —
-  one sentence before saying what it will show, one after saying what
-  happened. A follow-up cell, a variation on the last one, a plot of a
-  result already motivated: these get a sentence, not a paragraph. Padding
-  them out to a warm-up is a defect, not compliance.
-- The test between the two: could a reader predict what this block does
-  from the prose above it? If yes, one sentence is enough. If it turns a
-  corner they cannot see coming, warm them up first.
+- After that, one sentence before and one after carries it — a follow-up
+  cell, a variation on the last one, a plot of a result you already
+  motivated. If a reader can predict what the block does from the prose
+  above it, one sentence is the right amount.
 - Never open a section with a code block, bullet list, or table. Give
   context first, in prose.
 - Introduce a concept from first principles before naming its technical
