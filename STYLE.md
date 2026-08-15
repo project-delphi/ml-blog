@@ -1,9 +1,31 @@
 # Blog Writing Style
 
+## Where these rules apply
+
+These rules govern new posts and edits to existing ones, with one exception.
+
+They do **not** license a rewrite of the five legacy posts — `data-types`,
+`features-importance-after-clustering`, `poor-persons-bayesian`,
+`post-with-code`, `working-with-quarto` (the `LEGACY_NO_ENV` set in
+`scripts/check_posts.py`). Quarto keys frozen output on an md5 of the source,
+so even a one-word prose fix there invalidates the `_freeze/` record and makes
+the next project render try to execute a post that has no environment to
+execute in. To bring one of those up to this style, build it a venv + kernel +
+`requirements.txt` and drop its `LEGACY_NO_ENV` entry first, as CLAUDE.md
+describes.
+
+Nothing here is a mandate to sweep the existing corpus. Apply it to what you
+are already writing.
+
 ## Structure
-- Before any code block, diagram, or example, write 2–4 sentences of
-  plain-language warm-up: what problem this solves, why it matters, and
-  what the reader should understand before seeing the mechanics.
+- The first time a section reaches for a new idea, mechanism, or dataset,
+  write 2–4 sentences of plain-language warm-up before the code block,
+  diagram, or example: what problem this solves, why it matters, and what
+  the reader should hold in mind before seeing the mechanics.
+- After that, one sentence before and one after carries it — a follow-up
+  cell, a variation on the last one, a plot of a result you already
+  motivated. If a reader can predict what the block does from the prose
+  above it, one sentence is the right amount.
 - Never open a section with a code block, bullet list, or table. Give
   context first, in prose.
 - Introduce a concept from first principles before naming its technical
@@ -11,8 +33,16 @@
   way around.
 
 ## Sentences and words
-- Prefer short, direct sentences. If a sentence has more than one
-  subordinate clause, split it.
+- Prefer short, direct sentences. Split the ones that stack clauses until
+  the reader loses the subject before reaching the verb — two or more
+  nested subordinate clauses is the usual tell.
+- This is not a ban on the long sentence, and it is not a licence to
+  flatten the house voice. Clauses joined by em-dashes to gloss a term or
+  hang a concrete case off an abstract claim read as one clear beat; both
+  calibration examples below do it. Keep those. The target is the sentence
+  you have to read twice, not the sentence that is merely long.
+- Editing an existing post, match its register. These rules tighten prose;
+  they do not convert a post to a different voice.
 - Use everyday words over formal/Latinate ones where a simpler word
   exists: "use" not "utilize," "help" not "facilitate," "start" not
   "commence," "about" not "approximately."

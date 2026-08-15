@@ -44,14 +44,14 @@ done
 
 ## Writing conventions
 
-For blog posts, read and follow `notes/blog-style.md` before writing.
+For blog posts, read and follow `STYLE.md` before writing or editing one.
 
 **Give every post a spine.** A post is one argument, not a pile of sections. Name the core idea in a sentence before writing; every section advances it.
 
 - **Open on the core idea and the stakes** — the question, why it's non-obvious, what changes once the reader knows. No "in this post we will…" preamble.
 - **Headings state claims, not topics** — `## Efron's bootstrap is a weighted bootstrap in disguise`, not `## Background`, so the ToC reconstructs the argument.
 - **Each section earns the next.** If two could swap without damage, merge or cut one. `###` is for steps within one idea, not new ideas.
-- **Stitch every seam.** A section's first sentence links back to the previous result or the core idea; its last names the unresolved thing the next section answers — the gap, not the mechanics ("next, some code"). Same for code and figures: a sentence before saying what it will show, one after saying what happened. If an opening sentence reads identically with the previous section deleted, the seam isn't stitched.
+- **Stitch every seam.** A section's first sentence links back to the previous result or the core idea; its last names the unresolved thing the next section answers — the gap, not the mechanics ("next, some code"). If an opening sentence reads identically with the previous section deleted, the seam isn't stitched.
 - **Close by returning to the core idea** — restate the opening claim now that it's earned, what it buys, where it stops holding. Not a summary of sections.
 - **Caveats inline**, as a short section where the objection occurs (`## Caveat: the uniform is the posterior, not the prior`) — not a "Limitations" bin at the end.
 
