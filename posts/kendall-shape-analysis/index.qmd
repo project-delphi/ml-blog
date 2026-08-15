@@ -16,6 +16,16 @@ format:
 
 ![What's Left When You Take Away Position, Size and Angle](./cover.png)
 
+Photograph the same leaf twice and you get two different arrays of numbers. The camera moved,
+the zoom changed, the leaf sat at a different angle on the desk. None of that is the leaf. To
+ask whether *this* leaf differs from *that* one, you first have to throw away everything in the
+picture that was an accident of taking it.
+
+What is left once position, size and orientation are gone is what statisticians call shape, and
+it is a well-defined object rather than a figure of speech. Getting to it takes three steps and
+no fitting at all. The trouble starts afterwards: the space that shapes live in is curved, and
+nearly every tool you would reach for next assumes flat.
+
 Yesterday, at a week-long computational phenomics workshop at the Universidad Nacional de
 Colombia in Bogotá, the day went to Kendall shape analysis. I had a personal stake: my
 doctoral supervisor was
@@ -26,28 +36,41 @@ Until now.
 
 ## Shape is what survives moving, resizing and turning
 
-Nothing is estimated or fitted: this is a deterministic geometric transformation. Its input is
-a $k \times m$ matrix per specimen — $k$ landmarks, $m$ coordinates, landmark $i$ the same
-anatomical point every time. Three nuisances come off it, in order:
+Start with how you write a leaf down. Pick a handful of points you can find again on every
+specimen — the tip, where the stalk meets the blade, the widest point on each side — and record
+their coordinates. The rule is that point $i$ means the same anatomical thing every time; that
+correspondence is the whole reason two specimens are comparable. Points chosen this way are
+called **landmarks**, and one specimen is then a $k \times m$ matrix of $k$ landmarks with $m$
+coordinates each.
 
-- **Translation**, by centring on the landmark centroid: $X_c = CX$, where
-  $C = I_k - \frac{1}{k}\mathbf{1}\mathbf{1}^\top$.
-- **Scale**, by dividing by centroid size, the Frobenius norm
-  $\lVert X_c \rVert_F = \sqrt{\sum_{ij} x_{ij}^2}$, leaving every configuration at size one.
-- **Rotation**, by least squares against a target $Y$: take the SVD
-  $Y^\top X = U\Sigma V^\top$, and $R = VU^\top$ is the rotation minimising
-  $\lVert XR - Y \rVert_F$ (Gower, 1975).
+Three things in that matrix are accidents of measurement rather than facts about the specimen,
+and each comes off with a line of linear algebra. Nothing is estimated or fitted here: this is a
+deterministic geometric transformation, the same input giving the same output every time.
 
-What survives is shape (Kendall, 1984) — easy to claim, so the next section tests it where
-the answer is known.
+- **Translation**, by sliding the configuration until its landmarks average to the origin. In
+  matrix form $X_c = CX$, where $C = I_k - \frac{1}{k}\mathbf{1}\mathbf{1}^\top$.
+- **Scale**, by dividing by how spread out the landmarks are around that centre — the root of
+  their summed squared coordinates, better known as the Frobenius norm
+  $\lVert X_c \rVert_F = \sqrt{\sum_{ij} x_{ij}^2}$. Every configuration ends up at size one.
+- **Rotation**, by turning one configuration until it sits as close to a target $Y$ as least
+  squares allows. The turn falls out of a singular value decomposition: with
+  $Y^\top X = U\Sigma V^\top$, the rotation $R = VU^\top$ minimises $\lVert XR - Y \rVert_F$
+  (Gower, 1975).
+
+What survives all three is shape (Kendall, 1984) — easy to claim, so the next section tests it
+where the answer is known in advance.
 
 ## Six freehand copies of the same three pencils
 
-The data is synthetic, deliberately: three pencil outlines, ten landmarks each, copied six
-times with every landmark jittered by 3% of pencil length and the whole thing then rotated,
-scaled and shifted at random. It stands in for freehand tracings, where hand position, paper
-angle and camera zoom vary between sittings — none of it signal. Simulating wins because I
-know the truth: every copy came from one template, so any residual is jitter I put there.
+A method whose job is to delete information should first be run where you know exactly what it
+ought to delete. So the data here is synthetic, deliberately. Three pencil outlines, ten
+landmarks each, copied six times: every landmark jittered by 3% of pencil length, and then the
+whole configuration rotated, scaled and shifted at random.
+
+It stands in for freehand tracings, where hand position, paper angle and camera zoom vary
+between sittings and none of it is signal. Simulating beats a real dataset because I know the
+truth: every copy came from one template, so whatever survives alignment is jitter I put there
+myself.
 
 ```{python}
 #| label: pencil-data
@@ -155,9 +178,13 @@ ax.set_title("Raw configurations")
 plt.show()
 ```
 
-Generalised Procrustes analysis removes all three jointly. There being no closed form for a
-mean shape, it iterates: centre and scale once, then rotate everything onto the current mean
-and recompute it until it stops moving (Goodall, 1991).
+Translation and scale come off one configuration at a time, so those are easy. Rotation is not,
+because there is nothing to rotate *onto*. You want every copy aligned to the average shape, but
+you cannot average shapes that are not yet aligned.
+
+The way out is to guess and refine. Centre and scale everything once, take one configuration as
+a provisional mean, rotate all the others onto it, average the result, and repeat until the mean
+stops moving. That loop is generalised Procrustes analysis (Goodall, 1991).
 
 ```{python}
 #| label: gpa
@@ -195,8 +222,8 @@ residual = np.linalg.norm(aligned - mean_shape, axis=(1, 2))
 print(f"residual distance to the mean shape: {residual.round(3)}")
 ```
 
-Each copy now sits 0.06 to 0.08 from the mean, on configurations of size 1 — under a tenth of
-its extent, all of it my jitter.
+Each copy now sits between 0.06 and 0.08 from the mean. Every configuration has size one, so
+that is under a tenth of a drawing's own extent, and all of it is the jitter I put in.
 
 ```{python}
 #| label: fig-pencils-aligned
@@ -214,13 +241,20 @@ But pencils are rigged. The method has to earn its keep where nobody knows the a
 
 ## Eleven monkeys, twenty-two optic nerve heads
 
-For that, a real dataset shipped with [`geomstats`](https://geomstats.github.io/): optic nerve
-head landmarks from Patrangenaru and Ellingson (2015). Eleven rhesus monkeys, both eyes each,
-experimental glaucoma induced in one eye and the fellow kept as control, digitised by vision
-researchers asking whether raised pressure *deforms* the nerve head.
+The optic nerve head is the small disc at the back of the eye where the retina's nerve fibres
+gather and leave through the wall of the eyeball. It carries no photoreceptors, which is why it
+is your blind spot. It is also the one place a clinician can look straight at living nerve
+tissue, which is why glaucoma — a disease in which pressure inside the eye kills those fibres —
+is caught by looking at it.
 
-The damage shows before any mathematics — the glaucomatous disc goes pale and excavated, its
-cup widening at the rim's expense.
+A real dataset of exactly those discs ships with [`geomstats`](https://geomstats.github.io/):
+optic nerve head landmarks from Patrangenaru and Ellingson (2015). Eleven rhesus monkeys, both
+eyes each, with experimental glaucoma induced in one eye and the fellow eye kept as control.
+Vision researchers digitised them to ask whether raised pressure *deforms* the nerve head rather
+than merely thinning it.
+
+The damage shows before any mathematics. A glaucomatous disc goes pale, and its central hollow —
+the cup — widens at the expense of the ring of nerve tissue around it, the rim.
 
 ![Normal and glaucomatous optic nerve heads from this study. Image: [geomstats tutorial](https://geomstats.github.io/notebooks/15_real_world_applications__optic_nerve_heads_analysis_in_kendall_shape_space.html) (Miolane et al., MIT licence); data from Patrangenaru and Ellingson (2015).](./optic-nerves.png){width=560 fig-align="center"}
 
@@ -230,11 +264,14 @@ control?
 
 ### From a laser scan to a 5 × 3 matrix
 
-Four of the landmarks — superior, temporal, nasal, inferior — are compass points around the
-disc margin. The fifth, the deepest point of the cup, is a *depth*, and no photograph has one.
-So these coordinates were never read off an image: they come from a topographic scan of the
-nerve head surface — confocal scanning laser tomography, which returns a height map (Derado
-et al., 2004).
+Five landmarks stand in for each nerve head, and where they were measured decides what the
+analysis can see. Four of them — superior, temporal, nasal, inferior — are compass points around
+the edge of the disc. The fifth is the deepest point of the cup, and a depth is not something a
+photograph has.
+
+So these coordinates were never read off an image. They come from a topographic scan of the
+nerve head surface: confocal scanning laser tomography, which sweeps a laser across the retina
+and returns a height map (Derado et al., 2004).
 
 ```{python}
 #| label: nerve-data
@@ -263,9 +300,15 @@ paper has no depth.
 
 ### Fifteen numbers, eight dimensions of shape
 
-Those fifteen numbers are not fifteen dimensions of *shape*: centring costs $m$, scaling one
-more, and quotienting out rotation costs $\dim SO(m) = m(m-1)/2$. What survives is the
-dimension of Kendall shape space:
+Each nerve head is fifteen numbers, but those are not fifteen independent facts about its shape.
+Every nuisance the pipeline removes costs the description some freedom. Once a configuration is
+centred, its centre is no longer free to be anywhere. Once it is scaled to size one, its size is
+fixed. Once orientation stops counting, all the ways of turning one shape have collapsed into a
+single object.
+
+Subtracting those costs from the raw count gives the dimension of Kendall shape space. Centring
+costs $m$, scaling one more, and quotienting out rotation costs the number of independent
+rotations available in $m$ dimensions, $\dim SO(m) = m(m-1)/2$:
 
 $$\dim \Sigma^k_m = km - m - 1 - \frac{m(m-1)}{2}$$
 
@@ -282,11 +325,24 @@ for k, m, what in [(5, 3, "nerve heads"), (30, 2, "pencil configurations"), (3, 
 ```
 
 For the nerve heads that is $15 - 3 - 1 - 3 = 8$: twenty-two specimens on an eight-dimensional
-curved space. A triangle in the plane gives 2, a surface the next section needs.
+curved space. A triangle in the plane gives 2 — an ordinary two-dimensional surface, which the
+next section leans on.
 
-Which is also why shape analysis rather than a model: 22 specimens in eight dimensions is too
-little to fit anything, and most of the raw variation is the scanner's frame, not clinical
-signal — which the pipeline deletes before any statistics happen.
+That count is also the argument for shape analysis over fitting a model. Twenty-two specimens in
+eight dimensions is too little to fit anything, and most of the raw variation is the scanner's
+frame rather than clinical signal. The pipeline deletes that frame before any statistics happen,
+so whatever statistics do run start from the part that could be signal.
+
+Aligning the nerve heads needs a mean to align onto, and averaging on a curved space takes some
+care. Average a set of points spread over a sphere and the answer falls somewhere inside it, off
+the surface entirely. The pencil loop above shrugged that off by pushing the average back out to
+the sphere on every pass — cheap, and close enough when the shapes sit near each other to begin
+with.
+
+The principled version keeps the property that made an average worth having: the point whose
+total squared distance to all the others is smallest — not necessarily one of them — with that
+distance measured along the curved space rather than straight through it. That is the Fréchet
+mean, and `geomstats` computes it directly.
 
 ```{python}
 #| label: nerve-align
@@ -335,6 +391,12 @@ more out of that needs ordinary multivariate statistics, and there the geometry 
 
 ## Curvature lives one level up, not in the pictures
 
+Two of the three steps did something whose bill has not yet come. Forcing every configuration to
+size one and then folding all of its rotations together does not leave you in a flat vector
+space. Everything you would normally reach for next — a covariance, principal components, a
+linear model — was built for flat spaces and quietly assumes one. It is worth being precise
+about where the curvature actually is, because it is not where the plots are.
+
 ::: {.callout-note}
 ## What exactly is curved here?
 
@@ -350,10 +412,14 @@ The triangle is the case to hold on to. The count above gave 2, and that surface
 Equilateral at the poles, collinear around the equator.
 :::
 
-Shape space is curved; covariances and linear models are flat-space ideas. Morphometrics
-settles this as cartographers did — a flat map, accurate near where you stand (Dryden and
-Mardia, 2016). Log-map every aligned shape into the tangent space at the Fréchet mean, run
-plain PCA, push the components back out with the exponential map: those are the modes of shape
+Morphometrics settles the mismatch the way cartographers do: use a flat map, and trust it only
+near where you are standing (Dryden and Mardia, 2016). Here you stand at the mean shape, and the
+map is the flat plane that just touches the curved space there — its tangent space.
+
+Two operations carry you between the two. The log map takes a shape off the curved space and
+writes it as a straight arrow in that plane; the exponential map sends an arrow back to a shape.
+So log-map every aligned nerve head, run ordinary PCA on the arrows, then push each component
+back out with the exponential map to see which shape it describes. Those are the modes of shape
 variation.
 
 ```{python}
@@ -406,20 +472,24 @@ for c in (0, 1):
           f"paired t-test p = {p_value:.2f}")
 ```
 
-The tangent vectors come back with numerical rank exactly 8, that dimension count showing up
-in the data. Two components carry 88% of the variation, and the leading mode is almost entirely
-one landmark: V sliding across the disc while the rim drifts the other way. That mode is not
-the disease — it splits glaucomatous from control eyes by 0.12 standard deviations, near
-enough nothing. PC2 does better, at 0.61, but across eleven pairs a paired test puts it at
-p = 0.21: suggestive, not a finding. Which is the honest result for 22 eyes, and only
-visible at all once position, size and rotation are gone.
+The tangent vectors come back with numerical rank exactly 8. That is the dimension count from
+the landmark arithmetic earlier, turning up unbidden in the data. Two components then carry 88% of the
+variation, and the leading one is almost entirely a single landmark: V sliding across the disc
+while the rim drifts the other way.
+
+That leading mode is not the disease. It separates glaucomatous eyes from controls by 0.12
+standard deviations, which is near enough nothing. PC2 does better at 0.61, but across only
+eleven pairs a paired t-test puts it at p = 0.21 — suggestive, not a finding. That is the honest
+result for 22 eyes, and it is visible at all only because position, size and rotation went
+first.
 
 ### Caveat: the flat map is only honest locally
 
-A tangent plane is exact where it touches and wrong away from it: Mercator is fine for a city,
-absurd for Greenland. That is safe here only because these shapes cluster tightly around the
-mean. Spread them widely and tangent PCA distorts what it measures — trust geodesic distances
-instead.
+A tangent plane is exact where it touches the curved space and wrong as you move away from it:
+Mercator is fine for a city and absurd for Greenland. The flat map is trustworthy here only
+because these shapes cluster tightly around the mean. Spread them out and tangent PCA starts
+distorting the thing it is measuring — at which point trust geodesic distances, measured along
+the curved space, instead.
 
 ## Procrustes had the same idea, and much worse manners
 
@@ -427,12 +497,15 @@ The name is a warning. Procrustes was a bandit innkeeper on the road to Athens w
 every traveller a perfect fit and delivered by adjusting the guest: too short, the rack; too
 tall, the axe. Theseus killed him by his own method, cut down to his own bed.
 
-The mathematics inherited the name honestly — it too forces one object into another's frame,
-and nothing about the target is negotiable. What differs is the fate of the part that will not
-fit: the myth removed it, least squares keeps it as the residual. That is the entire point,
-since everything the method cannot rotate away is what the shapes had to say. Kendall saw that
-those leftovers live on a manifold whose curvature tells you how far a flat map can be
-trusted.
+The mathematics inherited the name honestly. It too forces one object into another's frame, and
+nothing about the target is negotiable. What differs is the fate of the part that will not fit:
+the myth removed it, least squares keeps it as the residual.
+
+Keeping it is the entire point. The two photographs of the leaf differ in every coordinate, and
+almost all of that difference belongs to the camera; Procrustes strips it and holds on to the
+rest. Kendall's contribution was to see that the rest is not a bag of leftovers but a manifold
+with a geometry — which is what makes it a proper object of study, and at the same time the
+standing warning about the flat map you will inevitably analyse it with.
 
 ## References
 
