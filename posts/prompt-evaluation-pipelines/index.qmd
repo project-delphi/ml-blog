@@ -27,8 +27,13 @@ the thing doing the measuring is another model.
 
 ## A demo is a sample of size one
 
-**Non-determinism.** Even at `temperature=0` the same input need not give the same output.
-One good answer says the prompt *can* work, not that it usually does.
+Trying the change by hand felt like testing it. It wasn't, and it is worth being precise
+about why, because each reason points at a different part of the pipeline that follows.
+Three things go wrong when a handful of playground queries stands in for evidence.
+
+**Non-determinism.** Even at `temperature=0` — the setting that tells the model to always
+take its highest-probability next token, rather than sampling — the same input need not give
+the same output. One good answer says the prompt *can* work, not that it usually does.
 
 **Correctness is often a judgement call.** "Did it answer the question?" has no assertion,
 nor does "was the tone right for a frustrated customer". You can recognise failure instantly
@@ -40,9 +45,15 @@ before-and-after, so the regression is invisible by construction.
 
 ## Every eval pipeline is the same six stages
 
+All three problems have the same shape: no fixed set of cases, and no agreed definition of a
+good answer to run them against. Supply both and you have an eval pipeline. The name covers a
+lot of different tooling, but the sequence underneath is always the same, and it is worth
+seeing whole before picking any of it apart.
+
 1. **Define success criteria** — the specific, separable properties an output must have.
 2. **Build a test set** — inputs representative of real traffic, plus the edges: empty
-   context, contradictory documents, prompt injection, unanswerable questions.
+   context, contradictory documents, prompt injection (user text written to override your
+   instructions), unanswerable questions.
 3. **Run the prompt** over every case, recording inputs, outputs and model version.
 4. **Score** each output against the criteria.
 5. **Aggregate** into a few numbers comparable across prompt versions.
@@ -57,8 +68,13 @@ the choice of scorer inherits that vagueness.
 Plenty of criteria need no model. Validate JSON against a schema, exact-match a label, run
 the unit tests on generated code — that last one is the strongest proxy available, since it
 executes the code rather than reading it, though passing the tests you wrote is still not
-the same as being correct. These run out where an answer can be right in more than one
-wording.
+the same as being correct.
+
+Call these rule-based scorers: code that inspects an output and returns a verdict without
+asking anyone. They are exact, free and instant, and they run out the moment an answer can be
+right in more than one wording. The alternative is to put the rubric in a prompt and let a
+second model return the verdict — LLM-as-judge — and the two trade off along every axis that
+matters:
 
 | | Rule-based scorer | LLM-as-judge |
 |:---|:---|:---|
@@ -68,18 +84,31 @@ wording.
 | Fails by | scoring paraphrase as wrong | agreeing with you less than you assume |
 | Debugging | the assertion says what broke | a score, unless you ask for reasoning |
 
+Take the rule-based column wherever the property admits it. The rest of this post is about
+the other column, because tone, helpfulness and groundedness live there and nothing cheaper
+reaches them.
+
 ## A judge is a prompt whose output happens to be a score
 
-Mechanically there is nothing exotic: a second prompt holding a rubric, the candidate output
-pasted in with whatever it should be judged against, and a verdict in parseable form.
+Mechanically there is nothing exotic. You write down what a good output looks like — the
+criteria, the edge cases, what counts as a failure — and that written-down standard is the
+*rubric*. The judge is a prompt containing it, with the candidate output pasted in alongside
+whatever it should be judged against, ending in an instruction to answer in a form the
+harness can parse.
 
-Take a support assistant over a company's own help-centre articles. A retriever pulls the
-three closest chunks, the prompt asks the model to answer using only those, and the property
-we want is **groundedness**: every claim traceable to a retrieved chunk. The example is
-illustrative, but the asymmetry is real — an ungrounded answer that *sounds* right is a
-confidently wrong instruction to a customer, costing far more than "I don't know". Lexical
-overlap cannot catch it: a hallucination phrased in the documentation's own vocabulary
-scores well on phrasing.
+Take a support assistant over a company's own help-centre articles. Rather than trusting the
+model's own knowledge, the system first searches those articles for the passages closest in
+meaning to the question and pastes them into the prompt — search, then generate over what you
+found, the pattern usually called retrieval-augmented generation, or RAG. The prompt asks the
+model to answer using only those passages, so the property we want is **groundedness**: every
+claim traceable to one of them.
+
+The example is illustrative, but the asymmetry behind it is real. An ungrounded answer that
+*sounds* right is a confidently wrong instruction to a customer, and that costs far more than
+"I don't know" would have. Counting shared words between answer and source cannot catch it
+either: a hallucination phrased in the documentation's own vocabulary scores well on
+phrasing. Grading it takes something that reads for meaning, which is what the rubric below
+asks a second model to do.
 
 ```text
 You are checking whether an ANSWER is fully supported by the CONTEXT.
@@ -104,6 +133,11 @@ verdict, so a failure arrives with its reason. And the reply is JSON, so the har
 
 ## Three judge patterns cover most cases
 
+That rubric grades one output on its own, which is only one of the questions people ask a
+judge. The others are comparative — is this version better than the last one — and structural,
+tying claims back to sources. The shape of the question decides what the score can be used
+for, and three patterns cover nearly all of it.
+
 - **Single-output scoring** grades one output against a rubric — the pattern above. Cheap,
   parallel, and the only one giving an absolute number you can track across releases.
 - **Pairwise comparison** shows the judge old and new outputs and asks which is better.
@@ -116,6 +150,11 @@ verdict, so a failure arrives with its reason. And the reply is JSON, so the har
 
 ## Caveat: the judge is a model, so it fails like one
 
+All three patterns inherit a problem the rule-based scorers do not have. A judge is the same
+kind of object as the system it grades — a prompt over a language model — so every failure
+mode you were worried about downstream applies to the instrument itself. Four of them show up
+often enough to plan around.
+
 - **Score drift.** Run the same judge over the same outputs twice and borderline cases flip.
   A one-point improvement can be noise.
 - **Disagreement with humans.** The judge's rubric is yours only as far as your wording
@@ -127,7 +166,9 @@ verdict, so a failure arrives with its reason. And the reply is JSON, so the har
 
 ## Calibrate against humans, then keep watching the gap
 
-Treat the judge as a component under test. Hand-label a reference set — fifty to a couple of
+None of those failures disqualifies the judge. They disqualify an *unmeasured* one, which is
+the whole difference: treat the judge as a component under test rather than as the test
+itself. Hand-label a reference set — fifty to a couple of
 hundred outputs, graded by whoever owns the quality bar — and run the judge against it. Its
 agreement with those labels is its accuracy; until measured, its scores are decoration. Read
 that agreement per class — against a set that is mostly passes, a judge that passes
@@ -146,19 +187,26 @@ judge–human agreement can regress on its own.
 
 ## Passing offline evals is a merge gate, not a launch signal
 
-Wire the suite to the PR: any diff touching a prompt runs the eval set and reports
-per-criterion pass rates against the base branch. Gate on a drop that clears the judge's own
+A calibrated judge is only useful if something runs it on the change that needs judging, which
+means wiring the suite into the place prompt edits already pass through. Any pull request
+touching a prompt runs the eval set and reports per-criterion pass rates against the base
+branch. Gate on a drop that clears the judge's own
 noise band, which you get by running the suite twice against an unchanged prompt — otherwise
-the flakiness above blocks clean PRs. Reserve judges for the cases that need them, or CI gets
-slow enough that people stop running it. Grow the set from production too — sample traces users
-regenerated, abandoned or thumbs-downed, since real traffic produces inputs nobody would
-think to write.
+the score drift above blocks clean pull requests.
+
+Keep the judges scarce while you are at it. Every judged case is an extra model call in the
+critical path of someone's merge, and a suite slow enough to be annoying is a suite people
+route around. Reserve them for the properties no rule-based scorer can reach.
+
+Grow the set from production, too. Sample the traces users regenerated, abandoned or
+thumbs-downed: real traffic produces inputs nobody would think to write, and those are exactly
+the cases a hand-built set is missing.
 
 Keep the gate's scope honest, though. Offline evals measure output quality, one failure mode
 among many. A feature can score beautifully and go unused because it sits three clicks deep,
 takes eleven seconds, or answers a question users weren't asking.
 
-## What this actually buys you
+## A prompt change becomes a diff of numbers
 
 Back to the one-line prompt change. With a pipeline in place it produces a diff of numbers —
 groundedness held, citation discipline down four points — and the regression is caught in a

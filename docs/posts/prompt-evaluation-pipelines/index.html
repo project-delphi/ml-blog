@@ -170,7 +170,7 @@ ul.task-list li input[type="checkbox"] {
   <li><a href="#caveat-the-judge-is-a-model-so-it-fails-like-one" id="toc-caveat-the-judge-is-a-model-so-it-fails-like-one" class="nav-link" data-scroll-target="#caveat-the-judge-is-a-model-so-it-fails-like-one">Caveat: the judge is a model, so it fails like one</a></li>
   <li><a href="#calibrate-against-humans-then-keep-watching-the-gap" id="toc-calibrate-against-humans-then-keep-watching-the-gap" class="nav-link" data-scroll-target="#calibrate-against-humans-then-keep-watching-the-gap">Calibrate against humans, then keep watching the gap</a></li>
   <li><a href="#passing-offline-evals-is-a-merge-gate-not-a-launch-signal" id="toc-passing-offline-evals-is-a-merge-gate-not-a-launch-signal" class="nav-link" data-scroll-target="#passing-offline-evals-is-a-merge-gate-not-a-launch-signal">Passing offline evals is a merge gate, not a launch signal</a></li>
-  <li><a href="#what-this-actually-buys-you" id="toc-what-this-actually-buys-you" class="nav-link" data-scroll-target="#what-this-actually-buys-you">What this actually buys you</a></li>
+  <li><a href="#a-prompt-change-becomes-a-diff-of-numbers" id="toc-a-prompt-change-becomes-a-diff-of-numbers" class="nav-link" data-scroll-target="#a-prompt-change-becomes-a-diff-of-numbers">A prompt change becomes a diff of numbers</a></li>
   </ul>
 <div class="toc-actions"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/prompt-evaluation-pipelines/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></nav>
     </div>
@@ -191,15 +191,17 @@ ul.task-list li input[type="checkbox"] {
 <p>Nothing there was a bug. A prompt change has no compiler and no stack trace, so the only way to know what it broke is to decide in advance what “broken” means and measure it. That decision, made repeatable, is an eval pipeline — and for most properties worth measuring, the thing doing the measuring is another model.</p>
 <section id="a-demo-is-a-sample-of-size-one" class="level2">
 <h2 class="anchored" data-anchor-id="a-demo-is-a-sample-of-size-one">A demo is a sample of size one</h2>
-<p><strong>Non-determinism.</strong> Even at <code>temperature=0</code> the same input need not give the same output. One good answer says the prompt <em>can</em> work, not that it usually does.</p>
+<p>Trying the change by hand felt like testing it. It wasn’t, and it is worth being precise about why, because each reason points at a different part of the pipeline that follows. Three things go wrong when a handful of playground queries stands in for evidence.</p>
+<p><strong>Non-determinism.</strong> Even at <code>temperature=0</code> — the setting that tells the model to always take its highest-probability next token, rather than sampling — the same input need not give the same output. One good answer says the prompt <em>can</em> work, not that it usually does.</p>
 <p><strong>Correctness is often a judgement call.</strong> “Did it answer the question?” has no assertion, nor does “was the tone right for a frustrated customer”. You can recognise failure instantly and still not be able to write <code>assert</code> for it.</p>
 <p><strong>Regressions are silent.</strong> Fixing verbosity while breaking citation discipline throws nothing; it surfaces as a support ticket weeks later. Without a fixed test set there is no before-and-after, so the regression is invisible by construction.</p>
 </section>
 <section id="every-eval-pipeline-is-the-same-six-stages" class="level2">
 <h2 class="anchored" data-anchor-id="every-eval-pipeline-is-the-same-six-stages">Every eval pipeline is the same six stages</h2>
+<p>All three problems have the same shape: no fixed set of cases, and no agreed definition of a good answer to run them against. Supply both and you have an eval pipeline. The name covers a lot of different tooling, but the sequence underneath is always the same, and it is worth seeing whole before picking any of it apart.</p>
 <ol type="1">
 <li><strong>Define success criteria</strong> — the specific, separable properties an output must have.</li>
-<li><strong>Build a test set</strong> — inputs representative of real traffic, plus the edges: empty context, contradictory documents, prompt injection, unanswerable questions.</li>
+<li><strong>Build a test set</strong> — inputs representative of real traffic, plus the edges: empty context, contradictory documents, prompt injection (user text written to override your instructions), unanswerable questions.</li>
 <li><strong>Run the prompt</strong> over every case, recording inputs, outputs and model version.</li>
 <li><strong>Score</strong> each output against the criteria.</li>
 <li><strong>Aggregate</strong> into a few numbers comparable across prompt versions.</li>
@@ -209,7 +211,8 @@ ul.task-list li input[type="checkbox"] {
 </section>
 <section id="deterministic-scorers-are-cheap-and-narrow" class="level2">
 <h2 class="anchored" data-anchor-id="deterministic-scorers-are-cheap-and-narrow">Deterministic scorers are cheap and narrow</h2>
-<p>Plenty of criteria need no model. Validate JSON against a schema, exact-match a label, run the unit tests on generated code — that last one is the strongest proxy available, since it executes the code rather than reading it, though passing the tests you wrote is still not the same as being correct. These run out where an answer can be right in more than one wording.</p>
+<p>Plenty of criteria need no model. Validate JSON against a schema, exact-match a label, run the unit tests on generated code — that last one is the strongest proxy available, since it executes the code rather than reading it, though passing the tests you wrote is still not the same as being correct.</p>
+<p>Call these rule-based scorers: code that inspects an output and returns a verdict without asking anyone. They are exact, free and instant, and they run out the moment an answer can be right in more than one wording. The alternative is to put the rubric in a prompt and let a second model return the verdict — LLM-as-judge — and the two trade off along every axis that matters:</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 33%">
@@ -251,11 +254,13 @@ ul.task-list li input[type="checkbox"] {
 </tr>
 </tbody>
 </table>
+<p>Take the rule-based column wherever the property admits it. The rest of this post is about the other column, because tone, helpfulness and groundedness live there and nothing cheaper reaches them.</p>
 </section>
 <section id="a-judge-is-a-prompt-whose-output-happens-to-be-a-score" class="level2">
 <h2 class="anchored" data-anchor-id="a-judge-is-a-prompt-whose-output-happens-to-be-a-score">A judge is a prompt whose output happens to be a score</h2>
-<p>Mechanically there is nothing exotic: a second prompt holding a rubric, the candidate output pasted in with whatever it should be judged against, and a verdict in parseable form.</p>
-<p>Take a support assistant over a company’s own help-centre articles. A retriever pulls the three closest chunks, the prompt asks the model to answer using only those, and the property we want is <strong>groundedness</strong>: every claim traceable to a retrieved chunk. The example is illustrative, but the asymmetry is real — an ungrounded answer that <em>sounds</em> right is a confidently wrong instruction to a customer, costing far more than “I don’t know”. Lexical overlap cannot catch it: a hallucination phrased in the documentation’s own vocabulary scores well on phrasing.</p>
+<p>Mechanically there is nothing exotic. You write down what a good output looks like — the criteria, the edge cases, what counts as a failure — and that written-down standard is the <em>rubric</em>. The judge is a prompt containing it, with the candidate output pasted in alongside whatever it should be judged against, ending in an instruction to answer in a form the harness can parse.</p>
+<p>Take a support assistant over a company’s own help-centre articles. Rather than trusting the model’s own knowledge, the system first searches those articles for the passages closest in meaning to the question and pastes them into the prompt — search, then generate over what you found, the pattern usually called retrieval-augmented generation, or RAG. The prompt asks the model to answer using only those passages, so the property we want is <strong>groundedness</strong>: every claim traceable to one of them.</p>
+<p>The example is illustrative, but the asymmetry behind it is real. An ungrounded answer that <em>sounds</em> right is a confidently wrong instruction to a customer, and that costs far more than “I don’t know” would have. Counting shared words between answer and source cannot catch it either: a hallucination phrased in the documentation’s own vocabulary scores well on phrasing. Grading it takes something that reads for meaning, which is what the rubric below asks a second model to do.</p>
 <pre class="text"><code>You are checking whether an ANSWER is fully supported by the CONTEXT.
 
 CONTEXT:
@@ -274,6 +279,7 @@ Reply with JSON only:
 </section>
 <section id="three-judge-patterns-cover-most-cases" class="level2">
 <h2 class="anchored" data-anchor-id="three-judge-patterns-cover-most-cases">Three judge patterns cover most cases</h2>
+<p>That rubric grades one output on its own, which is only one of the questions people ask a judge. The others are comparative — is this version better than the last one — and structural, tying claims back to sources. The shape of the question decides what the score can be used for, and three patterns cover nearly all of it.</p>
 <ul>
 <li><strong>Single-output scoring</strong> grades one output against a rubric — the pattern above. Cheap, parallel, and the only one giving an absolute number you can track across releases.</li>
 <li><strong>Pairwise comparison</strong> shows the judge old and new outputs and asks which is better. Models rank more reliably than they score, so this is sharper for “did my change help?”, while saying nothing about whether either output was any good.</li>
@@ -282,6 +288,7 @@ Reply with JSON only:
 </section>
 <section id="caveat-the-judge-is-a-model-so-it-fails-like-one" class="level2">
 <h2 class="anchored" data-anchor-id="caveat-the-judge-is-a-model-so-it-fails-like-one">Caveat: the judge is a model, so it fails like one</h2>
+<p>All three patterns inherit a problem the rule-based scorers do not have. A judge is the same kind of object as the system it grades — a prompt over a language model — so every failure mode you were worried about downstream applies to the instrument itself. Four of them show up often enough to plan around.</p>
 <ul>
 <li><strong>Score drift.</strong> Run the same judge over the same outputs twice and borderline cases flip. A one-point improvement can be noise.</li>
 <li><strong>Disagreement with humans.</strong> The judge’s rubric is yours only as far as your wording carried. Untested, you don’t know whether its “pass” and yours are the same set.</li>
@@ -291,17 +298,19 @@ Reply with JSON only:
 </section>
 <section id="calibrate-against-humans-then-keep-watching-the-gap" class="level2">
 <h2 class="anchored" data-anchor-id="calibrate-against-humans-then-keep-watching-the-gap">Calibrate against humans, then keep watching the gap</h2>
-<p>Treat the judge as a component under test. Hand-label a reference set — fifty to a couple of hundred outputs, graded by whoever owns the quality bar — and run the judge against it. Its agreement with those labels is its accuracy; until measured, its scores are decoration. Read that agreement per class — against a set that is mostly passes, a judge that passes everything looks excellent. Disagreements usually mean an ambiguous rubric, not a stupid judge.</p>
+<p>None of those failures disqualifies the judge. They disqualify an <em>unmeasured</em> one, which is the whole difference: treat the judge as a component under test rather than as the test itself. Hand-label a reference set — fifty to a couple of hundred outputs, graded by whoever owns the quality bar — and run the judge against it. Its agreement with those labels is its accuracy; until measured, its scores are decoration. Read that agreement per class — against a set that is mostly passes, a judge that passes everything looks excellent. Disagreements usually mean an ambiguous rubric, not a stupid judge.</p>
 <p>Then keep it narrow. Three to five judges each grading one property — grounded, cited its source, answered the question, right tone — beat one judge rating “quality 1–5”, because a narrow question has a defensible right answer and a broad one launders four criteria into an unaccountable digit. Separate scores also localise damage: you see what a change traded away. For pairwise, run both orderings and score the contradictions as ties: discarding them quietly filters out the close calls, and their rate is your measurement of the slot bias.</p>
 <p>Re-run the calibration set periodically, too. Providers update models underneath you, so judge–human agreement can regress on its own.</p>
 </section>
 <section id="passing-offline-evals-is-a-merge-gate-not-a-launch-signal" class="level2">
 <h2 class="anchored" data-anchor-id="passing-offline-evals-is-a-merge-gate-not-a-launch-signal">Passing offline evals is a merge gate, not a launch signal</h2>
-<p>Wire the suite to the PR: any diff touching a prompt runs the eval set and reports per-criterion pass rates against the base branch. Gate on a drop that clears the judge’s own noise band, which you get by running the suite twice against an unchanged prompt — otherwise the flakiness above blocks clean PRs. Reserve judges for the cases that need them, or CI gets slow enough that people stop running it. Grow the set from production too — sample traces users regenerated, abandoned or thumbs-downed, since real traffic produces inputs nobody would think to write.</p>
+<p>A calibrated judge is only useful if something runs it on the change that needs judging, which means wiring the suite into the place prompt edits already pass through. Any pull request touching a prompt runs the eval set and reports per-criterion pass rates against the base branch. Gate on a drop that clears the judge’s own noise band, which you get by running the suite twice against an unchanged prompt — otherwise the score drift above blocks clean pull requests.</p>
+<p>Keep the judges scarce while you are at it. Every judged case is an extra model call in the critical path of someone’s merge, and a suite slow enough to be annoying is a suite people route around. Reserve them for the properties no rule-based scorer can reach.</p>
+<p>Grow the set from production, too. Sample the traces users regenerated, abandoned or thumbs-downed: real traffic produces inputs nobody would think to write, and those are exactly the cases a hand-built set is missing.</p>
 <p>Keep the gate’s scope honest, though. Offline evals measure output quality, one failure mode among many. A feature can score beautifully and go unused because it sits three clicks deep, takes eleven seconds, or answers a question users weren’t asking.</p>
 </section>
-<section id="what-this-actually-buys-you" class="level2">
-<h2 class="anchored" data-anchor-id="what-this-actually-buys-you">What this actually buys you</h2>
+<section id="a-prompt-change-becomes-a-diff-of-numbers" class="level2">
+<h2 class="anchored" data-anchor-id="a-prompt-change-becomes-a-diff-of-numbers">A prompt change becomes a diff of numbers</h2>
 <p>Back to the one-line prompt change. With a pipeline in place it produces a diff of numbers — groundedness held, citation discipline down four points — and the regression is caught in a pull request instead of a support queue. What makes that work is unglamorous: criteria specific enough to disagree about, a test set that grows every time reality surprises you, deterministic scorers wherever the property admits one, and a few narrow judges whose agreement with human labels you keep re-measuring. The judge is at the center not because model-graded scores are inherently trustworthy, but because for tone, helpfulness and groundedness there is no other scorer — and a calibrated judge is a different object from a deployed one.</p>
 
 

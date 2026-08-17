@@ -36,9 +36,11 @@ You send a list of messages; you get back a `Message`. Two things to internalise
 
 **`content` is a list of blocks, not a string** — and it routinely holds more than the answer. `claude-opus-5` thinks by default, so a `thinking` block arrives ahead of the text, and a tool call adds another again. Check `block.type` rather than reaching for `content[0].text`, which will eventually hand you something that isn't the answer.
 
+Both of those hold whichever way you take delivery, which leaves the delivery mode as the only real choice — and the plain one is the one to learn on.
+
 ## Ask for the whole thing first
 
-The simplest version of the call has no streaming in it at all.
+The simplest version of the call has no streaming in it at all. You describe the conversation so far as a list of messages, send it, and wait: the client holds the connection until the model has finished generating, then hands you the finished `Message`. Nothing arrives early, so there is nothing to assemble. Everything below is a variation on this call.
 
 ```{python}
 #| eval: false
@@ -67,7 +69,7 @@ Start here, and stay longer than you think you should. A full response is a *val
 
 What a full response cannot do is show you anything until it can show you everything.
 
-Streaming fixes that with Server-Sent Events — SSE, and the name oversells it. An SSE response is an ordinary HTTP response the server declines to finish: rather than send a body and close, it holds the connection open and writes small labelled chunks, each an `event:` line and a `data:` line carrying JSON. One direction, plain text, over the HTTP you already have. Nothing to install.
+Streaming fixes that by changing what the server does with the connection. Ordinarily it writes the whole body and hangs up. Here it declines to finish: it keeps the connection open and writes small labelled chunks as they become ready, each one an `event:` line naming what just happened and a `data:` line carrying JSON. Traffic goes one direction, in plain text, over the HTTP you already have. That arrangement has a name — Server-Sent Events, or SSE — and the name oversells it. There is nothing to install.
 
 Two reasons to want it, one soft and one hard.
 
@@ -121,7 +123,9 @@ The `usage` numbers on `message_delta` are **cumulative**, not per-event — sum
 
 Here's where delivery stops being cosmetic.
 
-When Claude calls a tool, the arguments arrive as a `tool_use` block whose `input` is a JSON object. Streamed, that object comes as `input_json_delta` events carrying a `partial_json` field — and *partial* is meant literally. These are substrings of the serialised JSON, chopped wherever the boundary fell:
+A tool, in this API, is a function you describe to the model — a name, a sentence about what it does, and a schema for its arguments. The model never runs it. It hands back the name it wants called and the arguments it wants passed, then waits for you to run the thing and send the result. So the arguments are the payload: get them wrong and you call the wrong function with the wrong values.
+
+They arrive as a `tool_use` block whose `input` is a JSON object. Streamed, that object comes as `input_json_delta` events carrying a `partial_json` field — and *partial* is meant literally. These are substrings of the serialised JSON, chopped wherever the boundary fell:
 
 ```json
 {"type":"input_json_delta","partial_json":"{\"location\":"}
@@ -140,7 +144,9 @@ Append each `partial_json` to a buffer keyed by the block's `index`, and call `j
 
 Better still, don't hand-roll it: `get_final_message()` does the accumulation and hands back a parsed `input` dict. That's the real reason to prefer the SDK helper over the raw event iterator whenever tools are in play.
 
-## Which one to reach for
+## The mode follows from who is waiting
+
+Accumulate-then-parse settles the hard case, which leaves the ordinary one: which mode to reach for by default. It comes down to two questions — is a person watching the output appear, and is the response long enough that the connection itself is a liability.
 
 | What you're building | Mode | Why |
 |---|---|---|
@@ -149,11 +155,11 @@ Better still, don't hand-roll it: `get_final_message()` does the accumulation an
 | Agent that calls tools | Streaming, accumulated | Turns run long; use `get_final_message()` and treat tool input as one value, never as fragments |
 | Long report generation | Streaming, not optional | This is the timeout case — a large `max_tokens` without streaming is a connection waiting to be dropped |
 
-Stream when a human is watching, or when the response is long enough that the connection itself is a risk. Otherwise take the simple thing.
+Stream when a human is watching, or when the response is long enough that the connection itself is a risk. Otherwise take the simple thing. That choice also decides what a failure looks like to you, because the two modes fail in different places.
 
 ## What breaks, and what you can't put back
 
-Overload is the failure you'll meet first. A 529 `overloaded_error` means the API is busy, not that your request was wrong — it's retryable, and the SDK already retries it (with 429s, 5xx and connection errors) twice by default with exponential backoff. Mid-stream it arrives as an `error` event rather than an HTTP status, since the status line went out long ago.
+Overload is the failure you'll meet first, and it hits both modes. A 529 `overloaded_error` means the API is busy, not that your request was wrong — it's retryable, and the SDK already retries it (with 429s, 5xx and connection errors) twice by default with exponential backoff. Mid-stream it arrives as an `error` event rather than an HTTP status, since the status line went out long ago.
 
 ::: {.callout-note}
 ## Don't write the retry loop first — but know what it doesn't cover

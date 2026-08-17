@@ -195,6 +195,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#the-old-way-box-the-model-in-from-both-ends" id="toc-the-old-way-box-the-model-in-from-both-ends" class="nav-link" data-scroll-target="#the-old-way-box-the-model-in-from-both-ends">The old way: box the model in from both ends</a></li>
   <li><a href="#the-new-way-make-the-shape-a-contract" id="toc-the-new-way-make-the-shape-a-contract" class="nav-link" data-scroll-target="#the-new-way-make-the-shape-a-contract">The new way: make the shape a contract</a></li>
   <li><a href="#the-ticket-was-never-the-point" id="toc-the-ticket-was-never-the-point" class="nav-link" data-scroll-target="#the-ticket-was-never-the-point">The ticket was never the point</a></li>
+  <li><a href="#caveat-a-schema-guarantees-shape-not-correctness" id="toc-caveat-a-schema-guarantees-shape-not-correctness" class="nav-link" data-scroll-target="#caveat-a-schema-guarantees-shape-not-correctness">Caveat: a schema guarantees shape, not correctness</a></li>
+  <li><a href="#back-to-the-2am-page" id="toc-back-to-the-2am-page" class="nav-link" data-scroll-target="#back-to-the-2am-page">Back to the 2am page</a></li>
   <li><a href="#references" id="toc-references" class="nav-link" data-scroll-target="#references">References</a></li>
   </ul>
 <div class="toc-actions"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/structured-json-with-claude/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></nav>
@@ -229,7 +231,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <li><strong>Prefill the assistant turn.</strong> Seed the model’s own turn with a lone <code>{</code> so it has no choice but to continue from inside the object. No room left for a preamble — the preamble slot is already spent.</li>
 <li><strong>Add a stop sequence.</strong> Halt generation the moment a closing <code>}</code> appears, so the model can’t tack on “let me know if you need anything else.”</li>
 </ol>
-<div id="4d51615b" class="cell" data-execution_count="1">
+<div id="f09df6ef" class="cell" data-execution_count="1">
 <div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># The old way — do not use this on current models.</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>response <span class="op">=</span> client.messages.create(</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    model<span class="op">=</span><span class="st">"claude-sonnet-5"</span>,</span>
@@ -249,9 +251,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </section>
 <section id="the-new-way-make-the-shape-a-contract" class="level2">
 <h2 class="anchored" data-anchor-id="the-new-way-make-the-shape-a-contract">The new way: make the shape a contract</h2>
-<p>Pass a JSON Schema through <code>output_config.format</code> and the API <em>guarantees</em> the response conforms to it — not “usually,” not “if the prompt is worded carefully,” but enforced at the endpoint. No brace surgery, no stop sequences, no retry loop.</p>
-<p>Here’s a messy support ticket — invented for this post, but written the way an annoyed customer actually writes — going in as free text, coming out as a typed object.</p>
-<div id="8475a114" class="cell" data-execution_count="2">
+<p>Both tricks are attempts to describe the shape you want in English and then fence the model in when it wanders. The alternative is to stop describing and start declaring: hand the API a machine-readable specification of the object — which fields exist, what type each one is, which values are allowed, which are required — and let the endpoint refuse to emit anything that does not fit. That specification is a JSON Schema, and it is an ordinary dictionary you write once.</p>
+<p>Pass it through <code>output_config.format</code> and the API <em>guarantees</em> the response conforms — not “usually,” not “if the prompt is worded carefully,” but enforced where the tokens are produced. No brace surgery, no stop sequences, no retry loop.</p>
+<p>Here’s a messy support ticket going in as free text and coming out as a typed object. I invented it for this post, written the way an annoyed customer actually writes; it stands in for the thing a real ingestion job sees, where the routing decision has a cost — a critical bug filed as a billing question sits in the wrong queue until someone notices.</p>
+<div id="a8a3bc86" class="cell" data-execution_count="2">
 <div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> json</span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> anthropic</span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -302,8 +305,16 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="the-ticket-was-never-the-point" class="level2">
 <h2 class="anchored" data-anchor-id="the-ticket-was-never-the-point">The ticket was never the point</h2>
 <p>Swap the ticket for a log line, a resume, a tool call your agent needs to act on — anything where the model’s output has to become a variable in your code, not a paragraph a human reads. Define the shape once, let the API enforce it, delete the parsing code you used to need.</p>
-<p>Two honest caveats. A schema guarantees <em>shape</em>, not <em>correctness</em> — you’ll never get malformed JSON, but you can still get a confidently wrong <code>category</code>, so spot-check classifications on edge cases before trusting the pipeline unattended.</p>
-<p>And the guarantee is scoped to a turn that finishes. A safety refusal or a <code>max_tokens</code> truncation leaves you with an empty or clipped response, and <code>stop_reason</code> says which — that’s the check in the snippet above, and the line people skip. Budget generously: thinking shares <code>max_tokens</code> with the response, so a ceiling that fit a toy input can clip a real one.</p>
+</section>
+<section id="caveat-a-schema-guarantees-shape-not-correctness" class="level2">
+<h2 class="anchored" data-anchor-id="caveat-a-schema-guarantees-shape-not-correctness">Caveat: a schema guarantees shape, not correctness</h2>
+<p>The guarantee is narrower than the relief of it suggests. You will never again get malformed JSON, and you can still get a confidently wrong <code>category</code> — a feature request filed as a bug, in perfectly valid syntax. The schema constrains the form of the answer and says nothing about the judgement inside it, so classifications still want spot-checking on edge cases before the pipeline runs unattended.</p>
+<p>The guarantee is also scoped to a turn that finishes. A safety refusal or a <code>max_tokens</code> truncation leaves you with an empty or clipped response, and <code>stop_reason</code> is what tells you which — that’s the check in the snippet above, and the line people skip. Budget generously while you are there: thinking shares <code>max_tokens</code> with the response, so a ceiling that fit a toy input can clip a real one.</p>
+</section>
+<section id="back-to-the-2am-page" class="level2">
+<h2 class="anchored" data-anchor-id="back-to-the-2am-page">Back to the 2am page</h2>
+<p>Both of those failures have something the <code>JSONDecodeError</code> did not: they announce themselves at the boundary, in a field you can read, before anything downstream acts on them.</p>
+<p>That is the whole change. The 2am page happened because the shape of your data lived in a polite request and the model was free to interpret it. Move the shape into a schema and it stops being a request — the preamble has nowhere to go, the fences never appear, and the one line of defensive code left is a <code>stop_reason</code> check that tells you plainly when there is no answer at all. You are no longer parsing prose. You are reading a value.</p>
 </section>
 <section id="references" class="level2">
 <h2 class="anchored" data-anchor-id="references">References</h2>

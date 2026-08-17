@@ -270,7 +270,7 @@ window.Quarto = {
 </div>
 <section id="a-model-says-six.-which-parts-of-the-image-made-it-say-that" class="level2">
 <h2 class="anchored" data-anchor-id="a-model-says-six.-which-parts-of-the-image-made-it-say-that">A model says “six”. Which parts of the image made it say that?</h2>
-<p>Here is test digit number 9729 of MNIST. A convolutional network that gets 98.8% of the test set right looks at it and returns <strong>6</strong> with probability 0.996. The digit is a 5. The network’s probability for the correct answer is 0.00055 — third place, behind not only the 6 but an 8.</p>
+<p>Here is test digit number 9729 of MNIST, the standard collection of handwritten digits scanned into 28×28 grids of grey. A convolutional network — the workhorse image model, which slides small learned filters across a picture and stacks the results — gets 98.8% of that test set right. It looks at this image and returns <strong>6</strong> with probability 0.996. The digit is a 5. The network’s probability for the correct answer is 0.00055 — third place, behind not only the 6 but an 8.</p>
 <p>Something in those 784 pixels made the network confident. The question “why?” is unhelpfully broad, but there is a sharper version of it that we can actually answer: <em>which parts of the input were responsible for the output, and how much?</em> That is a localization problem. It has a shape — you name a set of parts, you define a way of assigning credit to each, and you get back a number per part.</p>
 <p>Almost every explainability method in use is an answer to that problem, and the differences between them come down to three choices:</p>
 <ol type="1">
@@ -285,13 +285,14 @@ window.Quarto = {
 <i class="callout-icon"></i>
 </div>
 <div class="callout-title-container flex-fill">
-Every number below is computed at build time
+Nearly every number below is computed at build time
 </div>
 <div class="callout-btn-toggle d-inline-block border-0 py-1 ps-1 pe-0 float-end"><i class="callout-toggle"></i></div>
 </div>
 <div id="callout-1" class="callout-1-contents callout-collapse collapse">
 <div class="callout-body-container callout-body">
-<p>Nothing here is typed in from a previous run. The prose interpolates values from the same objects the figures are drawn from, and 14 cross-checks run while the page builds — the completeness axiom for integrated gradients, the equivalence of two Grad-CAM implementations, hand-derived logistic standard errors against <code>statsmodels</code>, hand-computed ANOVA against <code>scipy</code>, PCA against <code>scikit-learn</code>. If any of them fails, the page does not render.</p>
+<p>Almost nothing here is typed in from a previous run. The prose interpolates values from the same objects the figures are drawn from, and 14 cross-checks run while the page builds — the completeness axiom for integrated gradients, the equivalence of two Grad-CAM implementations, hand-derived logistic standard errors against <code>statsmodels</code>, hand-computed ANOVA against <code>scipy</code>, PCA against <code>scikit-learn</code>. If any of them fails, the page does not render.</p>
+<p>The exception is the handful of rank correlations quoted in Part I’s sanity-check and agreement sections. The figures above them compute and plot those numbers; the sentences alongside read them off the picture rather than interpolating them, so those few are transcribed by hand.</p>
 <ul>
 <li>[wrong] integrated gradients sum to f(x) - f(0) within 3.7e-04 relative</li>
 <li>[wrong] Grad-CAM via hooks is bit-identical to Grad-CAM via the head split</li>
@@ -315,7 +316,7 @@ Every number below is computed at build time
 <section id="two-traditions-asking-one-question" class="level2">
 <h2 class="anchored" data-anchor-id="two-traditions-asking-one-question">Two traditions asking one question</h2>
 <p>Statistics has been localizing responsibility for a century, and did it first because its models were small enough to make the answer legible. A regression coefficient is an attribution to a variable. Fisher’s analysis of variance, published in the 1920s, is a literal decomposition: total variability splits into a part explained by the treatment and a part left over, and the arithmetic is an identity rather than an approximation. The tradition’s characteristic move is to attach a standard error to the attribution, so that “this variable matters” can fail to be supported by the data.</p>
-<p>Machine learning arrived at the same question from the other end. Its models are too large to read, so the parts are not chosen for interpretability — they are whatever the input happens to be made of, or whatever the architecture happens to expose. SHAP, LIME, saliency maps, Grad-CAM and integrated gradients are all attempts to recover a per-part number from a function you cannot inspect directly. They are typically point estimates with no uncertainty attached at all.</p>
+<p>Machine learning arrived at the same question from the other end. Its models are too large to read, so the parts are not chosen for interpretability — they are whatever the input happens to be made of, or whatever the architecture happens to expose. The named methods you meet in that literature (SHAP and LIME, which probe the model around a single prediction to see what moves it; saliency maps, Grad-CAM and integrated gradients, which read gradients off the network itself) are all attempts to recover a per-part number from a function nobody can inspect directly. They are typically point estimates with no uncertainty attached at all.</p>
 <p>Neither tradition owns the question. They own different regimes of it, and their failures are instructive in opposite directions. Part I takes the black box; Part II takes the glass box.</p>
 </section>
 <section id="part-i-explaining-a-black-box-mnist" class="level2">
@@ -329,7 +330,7 @@ Every number below is computed at build time
 </section>
 <section id="the-model-and-the-two-digits-we-keep-coming-back-to" class="level3">
 <h3 class="anchored" data-anchor-id="the-model-and-the-two-digits-we-keep-coming-back-to">The model, and the two digits we keep coming back to</h3>
-<p>The classifier is a small convolutional network: two convolution blocks down to a 7×7 grid, a third convolution to 128 channels, then global average pooling and one linear layer. That last part is a deliberate choice rather than a default, and the reason appears when we get to Grad-CAM.</p>
+<p>With the data settled, the model. The classifier is a small convolutional network: two convolution blocks down to a 7×7 grid, a third convolution to 128 channels, then global average pooling and one linear layer. Global average pooling means each of those 128 channels is collapsed to a single number by averaging its 7×7 map, so the final layer sees channel strengths and nothing about <em>where</em> in the image they fired. The layer’s ten outputs are the <strong>logits</strong> — one raw score per digit class, which a softmax turns into the probabilities quoted above, and which every method below differentiates or perturbs. Pooling rather than flattening is a deliberate choice rather than a default, and the reason appears when we get to Grad-CAM.</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> features(<span class="va">self</span>, x: torch.Tensor) <span class="op">-&gt;</span> torch.Tensor:</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="va">self</span>.act3(<span class="va">self</span>.bn3(<span class="va">self</span>.conv3(<span class="va">self</span>.block2(<span class="va">self</span>.block1(x)))))</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -374,7 +375,7 @@ Figure&nbsp;2: Gradient magnitude of the predicted logit. The digit’s outline 
 </div>
 </div>
 </div>
-<p>The map is speckled and only loosely attached to the digit. That is not a rendering artefact, it is what the gradient of a ReLU network looks like: a piecewise-linear function’s slope changes discontinuously across activation boundaries, so neighbouring pixels can have very different derivatives. Worse, look where the largest value lands. Of the 617 pixels in this image that are exactly black, saliency assigns a non-zero gradient to 617 of them — all of them — and the single largest gradient in the entire map, 1.35, sits on one of them.</p>
+<p>The map is speckled and only loosely attached to the digit. That is not a rendering artefact, it is what the gradient of this kind of network looks like. Its activation function, the rectified linear unit or ReLU, passes positive values through and clamps negatives to zero, which makes the whole network piecewise linear: its slope jumps at every point where some unit switches on or off. Two neighbouring pixels can therefore have very different derivatives. Worse, look where the largest value lands. Of the 617 pixels in this image that are exactly black, saliency assigns a non-zero gradient to 617 of them — all of them — and the single largest gradient in the entire map, 1.35, sits on one of them.</p>
 <p>That is a coherent statement about the model: painting ink onto that empty pixel would change the logit faster than anything else. It is not a statement about <em>this</em> image, which has nothing there. Sensitivity and responsibility are different questions, and saliency answers the first one.</p>
 </section>
 <section id="occlusion-responsibility-as-what-breaks-when-you-take-it-away" class="level3">
@@ -517,7 +518,7 @@ Figure&nbsp;6: The same three methods applied to an untrained network on the sam
 </div>
 </div>
 </div>
-<p>Saliency and Grad-CAM pass comfortably: rank correlations of <span class="math inline">\(+0.03\)</span> and <span class="math inline">\(-0.38\)</span> against their trained counterparts, which is to say the untrained network’s maps carry no usable information about the trained one’s. Integrated gradients fails, and fails spectacularly — the magnitudes correlate at <span class="math inline">\(+0.99\)</span>.</p>
+<p>Saliency and Grad-CAM pass comfortably: rank correlations of <span class="math inline">\(+0.03\)</span> and <span class="math inline">\(-0.38\)</span> against their trained counterparts, which is to say the untrained network’s maps bear no resemblance to the trained one’s. Integrated gradients fails, and fails spectacularly — the magnitudes correlate at <span class="math inline">\(+0.99\)</span>.</p>
 <p>The mechanism is the one from the previous caveat, seen from the other side. Every integrated-gradients attribution carries the factor <span class="math inline">\(x - x'\)</span>, which depends only on the image. That factor dominates the magnitude, so <em>any</em> network produces a map shaped like the digit’s stroke. The signs, which are the part carrying model information, tell a different story: their rank correlation is <span class="math inline">\(-0.01\)</span>, essentially nothing. So the honest reading is that the picture is mostly the input and the information is mostly in the colours — and a reader shown only the magnitudes would learn nothing about the model while feeling that they had.</p>
 <p>This is worth generalising. Any attribution of the form <em>gradient times input</em> inherits the input’s structure, which is precisely what makes such maps look convincing. Looking like the object is not evidence that the method found the object.</p>
 </section>
@@ -549,14 +550,15 @@ Figure&nbsp;7: All four localizations of the same misclassification, with Spearm
 <p>Same problem, opposite regime. Four features instead of 784 pixels, 150 rows instead of 60,000, and a model whose parameters are the explanation rather than an obstacle to it. What changes is not the question — still <em>which parts, and how much</em> — but that every answer now arrives with a statement about its own reliability.</p>
 <section id="where-these-flowers-come-from-and-what-the-labels-mean" class="level3">
 <h3 class="anchored" data-anchor-id="where-these-flowers-come-from-and-what-the-labels-mean">Where these flowers come from, and what the labels mean</h3>
-<p>The measurements are Edgar Anderson’s. Working at the Missouri Botanical Garden in the 1930s on the problem of how species boundaries hold up under variation, he measured sepals and petals from irises on the Gaspé Peninsula in Quebec — four measurements per flower, in centimetres, all recorded by hand. The <em>Iris setosa</em> and <em>Iris versicolor</em> plants were, as Fisher quotes him, all from the same pasture, picked on the same day and measured at the same time by the same person with the same apparatus. The 50 <em>Iris virginica</em> flowers were not: they come from a different colony, and Fisher says so explicitly in the paper. The dataset is therefore two clean samples and one that was gathered under other conditions — a detail worth carrying into any claim about how well the three separate.</p>
+<p>Where MNIST was assembled to benchmark a machine, this table was assembled to answer a question about plants. The measurements are Edgar Anderson’s. Working at the Missouri Botanical Garden in the 1930s on the problem of how species boundaries hold up under variation, he measured sepals and petals from irises on the Gaspé Peninsula in Quebec — four measurements per flower, in centimetres, all recorded by hand. The <em>Iris setosa</em> and <em>Iris versicolor</em> plants were, as Fisher quotes him, all from the same pasture, picked on the same day and measured at the same time by the same person with the same apparatus. The 50 <em>Iris virginica</em> flowers were not: they come from a different colony, and Fisher says so explicitly in the paper. The dataset is therefore two clean samples and one that was gathered under other conditions — a detail worth carrying into any claim about how well the three separate.</p>
 <p>Ronald Fisher took that table and used it to introduce linear discriminant analysis in <em><a href="https://onlinelibrary.wiley.com/doi/10.1111/j.1469-1809.1936.tb02137.x">The Use of Multiple Measurements in Taxonomic Problems</a></em> (1936). The paper appeared in the <em>Annals of Eugenics</em>, which Fisher edited; he was a prominent eugenicist, and that is a fact about the dataset’s history worth stating plainly rather than eliding.</p>
 <p>The question asked of the data, then and here, is taxonomic: given four measurements, which species is this? The label is a botanist’s identification, not an instrument reading, and the downstream consequence of getting it wrong is a misclassified herbarium specimen — a research conclusion, not a diagnosis or a loan. That low stake is exactly why Iris survives as a teaching set, and it is a useful contrast with Part I: nothing below is doing work that anyone should be worried about, which leaves the statistical machinery visible.</p>
 <p>The reason to reach for interval estimates on 150 rows is the sample size itself. Fifty flowers per species is enough to estimate a mean and nowhere near enough to treat a fitted coefficient as a fact. Two of the four measurements correlate at 0.963, which means the data cannot cleanly separate their contributions — and a method that reports uncertainty will say so, while a method that reports a point estimate will not.</p>
 </section>
 <section id="coefficients-responsibility-with-an-error-bar-attached" class="level3">
 <h3 class="anchored" data-anchor-id="coefficients-responsibility-with-an-error-bar-attached">Coefficients: responsibility with an error bar attached</h3>
-<p>Setosa is trivially separable from the other two, so the interesting comparison is versicolor against virginica. Fit an unpenalised logistic regression to the four standardised measurements by Newton–Raphson; at the maximum, the log-likelihood’s curvature is <span class="math inline">\(X^\top W X\)</span> with <span class="math inline">\(W = \mathrm{diag}(p(1-p))\)</span>, and the inverse of that matrix is the asymptotic covariance of the coefficients. Sharp curvature means the data pin the coefficient down, and the standard error is small. That is the whole content of a confidence interval on a coefficient, and it is the thing Part I had no analogue of.</p>
+<p>Setosa is trivially separable from the other two, so the interesting comparison is versicolor against virginica. Fit an unpenalised logistic regression to the four standardised measurements — no shrinkage term, so nothing is holding the coefficients back — using Newton–Raphson, which repeatedly jumps to the peak of a local quadratic approximation of the log-likelihood.</p>
+<p>The uncertainty falls out of the same machinery, which is the part worth dwelling on. At the maximum, the log-likelihood’s curvature is <span class="math inline">\(X^\top W X\)</span> with <span class="math inline">\(W = \mathrm{diag}(p(1-p))\)</span>, and the inverse of that matrix is the coefficients’ covariance. Read that geometrically: a sharply peaked likelihood means moving a coefficient costs fit immediately, the data have pinned it down, and the standard error is small. A flat one means the opposite. That is the whole content of a confidence interval on a coefficient — here a <strong>Wald interval</strong>, the estimate plus or minus about two standard errors — and it is the thing Part I had no analogue of.</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> fit_logistic(</span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>    X: np.ndarray, y: np.ndarray, names: <span class="bu">list</span>[<span class="bu">str</span>], max_iter: <span class="bu">int</span> <span class="op">=</span> <span class="dv">100</span>, tol: <span class="bu">float</span> <span class="op">=</span> <span class="fl">1e-10</span></span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> LogitFit:</span>
@@ -607,7 +609,7 @@ Figure&nbsp;8: Coefficients with 95% Wald intervals, versicolor versus virginica
 </div>
 </div>
 </div>
-<div id="7d48d38d" class="cell" data-execution_count="17">
+<div id="a206a7c2" class="cell" data-execution_count="17">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="17">
 <table class="caption-top table table-sm table-striped small">
 <colgroup>
@@ -671,7 +673,7 @@ Figure&nbsp;8: Coefficients with 95% Wald intervals, versicolor versus virginica
 </table>
 </div>
 </div>
-<p>Read it as an explanation and it says: petals discriminate, sepals do not. Read it as a <em>localization with error bars</em> and it says something more interesting. Petal length carries a coefficient of 7.78 and petal width 7.77 — nearly identical, both enormous — and both have standard errors of roughly 4.0. Petal width’s interval crosses zero. Taken one at a time, neither petal measurement is quite significant at the 5% level.</p>
+<p>Read it as an explanation and it says: petals discriminate, sepals do not. Read it as a <em>localization with error bars</em> and it says something more interesting. Petal length carries a coefficient of 7.78 and petal width 7.77 — nearly identical, both enormous — and both have standard errors of roughly 4.0, which is to say the error bar is half the size of the effect. Petal length clears the 5% line by a hair, at <span class="math inline">\(p =\)</span> 0.047; petal width does not, at <span class="math inline">\(p =\)</span> 0.061, and its interval crosses zero. Taken one at a time, the two headline measurements of this dataset are barely distinguishable from no effect at all.</p>
 <p>That is not a sign that petals do not matter. It is the interval doing its job on collinear predictors: with the two petal measurements correlated at 0.963, the data can say confidently that petal size separates the species and cannot say which of the two measurements deserves the credit. The coefficients are individually unstable and jointly precise. An attribution method that returned two point estimates here would report the same split and give you no way at all to notice the problem.</p>
 <section id="caveat-when-the-classes-separate-there-is-no-estimate-to-put-an-error-bar-on" class="level4">
 <h4 class="anchored" data-anchor-id="caveat-when-the-classes-separate-there-is-no-estimate-to-put-an-error-bar-on">Caveat: when the classes separate, there is no estimate to put an error bar on</h4>
@@ -690,7 +692,7 @@ Figure&nbsp;9: Refitting setosa-versus-rest with increasing Newton budgets. Neit
 </div>
 </div>
 </div>
-<div id="5b90618c" class="cell" data-execution_count="19">
+<div id="7953d3f3" class="cell" data-execution_count="19">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="19">
 <table class="caption-top table table-sm table-striped small">
 <colgroup>
@@ -760,7 +762,8 @@ Figure&nbsp;9: Refitting setosa-versus-rest with increasing Newton budgets. Neit
 </section>
 <section id="anova-localizing-to-sources-of-variance-rather-than-to-features" class="level3">
 <h3 class="anchored" data-anchor-id="anova-localizing-to-sources-of-variance-rather-than-to-features">ANOVA: localizing to sources of variance rather than to features</h3>
-<p>Coefficients answer “how much does the model lean on this feature”, which is a question about the model. Fisher’s analysis of variance asks something prior to any model: how much of the observed variation in a measurement is variation <em>between</em> species rather than within them? The total sum of squares splits exactly into those two pieces, and <span class="math inline">\(\eta^2\)</span> is the between-group share.</p>
+<p>Coefficients answer “how much does the model lean on this feature”, which is a question about the model. Fisher’s analysis of variance asks something prior to any model: of all the variation you see in one measurement across 150 flowers, how much is variation <em>between</em> the species rather than within them?</p>
+<p>Measure variation as the total squared distance of every flower from the overall average — the total sum of squares — and that total splits exactly into two pieces, one from the gaps between species means and one from the scatter of flowers around their own species mean. Exactly, as an algebraic identity, with no remainder and nothing fitted. The between-group share of the total is written <span class="math inline">\(\eta^2\)</span>, and it is a localization: this fraction of what you observe is attributable to species.</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> anova_table(df: pd.DataFrame) <span class="op">-&gt;</span> pd.DataFrame:</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    rows <span class="op">=</span> []</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> feature <span class="kw">in</span> FEATURES:</span>
@@ -796,7 +799,7 @@ Figure&nbsp;10: Each measurement by species, with the between-species share of i
 </div>
 </div>
 </div>
-<div id="cf0bebe0" class="cell" data-execution_count="22">
+<div id="48c4d95f" class="cell" data-execution_count="22">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="22">
 <table class="caption-top table table-sm table-striped small">
 <thead>
@@ -841,7 +844,7 @@ Figure&nbsp;10: Each measurement by species, with the between-species share of i
 </table>
 </div>
 </div>
-<p>Petal length reaches <span class="math inline">\(\eta^2\)</span> = 0.941: knowing the species accounts for 94.1% of its variation. All four F statistics are enormous and the <em>largest</em> of the four p-values is 4e-17, which is the expected result for three species a botanist can tell apart by eye. The interesting content is in the shares, not the significance — with 50 flowers per group, a test this powerful was never going to say anything else.</p>
+<p>Petal length reaches <span class="math inline">\(\eta^2\)</span> = 0.941: knowing the species accounts for 94.1% of its variation. The F statistic in the table is the ratio of between-group to within-group variation, scaled by the degrees of freedom, and all four are enormous — the <em>largest</em> of the four p-values is 4e-17. That is the expected result for three species a botanist can tell apart by eye. The interesting content here is in the shares, not the significance: with 50 flowers per group, a test this powerful was never going to say anything else.</p>
 <section id="caveat-these-shares-sum-to-2.89" class="level4">
 <h4 class="anchored" data-anchor-id="caveat-these-shares-sum-to-2.89">Caveat: these shares sum to 2.89</h4>
 <p>Which is impossible for shares of one thing. Each row is a <em>separate</em> one-way ANOVA on a single measurement, so each answers “how much of this column’s variance is between-species” in isolation. Sepal length scores 0.62 in large part because it correlates at 0.872 with petal length; it is credited for variation that petal length would also claim.</p>
@@ -881,7 +884,7 @@ Figure&nbsp;11: Left: explained variance under two scalings. Right: the standard
 </div>
 </div>
 </div>
-<p>On standardised data the first two components carry 95.8% of the variance, and the biplot shows why Iris is a teaching set: setosa is cleanly detached along PC1, versicolor and virginica overlap slightly. The loadings say what PC1 means — petal length 0.58, petal width 0.56, sepal length 0.52, sepal width -0.27 — a general size axis with sepal width running against it.</p>
+<p>On standardised data the first two components carry 95.8% of the variance. The right-hand panel is a biplot — the flowers plotted in the plane of those two components, with an arrow per original measurement showing which way it points in that plane — and it shows why Iris is a teaching set: setosa is cleanly detached along the first component (PC1), versicolor and virginica overlap slightly. The loadings, the weights each measurement gets in a component, say what PC1 means — petal length 0.58, petal width 0.56, sepal length 0.52, sepal width -0.27 — a general size axis with sepal width running against it.</p>
 <p>The left panel carries the caveat, and it is a sharp one. Run the same decomposition on raw centimetres and PC1 accounts for 92.5% rather than 73.0%, with a loading of 0.86 on petal length alone. Unstandardised PCA maximises variance in the units the data happens to be recorded in, and petal length simply has the widest range in centimetres. The “explanation” changed because someone chose a scale. Note that this is not a defect unique to PCA — occlusion in Part I depended on the fill value in exactly the same way, and for exactly the same reason.</p>
 </section>
 <section id="permutation-importance-occlusion-moved-to-a-table" class="level3">
@@ -921,7 +924,7 @@ Figure&nbsp;12: Permutation importance with 95% intervals from 200 shuffles, and
 </div>
 </div>
 </div>
-<div id="fdc431f9" class="cell" data-execution_count="27">
+<div id="147fb30a" class="cell" data-execution_count="27">
 <div class="cell-output cell-output-display cell-output-markdown" data-execution_count="27">
 <table class="caption-top table table-sm table-striped small">
 <thead>
@@ -961,7 +964,7 @@ Figure&nbsp;12: Permutation importance with 95% intervals from 200 shuffles, and
 </table>
 </div>
 </div>
-<p>On a 60-flower held-out set the multinomial model scores 95.0%, and shuffling petal width costs it 0.213 of that while shuffling sepal width costs 0.039. The same ordering as the coefficients, from a method that never looks inside the model.</p>
+<p>On a 60-flower held-out set the multinomial model — one logistic regression generalised to all three species at once — scores 95.0%. Shuffling petal width costs it 0.213 of that; shuffling sepal width costs 0.039, a fifth as much. That is the same split the coefficients found — petals far above sepals — from a method that never looks inside the model. Which of the two petals ranks first flips between the two methods, and the intervals on both say that flip is noise.</p>
 <p>The important part is the error bars, and where they come from. The shuffle is random, so 200 repeats give a <em>distribution</em> of importances rather than a number — the interval is a Monte-Carlo statement about the permutation, not a confidence interval for a parameter, and it says nothing about sampling variability in the 150 flowers. It is a genuinely weaker guarantee than the Wald interval above. But it is a guarantee, obtained by a method that treats the model as a black box, and there is no reason the same trick cannot be applied to an occlusion map: re-run it across seeds, across training runs, across bootstrap resamples of the data, and report the spread.</p>
 <p>The right panel is the payoff. Three methods, three notions of a part, one dataset, and they agree closely on the petals and disagree on the sepals — with ANOVA rating sepal length far above the other two, exactly as the marginal-versus-conditional distinction predicts. Disagreement between attribution methods is not usually a sign that one is broken. It is usually a sign that they were asked different questions.</p>
 </section>
@@ -1036,7 +1039,7 @@ Figure&nbsp;12: Permutation importance with 95% intervals from 200 shuffles, and
 </tbody>
 </table>
 <p>The third column is the interesting one. Every method in the table is <em>correlational</em> in the sense that matters: none of them establishes that the part caused the output, only that the output covaries with the part under some manipulation. But they are not all correlational in the same way. Saliency, coefficients and PCA loadings read structure off the fitted object without changing anything. Occlusion, integrated gradients and permutation importance <em>intervene</em> — they construct inputs the model was never trained on and observe the consequence.</p>
-<p>That distinction is where the frontier is. Intervening is closer to a causal claim, but the interventions above all push the input off the data manifold: a digit with a black square through it, a flower with one measurement drawn from another flower. The model’s response to an impossible input is not obviously evidence about its behaviour on possible ones. Mechanistic interpretability takes the natural next step — intervene <em>inside</em> the network instead. Activation patching runs the model on two inputs, copies a specific internal activation from one run into the other, and measures how far the output moves, which localizes responsibility to a component under an intervention the network’s own distribution supports. The parts become circuits and attention heads rather than pixels, and the credit rule becomes an experiment rather than a derivative. What it inherits unchanged from everything above is the third column: those results are point estimates too.</p>
+<p>That distinction is where the frontier is. Intervening is closer to a causal claim, but every intervention above builds an input that could not occur: a digit with a black square punched through it, a flower with one of its four measurements taken from a different flower. Neither is something the training data contains, or that the world produces. The model’s response to an impossible input is not obviously evidence about its behaviour on possible ones. Mechanistic interpretability takes the natural next step — intervene <em>inside</em> the network instead. Activation patching runs the model on two inputs, copies a specific internal activation from one run into the other, and measures how far the output moves, which localizes responsibility to a component under an intervention the network’s own distribution supports. The parts become circuits and attention heads rather than pixels, and the credit rule becomes an experiment rather than a derivative. What it inherits unchanged from everything above is the third column: those results are point estimates too.</p>
 </section>
 <section id="the-column-that-is-still-empty" class="level2">
 <h2 class="anchored" data-anchor-id="the-column-that-is-still-empty">The column that is still empty</h2>

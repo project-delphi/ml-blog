@@ -202,7 +202,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#streaming-is-the-same-answer-arriving-in-pieces" id="toc-streaming-is-the-same-answer-arriving-in-pieces" class="nav-link" data-scroll-target="#streaming-is-the-same-answer-arriving-in-pieces">Streaming is the same answer, arriving in pieces</a></li>
   <li><a href="#the-event-sequence-is-an-envelope-inside-an-envelope" id="toc-the-event-sequence-is-an-envelope-inside-an-envelope" class="nav-link" data-scroll-target="#the-event-sequence-is-an-envelope-inside-an-envelope">The event sequence is an envelope inside an envelope</a></li>
   <li><a href="#tool-arguments-arrive-as-fragments-of-a-json-object" id="toc-tool-arguments-arrive-as-fragments-of-a-json-object" class="nav-link" data-scroll-target="#tool-arguments-arrive-as-fragments-of-a-json-object">Tool arguments arrive as fragments of a JSON object</a></li>
-  <li><a href="#which-one-to-reach-for" id="toc-which-one-to-reach-for" class="nav-link" data-scroll-target="#which-one-to-reach-for">Which one to reach for</a></li>
+  <li><a href="#the-mode-follows-from-who-is-waiting" id="toc-the-mode-follows-from-who-is-waiting" class="nav-link" data-scroll-target="#the-mode-follows-from-who-is-waiting">The mode follows from who is waiting</a></li>
   <li><a href="#what-breaks-and-what-you-cant-put-back" id="toc-what-breaks-and-what-you-cant-put-back" class="nav-link" data-scroll-target="#what-breaks-and-what-you-cant-put-back">What breaks, and what you can’t put back</a></li>
   <li><a href="#back-to-the-spinner" id="toc-back-to-the-spinner" class="nav-link" data-scroll-target="#back-to-the-spinner">Back to the spinner</a></li>
   </ul>
@@ -233,11 +233,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>You send a list of messages; you get back a <code>Message</code>. Two things to internalise early.</p>
 <p><strong>The API is stateless.</strong> A “conversation” is a list you keep on your side and resend in full every time; there’s no session id to look for.</p>
 <p><strong><code>content</code> is a list of blocks, not a string</strong> — and it routinely holds more than the answer. <code>claude-opus-5</code> thinks by default, so a <code>thinking</code> block arrives ahead of the text, and a tool call adds another again. Check <code>block.type</code> rather than reaching for <code>content[0].text</code>, which will eventually hand you something that isn’t the answer.</p>
+<p>Both of those hold whichever way you take delivery, which leaves the delivery mode as the only real choice — and the plain one is the one to learn on.</p>
 </section>
 <section id="ask-for-the-whole-thing-first" class="level2">
 <h2 class="anchored" data-anchor-id="ask-for-the-whole-thing-first">Ask for the whole thing first</h2>
-<p>The simplest version of the call has no streaming in it at all.</p>
-<div id="9ec69dfa" class="cell" data-execution_count="1">
+<p>The simplest version of the call has no streaming in it at all. You describe the conversation so far as a list of messages, send it, and wait: the client holds the connection until the model has finished generating, then hands you the finished <code>Message</code>. Nothing arrives early, so there is nothing to assemble. Everything below is a variation on this call.</p>
+<div id="0b9fb041" class="cell" data-execution_count="1">
 <details open="" class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> anthropic</span>
@@ -262,12 +263,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="streaming-is-the-same-answer-arriving-in-pieces" class="level2">
 <h2 class="anchored" data-anchor-id="streaming-is-the-same-answer-arriving-in-pieces">Streaming is the same answer, arriving in pieces</h2>
 <p>What a full response cannot do is show you anything until it can show you everything.</p>
-<p>Streaming fixes that with Server-Sent Events — SSE, and the name oversells it. An SSE response is an ordinary HTTP response the server declines to finish: rather than send a body and close, it holds the connection open and writes small labelled chunks, each an <code>event:</code> line and a <code>data:</code> line carrying JSON. One direction, plain text, over the HTTP you already have. Nothing to install.</p>
+<p>Streaming fixes that by changing what the server does with the connection. Ordinarily it writes the whole body and hangs up. Here it declines to finish: it keeps the connection open and writes small labelled chunks as they become ready, each one an <code>event:</code> line naming what just happened and a <code>data:</code> line carrying JSON. Traffic goes one direction, in plain text, over the HTTP you already have. That arrangement has a name — Server-Sent Events, or SSE — and the name oversells it. There is nothing to install.</p>
 <p>Two reasons to want it, one soft and one hard.</p>
 <p><strong>Perceived latency.</strong> Total time doesn’t improve — the model generates at the speed it generates. But time-to-first-word collapses to a few hundred milliseconds, and a reader who can start reading doesn’t experience the rest as waiting. You aren’t making it faster; you’re making the waiting disappear into the reading.</p>
 <p><strong>Timeouts, which aren’t a matter of taste.</strong> A long generation can outlive the request holding it: an idle connection gets dropped by something in the middle — a proxy, a load balancer, the client library’s own patience — and you lose output you already paid for. A stream is never idle. This is enough of a hazard that the Python SDK raises a <code>ValueError</code> rather than let you send a non-streaming request with a <code>max_tokens</code> large enough to be at risk.</p>
 <p>The same call, streamed:</p>
-<div id="53c8a57e" class="cell" data-execution_count="2">
+<div id="fb2f2fe5" class="cell" data-execution_count="2">
 <details open="" class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="cf">with</span> client.messages.stream(</span>
@@ -345,7 +346,8 @@ Two details that bite people once each
 <section id="tool-arguments-arrive-as-fragments-of-a-json-object" class="level2">
 <h2 class="anchored" data-anchor-id="tool-arguments-arrive-as-fragments-of-a-json-object">Tool arguments arrive as fragments of a JSON object</h2>
 <p>Here’s where delivery stops being cosmetic.</p>
-<p>When Claude calls a tool, the arguments arrive as a <code>tool_use</code> block whose <code>input</code> is a JSON object. Streamed, that object comes as <code>input_json_delta</code> events carrying a <code>partial_json</code> field — and <em>partial</em> is meant literally. These are substrings of the serialised JSON, chopped wherever the boundary fell:</p>
+<p>A tool, in this API, is a function you describe to the model — a name, a sentence about what it does, and a schema for its arguments. The model never runs it. It hands back the name it wants called and the arguments it wants passed, then waits for you to run the thing and send the result. So the arguments are the payload: get them wrong and you call the wrong function with the wrong values.</p>
+<p>They arrive as a <code>tool_use</code> block whose <code>input</code> is a JSON object. Streamed, that object comes as <code>input_json_delta</code> events carrying a <code>partial_json</code> field — and <em>partial</em> is meant literally. These are substrings of the serialised JSON, chopped wherever the boundary fell:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode json code-with-copy"><code class="sourceCode json"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"type"</span><span class="fu">:</span><span class="st">"input_json_delta"</span><span class="fu">,</span><span class="dt">"partial_json"</span><span class="fu">:</span><span class="st">"{</span><span class="ch">\"</span><span class="st">location</span><span class="ch">\"</span><span class="st">:"</span><span class="fu">}</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"type"</span><span class="fu">:</span><span class="st">"input_json_delta"</span><span class="fu">,</span><span class="dt">"partial_json"</span><span class="fu">:</span><span class="st">" </span><span class="ch">\"</span><span class="st">San"</span><span class="fu">}</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"type"</span><span class="fu">:</span><span class="st">"input_json_delta"</span><span class="fu">,</span><span class="dt">"partial_json"</span><span class="fu">:</span><span class="st">" Francisc"</span><span class="fu">}</span></span>
@@ -366,8 +368,9 @@ Concatenate first, parse once
 </div>
 <p>Better still, don’t hand-roll it: <code>get_final_message()</code> does the accumulation and hands back a parsed <code>input</code> dict. That’s the real reason to prefer the SDK helper over the raw event iterator whenever tools are in play.</p>
 </section>
-<section id="which-one-to-reach-for" class="level2">
-<h2 class="anchored" data-anchor-id="which-one-to-reach-for">Which one to reach for</h2>
+<section id="the-mode-follows-from-who-is-waiting" class="level2">
+<h2 class="anchored" data-anchor-id="the-mode-follows-from-who-is-waiting">The mode follows from who is waiting</h2>
+<p>Accumulate-then-parse settles the hard case, which leaves the ordinary one: which mode to reach for by default. It comes down to two questions — is a person watching the output appear, and is the response long enough that the connection itself is a liability.</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 33%">
@@ -404,11 +407,11 @@ Concatenate first, parse once
 </tr>
 </tbody>
 </table>
-<p>Stream when a human is watching, or when the response is long enough that the connection itself is a risk. Otherwise take the simple thing.</p>
+<p>Stream when a human is watching, or when the response is long enough that the connection itself is a risk. Otherwise take the simple thing. That choice also decides what a failure looks like to you, because the two modes fail in different places.</p>
 </section>
 <section id="what-breaks-and-what-you-cant-put-back" class="level2">
 <h2 class="anchored" data-anchor-id="what-breaks-and-what-you-cant-put-back">What breaks, and what you can’t put back</h2>
-<p>Overload is the failure you’ll meet first. A 529 <code>overloaded_error</code> means the API is busy, not that your request was wrong — it’s retryable, and the SDK already retries it (with 429s, 5xx and connection errors) twice by default with exponential backoff. Mid-stream it arrives as an <code>error</code> event rather than an HTTP status, since the status line went out long ago.</p>
+<p>Overload is the failure you’ll meet first, and it hits both modes. A 529 <code>overloaded_error</code> means the API is busy, not that your request was wrong — it’s retryable, and the SDK already retries it (with 429s, 5xx and connection errors) twice by default with exponential backoff. Mid-stream it arrives as an <code>error</code> event rather than an HTTP status, since the status line went out long ago.</p>
 <div class="callout callout-style-default callout-note callout-titled">
 <div class="callout-header d-flex align-content-center">
 <div class="callout-icon-container">
@@ -441,7 +444,7 @@ Try it yourself
 </div>
 <div class="callout-body-container callout-body">
 <p>Drop below the helper to the raw event iterator — <code>client.messages.create(..., stream=True)</code> — and print nothing but <code>event.type</code>:</p>
-<div id="15aa891a" class="cell" data-execution_count="3">
+<div id="faa9d040" class="cell" data-execution_count="3">
 <details open="" class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>last_usage <span class="op">=</span> <span class="va">None</span></span>
@@ -976,169 +979,175 @@ window.document.addEventListener("DOMContentLoaded", function (event) {
 <span id="cb5-36"><a href="#cb5-36" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb5-37"><a href="#cb5-37" aria-hidden="true" tabindex="-1"></a>**`content` is a list of blocks, not a string** — and it routinely holds more than the answer. <span class="in">`claude-opus-5`</span> thinks by default, so a <span class="in">`thinking`</span> block arrives ahead of the text, and a tool call adds another again. Check <span class="in">`block.type`</span> rather than reaching for <span class="in">`content[0].text`</span>, which will eventually hand you something that isn't the answer.</span>
 <span id="cb5-38"><a href="#cb5-38" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-39"><a href="#cb5-39" aria-hidden="true" tabindex="-1"></a><span class="fu">## Ask for the whole thing first</span></span>
+<span id="cb5-39"><a href="#cb5-39" aria-hidden="true" tabindex="-1"></a>Both of those hold whichever way you take delivery, which leaves the delivery mode as the only real choice — and the plain one is the one to learn on.</span>
 <span id="cb5-40"><a href="#cb5-40" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-41"><a href="#cb5-41" aria-hidden="true" tabindex="-1"></a>The simplest version of the call has no streaming in it at all.</span>
+<span id="cb5-41"><a href="#cb5-41" aria-hidden="true" tabindex="-1"></a><span class="fu">## Ask for the whole thing first</span></span>
 <span id="cb5-42"><a href="#cb5-42" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-45"><a href="#cb5-45" aria-hidden="true" tabindex="-1"></a><span class="in">```{python}</span></span>
-<span id="cb5-46"><a href="#cb5-46" aria-hidden="true" tabindex="-1"></a><span class="co">#| eval: false</span></span>
-<span id="cb5-47"><a href="#cb5-47" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> anthropic</span>
-<span id="cb5-48"><a href="#cb5-48" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-49"><a href="#cb5-49" aria-hidden="true" tabindex="-1"></a>client <span class="op">=</span> anthropic.Anthropic()  <span class="co"># reads ANTHROPIC_API_KEY from the environment</span></span>
+<span id="cb5-43"><a href="#cb5-43" aria-hidden="true" tabindex="-1"></a>The simplest version of the call has no streaming in it at all. You describe the conversation so far as a list of messages, send it, and wait: the client holds the connection until the model has finished generating, then hands you the finished <span class="in">`Message`</span>. Nothing arrives early, so there is nothing to assemble. Everything below is a variation on this call.</span>
+<span id="cb5-44"><a href="#cb5-44" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-47"><a href="#cb5-47" aria-hidden="true" tabindex="-1"></a><span class="in">```{python}</span></span>
+<span id="cb5-48"><a href="#cb5-48" aria-hidden="true" tabindex="-1"></a><span class="co">#| eval: false</span></span>
+<span id="cb5-49"><a href="#cb5-49" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> anthropic</span>
 <span id="cb5-50"><a href="#cb5-50" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-51"><a href="#cb5-51" aria-hidden="true" tabindex="-1"></a>response <span class="op">=</span> client.messages.create(</span>
-<span id="cb5-52"><a href="#cb5-52" aria-hidden="true" tabindex="-1"></a>    model<span class="op">=</span><span class="st">"claude-opus-5"</span>,</span>
-<span id="cb5-53"><a href="#cb5-53" aria-hidden="true" tabindex="-1"></a>    max_tokens<span class="op">=</span><span class="dv">4096</span>,  <span class="co"># covers thinking *and* text — see below</span></span>
-<span id="cb5-54"><a href="#cb5-54" aria-hidden="true" tabindex="-1"></a>    messages<span class="op">=</span>[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: <span class="st">"Name three uses for a paperclip."</span>}],</span>
-<span id="cb5-55"><a href="#cb5-55" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb5-56"><a href="#cb5-56" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-57"><a href="#cb5-57" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> block <span class="kw">in</span> response.content:</span>
-<span id="cb5-58"><a href="#cb5-58" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> block.<span class="bu">type</span> <span class="op">==</span> <span class="st">"text"</span>:</span>
-<span id="cb5-59"><a href="#cb5-59" aria-hidden="true" tabindex="-1"></a>        <span class="bu">print</span>(block.text)</span>
-<span id="cb5-60"><a href="#cb5-60" aria-hidden="true" tabindex="-1"></a><span class="in">```</span></span>
-<span id="cb5-61"><a href="#cb5-61" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-62"><a href="#cb5-62" aria-hidden="true" tabindex="-1"></a>That's it. The call blocks until the model is done, then hands back one object with the text, the token counts, and a <span class="in">`stop_reason`</span> explaining why generation ended.</span>
+<span id="cb5-51"><a href="#cb5-51" aria-hidden="true" tabindex="-1"></a>client <span class="op">=</span> anthropic.Anthropic()  <span class="co"># reads ANTHROPIC_API_KEY from the environment</span></span>
+<span id="cb5-52"><a href="#cb5-52" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-53"><a href="#cb5-53" aria-hidden="true" tabindex="-1"></a>response <span class="op">=</span> client.messages.create(</span>
+<span id="cb5-54"><a href="#cb5-54" aria-hidden="true" tabindex="-1"></a>    model<span class="op">=</span><span class="st">"claude-opus-5"</span>,</span>
+<span id="cb5-55"><a href="#cb5-55" aria-hidden="true" tabindex="-1"></a>    max_tokens<span class="op">=</span><span class="dv">4096</span>,  <span class="co"># covers thinking *and* text — see below</span></span>
+<span id="cb5-56"><a href="#cb5-56" aria-hidden="true" tabindex="-1"></a>    messages<span class="op">=</span>[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: <span class="st">"Name three uses for a paperclip."</span>}],</span>
+<span id="cb5-57"><a href="#cb5-57" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb5-58"><a href="#cb5-58" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-59"><a href="#cb5-59" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> block <span class="kw">in</span> response.content:</span>
+<span id="cb5-60"><a href="#cb5-60" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> block.<span class="bu">type</span> <span class="op">==</span> <span class="st">"text"</span>:</span>
+<span id="cb5-61"><a href="#cb5-61" aria-hidden="true" tabindex="-1"></a>        <span class="bu">print</span>(block.text)</span>
+<span id="cb5-62"><a href="#cb5-62" aria-hidden="true" tabindex="-1"></a><span class="in">```</span></span>
 <span id="cb5-63"><a href="#cb5-63" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-64"><a href="#cb5-64" aria-hidden="true" tabindex="-1"></a>One number there deserves more respect than it gets: <span class="in">`max_tokens`</span> caps everything the model generates, thinking included — not just the prose you print. Set it too low on a model that thinks by default and the budget is gone before the answer starts, leaving <span class="in">`stop_reason: "max_tokens"`</span> and a loop that prints a fragment, or nothing, with no hint why.</span>
+<span id="cb5-64"><a href="#cb5-64" aria-hidden="true" tabindex="-1"></a>That's it. The call blocks until the model is done, then hands back one object with the text, the token counts, and a <span class="in">`stop_reason`</span> explaining why generation ended.</span>
 <span id="cb5-65"><a href="#cb5-65" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-66"><a href="#cb5-66" aria-hidden="true" tabindex="-1"></a>Start here, and stay longer than you think you should. A full response is a *value*: log it, assert on it, test against it. A stream is a *process*, harder to reason about when what you're really asking is "does my prompt work?"</span>
+<span id="cb5-66"><a href="#cb5-66" aria-hidden="true" tabindex="-1"></a>One number there deserves more respect than it gets: <span class="in">`max_tokens`</span> caps everything the model generates, thinking included — not just the prose you print. Set it too low on a model that thinks by default and the budget is gone before the answer starts, leaving <span class="in">`stop_reason: "max_tokens"`</span> and a loop that prints a fragment, or nothing, with no hint why.</span>
 <span id="cb5-67"><a href="#cb5-67" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-68"><a href="#cb5-68" aria-hidden="true" tabindex="-1"></a><span class="fu">## Streaming is the same answer, arriving in pieces</span></span>
+<span id="cb5-68"><a href="#cb5-68" aria-hidden="true" tabindex="-1"></a>Start here, and stay longer than you think you should. A full response is a *value*: log it, assert on it, test against it. A stream is a *process*, harder to reason about when what you're really asking is "does my prompt work?"</span>
 <span id="cb5-69"><a href="#cb5-69" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-70"><a href="#cb5-70" aria-hidden="true" tabindex="-1"></a>What a full response cannot do is show you anything until it can show you everything.</span>
+<span id="cb5-70"><a href="#cb5-70" aria-hidden="true" tabindex="-1"></a><span class="fu">## Streaming is the same answer, arriving in pieces</span></span>
 <span id="cb5-71"><a href="#cb5-71" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-72"><a href="#cb5-72" aria-hidden="true" tabindex="-1"></a>Streaming fixes that with Server-Sent Events — SSE, and the name oversells it. An SSE response is an ordinary HTTP response the server declines to finish: rather than send a body and close, it holds the connection open and writes small labelled chunks, each an <span class="in">`event:`</span> line and a <span class="in">`data:`</span> line carrying JSON. One direction, plain text, over the HTTP you already have. Nothing to install.</span>
+<span id="cb5-72"><a href="#cb5-72" aria-hidden="true" tabindex="-1"></a>What a full response cannot do is show you anything until it can show you everything.</span>
 <span id="cb5-73"><a href="#cb5-73" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-74"><a href="#cb5-74" aria-hidden="true" tabindex="-1"></a>Two reasons to want it, one soft and one hard.</span>
+<span id="cb5-74"><a href="#cb5-74" aria-hidden="true" tabindex="-1"></a>Streaming fixes that by changing what the server does with the connection. Ordinarily it writes the whole body and hangs up. Here it declines to finish: it keeps the connection open and writes small labelled chunks as they become ready, each one an <span class="in">`event:`</span> line naming what just happened and a <span class="in">`data:`</span> line carrying JSON. Traffic goes one direction, in plain text, over the HTTP you already have. That arrangement has a name — Server-Sent Events, or SSE — and the name oversells it. There is nothing to install.</span>
 <span id="cb5-75"><a href="#cb5-75" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-76"><a href="#cb5-76" aria-hidden="true" tabindex="-1"></a>**Perceived latency.** Total time doesn't improve — the model generates at the speed it generates. But time-to-first-word collapses to a few hundred milliseconds, and a reader who can start reading doesn't experience the rest as waiting. You aren't making it faster; you're making the waiting disappear into the reading.</span>
+<span id="cb5-76"><a href="#cb5-76" aria-hidden="true" tabindex="-1"></a>Two reasons to want it, one soft and one hard.</span>
 <span id="cb5-77"><a href="#cb5-77" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-78"><a href="#cb5-78" aria-hidden="true" tabindex="-1"></a>**Timeouts, which aren't a matter of taste.** A long generation can outlive the request holding it: an idle connection gets dropped by something in the middle — a proxy, a load balancer, the client library's own patience — and you lose output you already paid for. A stream is never idle. This is enough of a hazard that the Python SDK raises a <span class="in">`ValueError`</span> rather than let you send a non-streaming request with a <span class="in">`max_tokens`</span> large enough to be at risk.</span>
+<span id="cb5-78"><a href="#cb5-78" aria-hidden="true" tabindex="-1"></a>**Perceived latency.** Total time doesn't improve — the model generates at the speed it generates. But time-to-first-word collapses to a few hundred milliseconds, and a reader who can start reading doesn't experience the rest as waiting. You aren't making it faster; you're making the waiting disappear into the reading.</span>
 <span id="cb5-79"><a href="#cb5-79" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-80"><a href="#cb5-80" aria-hidden="true" tabindex="-1"></a>The same call, streamed:</span>
+<span id="cb5-80"><a href="#cb5-80" aria-hidden="true" tabindex="-1"></a>**Timeouts, which aren't a matter of taste.** A long generation can outlive the request holding it: an idle connection gets dropped by something in the middle — a proxy, a load balancer, the client library's own patience — and you lose output you already paid for. A stream is never idle. This is enough of a hazard that the Python SDK raises a <span class="in">`ValueError`</span> rather than let you send a non-streaming request with a <span class="in">`max_tokens`</span> large enough to be at risk.</span>
 <span id="cb5-81"><a href="#cb5-81" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-84"><a href="#cb5-84" aria-hidden="true" tabindex="-1"></a><span class="in">```{python}</span></span>
-<span id="cb5-85"><a href="#cb5-85" aria-hidden="true" tabindex="-1"></a><span class="co">#| eval: false</span></span>
-<span id="cb5-86"><a href="#cb5-86" aria-hidden="true" tabindex="-1"></a><span class="cf">with</span> client.messages.stream(</span>
-<span id="cb5-87"><a href="#cb5-87" aria-hidden="true" tabindex="-1"></a>    model<span class="op">=</span><span class="st">"claude-opus-5"</span>,</span>
-<span id="cb5-88"><a href="#cb5-88" aria-hidden="true" tabindex="-1"></a>    max_tokens<span class="op">=</span><span class="dv">1024</span>,</span>
-<span id="cb5-89"><a href="#cb5-89" aria-hidden="true" tabindex="-1"></a>    messages<span class="op">=</span>[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: <span class="st">"Name three uses for a paperclip."</span>}],</span>
-<span id="cb5-90"><a href="#cb5-90" aria-hidden="true" tabindex="-1"></a>) <span class="im">as</span> stream:</span>
-<span id="cb5-91"><a href="#cb5-91" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> text <span class="kw">in</span> stream.text_stream:</span>
-<span id="cb5-92"><a href="#cb5-92" aria-hidden="true" tabindex="-1"></a>        <span class="bu">print</span>(text, end<span class="op">=</span><span class="st">""</span>, flush<span class="op">=</span><span class="va">True</span>)</span>
-<span id="cb5-93"><a href="#cb5-93" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-94"><a href="#cb5-94" aria-hidden="true" tabindex="-1"></a>    final <span class="op">=</span> stream.get_final_message()  <span class="co"># the same object create() would return</span></span>
+<span id="cb5-82"><a href="#cb5-82" aria-hidden="true" tabindex="-1"></a>The same call, streamed:</span>
+<span id="cb5-83"><a href="#cb5-83" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-86"><a href="#cb5-86" aria-hidden="true" tabindex="-1"></a><span class="in">```{python}</span></span>
+<span id="cb5-87"><a href="#cb5-87" aria-hidden="true" tabindex="-1"></a><span class="co">#| eval: false</span></span>
+<span id="cb5-88"><a href="#cb5-88" aria-hidden="true" tabindex="-1"></a><span class="cf">with</span> client.messages.stream(</span>
+<span id="cb5-89"><a href="#cb5-89" aria-hidden="true" tabindex="-1"></a>    model<span class="op">=</span><span class="st">"claude-opus-5"</span>,</span>
+<span id="cb5-90"><a href="#cb5-90" aria-hidden="true" tabindex="-1"></a>    max_tokens<span class="op">=</span><span class="dv">1024</span>,</span>
+<span id="cb5-91"><a href="#cb5-91" aria-hidden="true" tabindex="-1"></a>    messages<span class="op">=</span>[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: <span class="st">"Name three uses for a paperclip."</span>}],</span>
+<span id="cb5-92"><a href="#cb5-92" aria-hidden="true" tabindex="-1"></a>) <span class="im">as</span> stream:</span>
+<span id="cb5-93"><a href="#cb5-93" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> text <span class="kw">in</span> stream.text_stream:</span>
+<span id="cb5-94"><a href="#cb5-94" aria-hidden="true" tabindex="-1"></a>        <span class="bu">print</span>(text, end<span class="op">=</span><span class="st">""</span>, flush<span class="op">=</span><span class="va">True</span>)</span>
 <span id="cb5-95"><a href="#cb5-95" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-96"><a href="#cb5-96" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">[</span><span class="sc">{</span>final<span class="sc">.</span>usage<span class="sc">.</span>output_tokens<span class="sc">}</span><span class="ss"> output tokens]"</span>)</span>
-<span id="cb5-97"><a href="#cb5-97" aria-hidden="true" tabindex="-1"></a><span class="in">```</span></span>
-<span id="cb5-98"><a href="#cb5-98" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-99"><a href="#cb5-99" aria-hidden="true" tabindex="-1"></a>Note the last two lines. <span class="in">`get_final_message()`</span> accumulates every event and returns exactly the object the non-streaming call returns — so streaming and holding a complete <span class="in">`Message`</span> at the end are not a trade. If you're only streaming to dodge timeouts, use this and ignore events entirely.</span>
+<span id="cb5-96"><a href="#cb5-96" aria-hidden="true" tabindex="-1"></a>    final <span class="op">=</span> stream.get_final_message()  <span class="co"># the same object create() would return</span></span>
+<span id="cb5-97"><a href="#cb5-97" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-98"><a href="#cb5-98" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="ch">\n</span><span class="ss">[</span><span class="sc">{</span>final<span class="sc">.</span>usage<span class="sc">.</span>output_tokens<span class="sc">}</span><span class="ss"> output tokens]"</span>)</span>
+<span id="cb5-99"><a href="#cb5-99" aria-hidden="true" tabindex="-1"></a><span class="in">```</span></span>
 <span id="cb5-100"><a href="#cb5-100" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-101"><a href="#cb5-101" aria-hidden="true" tabindex="-1"></a><span class="fu">## The event sequence is an envelope inside an envelope</span></span>
+<span id="cb5-101"><a href="#cb5-101" aria-hidden="true" tabindex="-1"></a>Note the last two lines. <span class="in">`get_final_message()`</span> accumulates every event and returns exactly the object the non-streaming call returns — so streaming and holding a complete <span class="in">`Message`</span> at the end are not a trade. If you're only streaming to dodge timeouts, use this and ignore events entirely.</span>
 <span id="cb5-102"><a href="#cb5-102" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-103"><a href="#cb5-103" aria-hidden="true" tabindex="-1"></a><span class="in">`text_stream`</span> is a convenience over something more structured, worth seeing before you need it. The stream is nested open/close pairs, like any tag-based format you've parsed: the message opens, each content block inside it opens and emits deltas and closes, then the message closes.</span>
+<span id="cb5-103"><a href="#cb5-103" aria-hidden="true" tabindex="-1"></a><span class="fu">## The event sequence is an envelope inside an envelope</span></span>
 <span id="cb5-104"><a href="#cb5-104" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-105"><a href="#cb5-105" aria-hidden="true" tabindex="-1"></a>| Event | What it carries |</span>
-<span id="cb5-106"><a href="#cb5-106" aria-hidden="true" tabindex="-1"></a>|---|---|</span>
-<span id="cb5-107"><a href="#cb5-107" aria-hidden="true" tabindex="-1"></a>| <span class="in">`message_start`</span> | The <span class="in">`Message`</span> shell — id, model, role, with <span class="in">`content`</span> empty |</span>
-<span id="cb5-108"><a href="#cb5-108" aria-hidden="true" tabindex="-1"></a>| <span class="in">`content_block_start`</span> | A block begins, at a given <span class="in">`index`</span> |</span>
-<span id="cb5-109"><a href="#cb5-109" aria-hidden="true" tabindex="-1"></a>| <span class="in">`content_block_delta`</span> | One fragment, for the block at that <span class="in">`index`</span> |</span>
-<span id="cb5-110"><a href="#cb5-110" aria-hidden="true" tabindex="-1"></a>| <span class="in">`content_block_stop`</span> | That block is complete |</span>
-<span id="cb5-111"><a href="#cb5-111" aria-hidden="true" tabindex="-1"></a>| <span class="in">`message_delta`</span> | Top-level updates: <span class="in">`stop_reason`</span>, and cumulative <span class="in">`usage`</span> |</span>
-<span id="cb5-112"><a href="#cb5-112" aria-hidden="true" tabindex="-1"></a>| <span class="in">`message_stop`</span> | Done |</span>
-<span id="cb5-113"><a href="#cb5-113" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-114"><a href="#cb5-114" aria-hidden="true" tabindex="-1"></a>That <span class="in">`index`</span> is the block's position in the final <span class="in">`content`</span> array, and it matters because one response can hold several blocks — a thinking block, then text, then a tool call — whose deltas are distinguishable *only* by index.</span>
+<span id="cb5-105"><a href="#cb5-105" aria-hidden="true" tabindex="-1"></a><span class="in">`text_stream`</span> is a convenience over something more structured, worth seeing before you need it. The stream is nested open/close pairs, like any tag-based format you've parsed: the message opens, each content block inside it opens and emits deltas and closes, then the message closes.</span>
+<span id="cb5-106"><a href="#cb5-106" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-107"><a href="#cb5-107" aria-hidden="true" tabindex="-1"></a>| Event | What it carries |</span>
+<span id="cb5-108"><a href="#cb5-108" aria-hidden="true" tabindex="-1"></a>|---|---|</span>
+<span id="cb5-109"><a href="#cb5-109" aria-hidden="true" tabindex="-1"></a>| <span class="in">`message_start`</span> | The <span class="in">`Message`</span> shell — id, model, role, with <span class="in">`content`</span> empty |</span>
+<span id="cb5-110"><a href="#cb5-110" aria-hidden="true" tabindex="-1"></a>| <span class="in">`content_block_start`</span> | A block begins, at a given <span class="in">`index`</span> |</span>
+<span id="cb5-111"><a href="#cb5-111" aria-hidden="true" tabindex="-1"></a>| <span class="in">`content_block_delta`</span> | One fragment, for the block at that <span class="in">`index`</span> |</span>
+<span id="cb5-112"><a href="#cb5-112" aria-hidden="true" tabindex="-1"></a>| <span class="in">`content_block_stop`</span> | That block is complete |</span>
+<span id="cb5-113"><a href="#cb5-113" aria-hidden="true" tabindex="-1"></a>| <span class="in">`message_delta`</span> | Top-level updates: <span class="in">`stop_reason`</span>, and cumulative <span class="in">`usage`</span> |</span>
+<span id="cb5-114"><a href="#cb5-114" aria-hidden="true" tabindex="-1"></a>| <span class="in">`message_stop`</span> | Done |</span>
 <span id="cb5-115"><a href="#cb5-115" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-116"><a href="#cb5-116" aria-hidden="true" tabindex="-1"></a>Deltas are typed as well: <span class="in">`text_delta`</span> for prose, <span class="in">`thinking_delta`</span> for reasoning, <span class="in">`signature_delta`</span> for the token that closes a thinking block, and one more that earns its own section below. Treat that list as open rather than exhaustive.</span>
+<span id="cb5-116"><a href="#cb5-116" aria-hidden="true" tabindex="-1"></a>That <span class="in">`index`</span> is the block's position in the final <span class="in">`content`</span> array, and it matters because one response can hold several blocks — a thinking block, then text, then a tool call — whose deltas are distinguishable *only* by index.</span>
 <span id="cb5-117"><a href="#cb5-117" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-118"><a href="#cb5-118" aria-hidden="true" tabindex="-1"></a>::: {.callout-note}</span>
-<span id="cb5-119"><a href="#cb5-119" aria-hidden="true" tabindex="-1"></a><span class="fu">## Two details that bite people once each</span></span>
-<span id="cb5-120"><a href="#cb5-120" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-121"><a href="#cb5-121" aria-hidden="true" tabindex="-1"></a>The <span class="in">`usage`</span> numbers on <span class="in">`message_delta`</span> are **cumulative**, not per-event — sum them and you'll report nonsense. And streams may contain <span class="in">`ping`</span> events at any point, plus event types that didn't exist when you wrote your handler. Ignore what you don't recognise rather than raising on it.</span>
-<span id="cb5-122"><a href="#cb5-122" aria-hidden="true" tabindex="-1"></a>:::</span>
-<span id="cb5-123"><a href="#cb5-123" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-124"><a href="#cb5-124" aria-hidden="true" tabindex="-1"></a><span class="fu">## Tool arguments arrive as fragments of a JSON object</span></span>
+<span id="cb5-118"><a href="#cb5-118" aria-hidden="true" tabindex="-1"></a>Deltas are typed as well: <span class="in">`text_delta`</span> for prose, <span class="in">`thinking_delta`</span> for reasoning, <span class="in">`signature_delta`</span> for the token that closes a thinking block, and one more that earns its own section below. Treat that list as open rather than exhaustive.</span>
+<span id="cb5-119"><a href="#cb5-119" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-120"><a href="#cb5-120" aria-hidden="true" tabindex="-1"></a>::: {.callout-note}</span>
+<span id="cb5-121"><a href="#cb5-121" aria-hidden="true" tabindex="-1"></a><span class="fu">## Two details that bite people once each</span></span>
+<span id="cb5-122"><a href="#cb5-122" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-123"><a href="#cb5-123" aria-hidden="true" tabindex="-1"></a>The <span class="in">`usage`</span> numbers on <span class="in">`message_delta`</span> are **cumulative**, not per-event — sum them and you'll report nonsense. And streams may contain <span class="in">`ping`</span> events at any point, plus event types that didn't exist when you wrote your handler. Ignore what you don't recognise rather than raising on it.</span>
+<span id="cb5-124"><a href="#cb5-124" aria-hidden="true" tabindex="-1"></a>:::</span>
 <span id="cb5-125"><a href="#cb5-125" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-126"><a href="#cb5-126" aria-hidden="true" tabindex="-1"></a>Here's where delivery stops being cosmetic.</span>
+<span id="cb5-126"><a href="#cb5-126" aria-hidden="true" tabindex="-1"></a><span class="fu">## Tool arguments arrive as fragments of a JSON object</span></span>
 <span id="cb5-127"><a href="#cb5-127" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-128"><a href="#cb5-128" aria-hidden="true" tabindex="-1"></a>When Claude calls a tool, the arguments arrive as a <span class="in">`tool_use`</span> block whose <span class="in">`input`</span> is a JSON object. Streamed, that object comes as <span class="in">`input_json_delta`</span> events carrying a <span class="in">`partial_json`</span> field — and *partial* is meant literally. These are substrings of the serialised JSON, chopped wherever the boundary fell:</span>
+<span id="cb5-128"><a href="#cb5-128" aria-hidden="true" tabindex="-1"></a>Here's where delivery stops being cosmetic.</span>
 <span id="cb5-129"><a href="#cb5-129" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-130"><a href="#cb5-130" aria-hidden="true" tabindex="-1"></a><span class="in">```json</span></span>
-<span id="cb5-131"><a href="#cb5-131" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"type"</span><span class="fu">:</span><span class="st">"input_json_delta"</span><span class="fu">,</span><span class="dt">"partial_json"</span><span class="fu">:</span><span class="st">"{</span><span class="ch">\"</span><span class="st">location</span><span class="ch">\"</span><span class="st">:"</span><span class="fu">}</span></span>
-<span id="cb5-132"><a href="#cb5-132" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"type"</span><span class="fu">:</span><span class="st">"input_json_delta"</span><span class="fu">,</span><span class="dt">"partial_json"</span><span class="fu">:</span><span class="st">" </span><span class="ch">\"</span><span class="st">San"</span><span class="fu">}</span></span>
-<span id="cb5-133"><a href="#cb5-133" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"type"</span><span class="fu">:</span><span class="st">"input_json_delta"</span><span class="fu">,</span><span class="dt">"partial_json"</span><span class="fu">:</span><span class="st">" Francisc"</span><span class="fu">}</span></span>
-<span id="cb5-134"><a href="#cb5-134" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"type"</span><span class="fu">:</span><span class="st">"input_json_delta"</span><span class="fu">,</span><span class="dt">"partial_json"</span><span class="fu">:</span><span class="st">"o, CA</span><span class="ch">\"</span><span class="st">}"</span><span class="fu">}</span></span>
-<span id="cb5-135"><a href="#cb5-135" aria-hidden="true" tabindex="-1"></a><span class="in">```</span></span>
-<span id="cb5-136"><a href="#cb5-136" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-137"><a href="#cb5-137" aria-hidden="true" tabindex="-1"></a><span class="in">`{"location":`</span> is not JSON. Neither is <span class="in">`o, CA"}`</span>. The obvious loop — parse each delta as it arrives — fails on every fragment, and not even consistently enough to catch reliably: a fragment can occasionally be *valid* JSON meaning something entirely different from the document it belongs to.</span>
-<span id="cb5-138"><a href="#cb5-138" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-139"><a href="#cb5-139" aria-hidden="true" tabindex="-1"></a>::: {.callout-warning}</span>
-<span id="cb5-140"><a href="#cb5-140" aria-hidden="true" tabindex="-1"></a><span class="fu">## Concatenate first, parse once</span></span>
-<span id="cb5-141"><a href="#cb5-141" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-142"><a href="#cb5-142" aria-hidden="true" tabindex="-1"></a>Append each <span class="in">`partial_json`</span> to a buffer keyed by the block's <span class="in">`index`</span>, and call <span class="in">`json.loads()`</span> only after that block's <span class="in">`content_block_stop`</span>. The contract is about the assembled object: <span class="in">`tool_use.input`</span> is *always* an object in the final message, even though every delta is a string.</span>
-<span id="cb5-143"><a href="#cb5-143" aria-hidden="true" tabindex="-1"></a>:::</span>
-<span id="cb5-144"><a href="#cb5-144" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-145"><a href="#cb5-145" aria-hidden="true" tabindex="-1"></a>Better still, don't hand-roll it: <span class="in">`get_final_message()`</span> does the accumulation and hands back a parsed <span class="in">`input`</span> dict. That's the real reason to prefer the SDK helper over the raw event iterator whenever tools are in play.</span>
-<span id="cb5-146"><a href="#cb5-146" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-147"><a href="#cb5-147" aria-hidden="true" tabindex="-1"></a><span class="fu">## Which one to reach for</span></span>
+<span id="cb5-130"><a href="#cb5-130" aria-hidden="true" tabindex="-1"></a>A tool, in this API, is a function you describe to the model — a name, a sentence about what it does, and a schema for its arguments. The model never runs it. It hands back the name it wants called and the arguments it wants passed, then waits for you to run the thing and send the result. So the arguments are the payload: get them wrong and you call the wrong function with the wrong values.</span>
+<span id="cb5-131"><a href="#cb5-131" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-132"><a href="#cb5-132" aria-hidden="true" tabindex="-1"></a>They arrive as a <span class="in">`tool_use`</span> block whose <span class="in">`input`</span> is a JSON object. Streamed, that object comes as <span class="in">`input_json_delta`</span> events carrying a <span class="in">`partial_json`</span> field — and *partial* is meant literally. These are substrings of the serialised JSON, chopped wherever the boundary fell:</span>
+<span id="cb5-133"><a href="#cb5-133" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-134"><a href="#cb5-134" aria-hidden="true" tabindex="-1"></a><span class="in">```json</span></span>
+<span id="cb5-135"><a href="#cb5-135" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"type"</span><span class="fu">:</span><span class="st">"input_json_delta"</span><span class="fu">,</span><span class="dt">"partial_json"</span><span class="fu">:</span><span class="st">"{</span><span class="ch">\"</span><span class="st">location</span><span class="ch">\"</span><span class="st">:"</span><span class="fu">}</span></span>
+<span id="cb5-136"><a href="#cb5-136" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"type"</span><span class="fu">:</span><span class="st">"input_json_delta"</span><span class="fu">,</span><span class="dt">"partial_json"</span><span class="fu">:</span><span class="st">" </span><span class="ch">\"</span><span class="st">San"</span><span class="fu">}</span></span>
+<span id="cb5-137"><a href="#cb5-137" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"type"</span><span class="fu">:</span><span class="st">"input_json_delta"</span><span class="fu">,</span><span class="dt">"partial_json"</span><span class="fu">:</span><span class="st">" Francisc"</span><span class="fu">}</span></span>
+<span id="cb5-138"><a href="#cb5-138" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"type"</span><span class="fu">:</span><span class="st">"input_json_delta"</span><span class="fu">,</span><span class="dt">"partial_json"</span><span class="fu">:</span><span class="st">"o, CA</span><span class="ch">\"</span><span class="st">}"</span><span class="fu">}</span></span>
+<span id="cb5-139"><a href="#cb5-139" aria-hidden="true" tabindex="-1"></a><span class="in">```</span></span>
+<span id="cb5-140"><a href="#cb5-140" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-141"><a href="#cb5-141" aria-hidden="true" tabindex="-1"></a><span class="in">`{"location":`</span> is not JSON. Neither is <span class="in">`o, CA"}`</span>. The obvious loop — parse each delta as it arrives — fails on every fragment, and not even consistently enough to catch reliably: a fragment can occasionally be *valid* JSON meaning something entirely different from the document it belongs to.</span>
+<span id="cb5-142"><a href="#cb5-142" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-143"><a href="#cb5-143" aria-hidden="true" tabindex="-1"></a>::: {.callout-warning}</span>
+<span id="cb5-144"><a href="#cb5-144" aria-hidden="true" tabindex="-1"></a><span class="fu">## Concatenate first, parse once</span></span>
+<span id="cb5-145"><a href="#cb5-145" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-146"><a href="#cb5-146" aria-hidden="true" tabindex="-1"></a>Append each <span class="in">`partial_json`</span> to a buffer keyed by the block's <span class="in">`index`</span>, and call <span class="in">`json.loads()`</span> only after that block's <span class="in">`content_block_stop`</span>. The contract is about the assembled object: <span class="in">`tool_use.input`</span> is *always* an object in the final message, even though every delta is a string.</span>
+<span id="cb5-147"><a href="#cb5-147" aria-hidden="true" tabindex="-1"></a>:::</span>
 <span id="cb5-148"><a href="#cb5-148" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-149"><a href="#cb5-149" aria-hidden="true" tabindex="-1"></a>| What you're building | Mode | Why |</span>
-<span id="cb5-150"><a href="#cb5-150" aria-hidden="true" tabindex="-1"></a>|---|---|---|</span>
-<span id="cb5-151"><a href="#cb5-151" aria-hidden="true" tabindex="-1"></a>| Batch job, eval harness, classifier | Full response | Nobody's watching a clock. Simpler code, testable output. Consider the Batches API too — same requests, half the price |</span>
-<span id="cb5-152"><a href="#cb5-152" aria-hidden="true" tabindex="-1"></a>| Chat UI | Streaming | The entire point is time-to-first-word |</span>
-<span id="cb5-153"><a href="#cb5-153" aria-hidden="true" tabindex="-1"></a>| Agent that calls tools | Streaming, accumulated | Turns run long; use <span class="in">`get_final_message()`</span> and treat tool input as one value, never as fragments |</span>
-<span id="cb5-154"><a href="#cb5-154" aria-hidden="true" tabindex="-1"></a>| Long report generation | Streaming, not optional | This is the timeout case — a large <span class="in">`max_tokens`</span> without streaming is a connection waiting to be dropped |</span>
-<span id="cb5-155"><a href="#cb5-155" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-156"><a href="#cb5-156" aria-hidden="true" tabindex="-1"></a>Stream when a human is watching, or when the response is long enough that the connection itself is a risk. Otherwise take the simple thing.</span>
-<span id="cb5-157"><a href="#cb5-157" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-158"><a href="#cb5-158" aria-hidden="true" tabindex="-1"></a><span class="fu">## What breaks, and what you can't put back</span></span>
-<span id="cb5-159"><a href="#cb5-159" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-160"><a href="#cb5-160" aria-hidden="true" tabindex="-1"></a>Overload is the failure you'll meet first. A 529 <span class="in">`overloaded_error`</span> means the API is busy, not that your request was wrong — it's retryable, and the SDK already retries it (with 429s, 5xx and connection errors) twice by default with exponential backoff. Mid-stream it arrives as an <span class="in">`error`</span> event rather than an HTTP status, since the status line went out long ago.</span>
+<span id="cb5-149"><a href="#cb5-149" aria-hidden="true" tabindex="-1"></a>Better still, don't hand-roll it: <span class="in">`get_final_message()`</span> does the accumulation and hands back a parsed <span class="in">`input`</span> dict. That's the real reason to prefer the SDK helper over the raw event iterator whenever tools are in play.</span>
+<span id="cb5-150"><a href="#cb5-150" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-151"><a href="#cb5-151" aria-hidden="true" tabindex="-1"></a><span class="fu">## The mode follows from who is waiting</span></span>
+<span id="cb5-152"><a href="#cb5-152" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-153"><a href="#cb5-153" aria-hidden="true" tabindex="-1"></a>Accumulate-then-parse settles the hard case, which leaves the ordinary one: which mode to reach for by default. It comes down to two questions — is a person watching the output appear, and is the response long enough that the connection itself is a liability.</span>
+<span id="cb5-154"><a href="#cb5-154" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-155"><a href="#cb5-155" aria-hidden="true" tabindex="-1"></a>| What you're building | Mode | Why |</span>
+<span id="cb5-156"><a href="#cb5-156" aria-hidden="true" tabindex="-1"></a>|---|---|---|</span>
+<span id="cb5-157"><a href="#cb5-157" aria-hidden="true" tabindex="-1"></a>| Batch job, eval harness, classifier | Full response | Nobody's watching a clock. Simpler code, testable output. Consider the Batches API too — same requests, half the price |</span>
+<span id="cb5-158"><a href="#cb5-158" aria-hidden="true" tabindex="-1"></a>| Chat UI | Streaming | The entire point is time-to-first-word |</span>
+<span id="cb5-159"><a href="#cb5-159" aria-hidden="true" tabindex="-1"></a>| Agent that calls tools | Streaming, accumulated | Turns run long; use <span class="in">`get_final_message()`</span> and treat tool input as one value, never as fragments |</span>
+<span id="cb5-160"><a href="#cb5-160" aria-hidden="true" tabindex="-1"></a>| Long report generation | Streaming, not optional | This is the timeout case — a large <span class="in">`max_tokens`</span> without streaming is a connection waiting to be dropped |</span>
 <span id="cb5-161"><a href="#cb5-161" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-162"><a href="#cb5-162" aria-hidden="true" tabindex="-1"></a>::: {.callout-note}</span>
-<span id="cb5-163"><a href="#cb5-163" aria-hidden="true" tabindex="-1"></a><span class="fu">## Don't write the retry loop first — but know what it doesn't cover</span></span>
-<span id="cb5-164"><a href="#cb5-164" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-165"><a href="#cb5-165" aria-hidden="true" tabindex="-1"></a><span class="in">`max_retries`</span> defaults to <span class="in">`2`</span>, and hand-rolled retry layered on top gives you multiplied attempts and a latency profile nobody can explain. Tune the parameter first.</span>
-<span id="cb5-166"><a href="#cb5-166" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-167"><a href="#cb5-167" aria-hidden="true" tabindex="-1"></a>It only covers *getting the request going*, though. Once bytes are flowing, an <span class="in">`error`</span> event or a dropped connection is yours to handle — the SDK cannot rewind a stream, which is what the rest of this section is about.</span>
-<span id="cb5-168"><a href="#cb5-168" aria-hidden="true" tabindex="-1"></a>:::</span>
-<span id="cb5-169"><a href="#cb5-169" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-170"><a href="#cb5-170" aria-hidden="true" tabindex="-1"></a>A dropped connection is different, because you're holding a real but incomplete answer. You *can* resume: send what you received back as a **user** message asking the model to continue. (On Claude 4.6 and later it must be a user turn — prefilling the assistant turn is rejected on current models.)</span>
-<span id="cb5-171"><a href="#cb5-171" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-172"><a href="#cb5-172" aria-hidden="true" tabindex="-1"></a>But only from a **text** block. Tool use and thinking blocks cannot be partially recovered, and by now the reason should be visible: a half-delivered tool call is a broken JSON string, so there's no object to hand back as context. Thinking blocks are worse — each is closed by a cryptographic <span class="in">`signature_delta`</span> just before <span class="in">`content_block_stop`</span>, and an unsigned fragment can't be replayed as authentic. If the drop lands inside either, discard back to the last completed text block.</span>
-<span id="cb5-173"><a href="#cb5-173" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-174"><a href="#cb5-174" aria-hidden="true" tabindex="-1"></a><span class="fu">## Back to the spinner</span></span>
+<span id="cb5-162"><a href="#cb5-162" aria-hidden="true" tabindex="-1"></a>Stream when a human is watching, or when the response is long enough that the connection itself is a risk. Otherwise take the simple thing. That choice also decides what a failure looks like to you, because the two modes fail in different places.</span>
+<span id="cb5-163"><a href="#cb5-163" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-164"><a href="#cb5-164" aria-hidden="true" tabindex="-1"></a><span class="fu">## What breaks, and what you can't put back</span></span>
+<span id="cb5-165"><a href="#cb5-165" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-166"><a href="#cb5-166" aria-hidden="true" tabindex="-1"></a>Overload is the failure you'll meet first, and it hits both modes. A 529 <span class="in">`overloaded_error`</span> means the API is busy, not that your request was wrong — it's retryable, and the SDK already retries it (with 429s, 5xx and connection errors) twice by default with exponential backoff. Mid-stream it arrives as an <span class="in">`error`</span> event rather than an HTTP status, since the status line went out long ago.</span>
+<span id="cb5-167"><a href="#cb5-167" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-168"><a href="#cb5-168" aria-hidden="true" tabindex="-1"></a>::: {.callout-note}</span>
+<span id="cb5-169"><a href="#cb5-169" aria-hidden="true" tabindex="-1"></a><span class="fu">## Don't write the retry loop first — but know what it doesn't cover</span></span>
+<span id="cb5-170"><a href="#cb5-170" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-171"><a href="#cb5-171" aria-hidden="true" tabindex="-1"></a><span class="in">`max_retries`</span> defaults to <span class="in">`2`</span>, and hand-rolled retry layered on top gives you multiplied attempts and a latency profile nobody can explain. Tune the parameter first.</span>
+<span id="cb5-172"><a href="#cb5-172" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-173"><a href="#cb5-173" aria-hidden="true" tabindex="-1"></a>It only covers *getting the request going*, though. Once bytes are flowing, an <span class="in">`error`</span> event or a dropped connection is yours to handle — the SDK cannot rewind a stream, which is what the rest of this section is about.</span>
+<span id="cb5-174"><a href="#cb5-174" aria-hidden="true" tabindex="-1"></a>:::</span>
 <span id="cb5-175"><a href="#cb5-175" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-176"><a href="#cb5-176" aria-hidden="true" tabindex="-1"></a>These really are the same call: one endpoint, one request body, one final <span class="in">`Message`</span> whichever mode you pick. The difference is delivery, and mostly that's a user-experience decision you can defer — until long responses, where the stream is what keeps the connection alive, and tool calls, where the fragments quietly corrupt your parsing if you treat each as a document.</span>
+<span id="cb5-176"><a href="#cb5-176" aria-hidden="true" tabindex="-1"></a>A dropped connection is different, because you're holding a real but incomplete answer. You *can* resume: send what you received back as a **user** message asking the model to continue. (On Claude 4.6 and later it must be a user turn — prefilling the assistant turn is rejected on current models.)</span>
 <span id="cb5-177"><a href="#cb5-177" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-178"><a href="#cb5-178" aria-hidden="true" tabindex="-1"></a>So: start with a full response, switch to streaming when you have a reason, and the day you add tools, accumulate before you parse.</span>
+<span id="cb5-178"><a href="#cb5-178" aria-hidden="true" tabindex="-1"></a>But only from a **text** block. Tool use and thinking blocks cannot be partially recovered, and by now the reason should be visible: a half-delivered tool call is a broken JSON string, so there's no object to hand back as context. Thinking blocks are worse — each is closed by a cryptographic <span class="in">`signature_delta`</span> just before <span class="in">`content_block_stop`</span>, and an unsigned fragment can't be replayed as authentic. If the drop lands inside either, discard back to the last completed text block.</span>
 <span id="cb5-179"><a href="#cb5-179" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-180"><a href="#cb5-180" aria-hidden="true" tabindex="-1"></a>::: {.callout-tip}</span>
-<span id="cb5-181"><a href="#cb5-181" aria-hidden="true" tabindex="-1"></a><span class="fu">## Try it yourself</span></span>
-<span id="cb5-182"><a href="#cb5-182" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-183"><a href="#cb5-183" aria-hidden="true" tabindex="-1"></a>Drop below the helper to the raw event iterator — <span class="in">`client.messages.create(..., stream=True)`</span> — and print nothing but <span class="in">`event.type`</span>:</span>
-<span id="cb5-184"><a href="#cb5-184" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-187"><a href="#cb5-187" aria-hidden="true" tabindex="-1"></a><span class="in">```{python}</span></span>
-<span id="cb5-188"><a href="#cb5-188" aria-hidden="true" tabindex="-1"></a><span class="co">#| eval: false</span></span>
-<span id="cb5-189"><a href="#cb5-189" aria-hidden="true" tabindex="-1"></a>last_usage <span class="op">=</span> <span class="va">None</span></span>
+<span id="cb5-180"><a href="#cb5-180" aria-hidden="true" tabindex="-1"></a><span class="fu">## Back to the spinner</span></span>
+<span id="cb5-181"><a href="#cb5-181" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-182"><a href="#cb5-182" aria-hidden="true" tabindex="-1"></a>These really are the same call: one endpoint, one request body, one final <span class="in">`Message`</span> whichever mode you pick. The difference is delivery, and mostly that's a user-experience decision you can defer — until long responses, where the stream is what keeps the connection alive, and tool calls, where the fragments quietly corrupt your parsing if you treat each as a document.</span>
+<span id="cb5-183"><a href="#cb5-183" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-184"><a href="#cb5-184" aria-hidden="true" tabindex="-1"></a>So: start with a full response, switch to streaming when you have a reason, and the day you add tools, accumulate before you parse.</span>
+<span id="cb5-185"><a href="#cb5-185" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-186"><a href="#cb5-186" aria-hidden="true" tabindex="-1"></a>::: {.callout-tip}</span>
+<span id="cb5-187"><a href="#cb5-187" aria-hidden="true" tabindex="-1"></a><span class="fu">## Try it yourself</span></span>
+<span id="cb5-188"><a href="#cb5-188" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-189"><a href="#cb5-189" aria-hidden="true" tabindex="-1"></a>Drop below the helper to the raw event iterator — <span class="in">`client.messages.create(..., stream=True)`</span> — and print nothing but <span class="in">`event.type`</span>:</span>
 <span id="cb5-190"><a href="#cb5-190" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-191"><a href="#cb5-191" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> event <span class="kw">in</span> client.messages.create(</span>
-<span id="cb5-192"><a href="#cb5-192" aria-hidden="true" tabindex="-1"></a>    model<span class="op">=</span><span class="st">"claude-opus-5"</span>,</span>
-<span id="cb5-193"><a href="#cb5-193" aria-hidden="true" tabindex="-1"></a>    max_tokens<span class="op">=</span><span class="dv">4096</span>,</span>
-<span id="cb5-194"><a href="#cb5-194" aria-hidden="true" tabindex="-1"></a>    messages<span class="op">=</span>[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: <span class="st">"Name three uses for a paperclip."</span>}],</span>
-<span id="cb5-195"><a href="#cb5-195" aria-hidden="true" tabindex="-1"></a>    stream<span class="op">=</span><span class="va">True</span>,</span>
-<span id="cb5-196"><a href="#cb5-196" aria-hidden="true" tabindex="-1"></a>):</span>
-<span id="cb5-197"><a href="#cb5-197" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(event.<span class="bu">type</span>)</span>
-<span id="cb5-198"><a href="#cb5-198" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> event.<span class="bu">type</span> <span class="op">==</span> <span class="st">"message_delta"</span>:</span>
-<span id="cb5-199"><a href="#cb5-199" aria-hidden="true" tabindex="-1"></a>        last_usage <span class="op">=</span> event.usage</span>
-<span id="cb5-200"><a href="#cb5-200" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-201"><a href="#cb5-201" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(last_usage.output_tokens)</span>
-<span id="cb5-202"><a href="#cb5-202" aria-hidden="true" tabindex="-1"></a><span class="in">```</span></span>
-<span id="cb5-203"><a href="#cb5-203" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-204"><a href="#cb5-204" aria-hidden="true" tabindex="-1"></a>Watch the envelope assemble: <span class="in">`message_start`</span>, matched <span class="in">`content_block_start`</span>/<span class="in">`content_block_stop`</span> pairs with deltas between them, then <span class="in">`message_delta`</span> and <span class="in">`message_stop`</span>. Count the pairs — on <span class="in">`claude-opus-5`</span> you should see **two**, because the thinking block opens, takes a single <span class="in">`signature_delta`</span>, and closes before the text block starts. That's the structure that makes a thinking block unresumable, seen from outside.</span>
-<span id="cb5-205"><a href="#cb5-205" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-206"><a href="#cb5-206" aria-hidden="true" tabindex="-1"></a>Then check that final <span class="in">`output_tokens`</span> against <span class="in">`stream.get_final_message().usage.output_tokens`</span> from the helper version. They agree — and proving it makes the "cumulative, not per-event" warning stick.</span>
-<span id="cb5-207"><a href="#cb5-207" aria-hidden="true" tabindex="-1"></a>:::</span>
+<span id="cb5-193"><a href="#cb5-193" aria-hidden="true" tabindex="-1"></a><span class="in">```{python}</span></span>
+<span id="cb5-194"><a href="#cb5-194" aria-hidden="true" tabindex="-1"></a><span class="co">#| eval: false</span></span>
+<span id="cb5-195"><a href="#cb5-195" aria-hidden="true" tabindex="-1"></a>last_usage <span class="op">=</span> <span class="va">None</span></span>
+<span id="cb5-196"><a href="#cb5-196" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-197"><a href="#cb5-197" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> event <span class="kw">in</span> client.messages.create(</span>
+<span id="cb5-198"><a href="#cb5-198" aria-hidden="true" tabindex="-1"></a>    model<span class="op">=</span><span class="st">"claude-opus-5"</span>,</span>
+<span id="cb5-199"><a href="#cb5-199" aria-hidden="true" tabindex="-1"></a>    max_tokens<span class="op">=</span><span class="dv">4096</span>,</span>
+<span id="cb5-200"><a href="#cb5-200" aria-hidden="true" tabindex="-1"></a>    messages<span class="op">=</span>[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: <span class="st">"Name three uses for a paperclip."</span>}],</span>
+<span id="cb5-201"><a href="#cb5-201" aria-hidden="true" tabindex="-1"></a>    stream<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb5-202"><a href="#cb5-202" aria-hidden="true" tabindex="-1"></a>):</span>
+<span id="cb5-203"><a href="#cb5-203" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(event.<span class="bu">type</span>)</span>
+<span id="cb5-204"><a href="#cb5-204" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> event.<span class="bu">type</span> <span class="op">==</span> <span class="st">"message_delta"</span>:</span>
+<span id="cb5-205"><a href="#cb5-205" aria-hidden="true" tabindex="-1"></a>        last_usage <span class="op">=</span> event.usage</span>
+<span id="cb5-206"><a href="#cb5-206" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-207"><a href="#cb5-207" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(last_usage.output_tokens)</span>
+<span id="cb5-208"><a href="#cb5-208" aria-hidden="true" tabindex="-1"></a><span class="in">```</span></span>
+<span id="cb5-209"><a href="#cb5-209" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-210"><a href="#cb5-210" aria-hidden="true" tabindex="-1"></a>Watch the envelope assemble: <span class="in">`message_start`</span>, matched <span class="in">`content_block_start`</span>/<span class="in">`content_block_stop`</span> pairs with deltas between them, then <span class="in">`message_delta`</span> and <span class="in">`message_stop`</span>. Count the pairs — on <span class="in">`claude-opus-5`</span> you should see **two**, because the thinking block opens, takes a single <span class="in">`signature_delta`</span>, and closes before the text block starts. That's the structure that makes a thinking block unresumable, seen from outside.</span>
+<span id="cb5-211"><a href="#cb5-211" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-212"><a href="#cb5-212" aria-hidden="true" tabindex="-1"></a>Then check that final <span class="in">`output_tokens`</span> against <span class="in">`stream.get_final_message().usage.output_tokens`</span> from the helper version. They agree — and proving it makes the "cumulative, not per-event" warning stick.</span>
+<span id="cb5-213"><a href="#cb5-213" aria-hidden="true" tabindex="-1"></a>:::</span>
 </code><button title="Copy to Clipboard" class="code-copy-button" data-in-quarto-modal=""><i class="bi"></i></button></pre></div>
 </div></div></div></div></div>
 </div> <!-- /content -->
