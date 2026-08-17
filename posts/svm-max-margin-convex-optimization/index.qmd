@@ -17,11 +17,13 @@ format:
 
 ![Maximum-Margin Classification from First Principles](./cover.png)
 
-A support vector machine is often introduced as a bag of formulas: a hyperplane, a margin, a mysterious constant $C$, and a dual problem that appears out of nowhere. This post rebuilds the linear SVM from the ground up around a single thread:
+Sketch two clouds of points on paper, one class each, and draw a line that keeps them apart. Then draw a second line that also gets every point right. You will manage it easily, and a third, and a fourth. But notice what your hand does unprompted: it steers down the middle of the empty space rather than shaving past the nearest point, even though both lines score exactly the same on the data in front of you.
+
+A support vector machine is that instinct written down as arithmetic. It is usually introduced as a bag of formulas instead — a hyperplane, a margin, a mysterious constant $C$, and a dual problem that appears out of nowhere — and all four of them fall out of a single sentence:
 
 > **An SVM chooses a separating hyperplane by solving a convex optimization problem that maximizes geometric separation from the training data, while soft margins extend that idea to imperfectly separable data.**
 
-Everything is grounded in two tiny 2D datasets designed so you can check the geometry by eye. Every number reported — weights, intercepts, margins, support vectors, slack values — is computed by an actual convex solver ([CVXPY](https://www.cvxpy.org/)) on the exact data plotted, and the notebook asserts that the solved values match the analytically derived ones before it will render. `scikit-learn` appears only at the end, as a cross-check.
+Every claim below is made literal on two tiny two-dimensional datasets, small enough that you can check the geometry by eye. The weights, intercepts, margins, support vectors and slack values are not quoted from a textbook: each one is computed by a convex solver on the exact data plotted, driven by [CVXPY](https://www.cvxpy.org/) — a Python library that lets you write a convex problem down in something close to its mathematical form and hands it to a solver. The notebook asserts that the solved values match the ones derived by hand before it will render at all. `scikit-learn`, the standard Python machine-learning toolkit, appears only at the end as an independent cross-check.
 
 ```{python}
 #| code-summary: "Setup: imports, house palette, plotting helpers, and the toy dataset"
@@ -98,17 +100,19 @@ y_A = np.array([-1, -1, -1, -1, -1, +1, +1, +1, +1, +1])
 n_A = len(y_A)
 ```
 
-## The geometric classification problem
+## Separating the data does not pick a classifier
 
-We start with **Dataset A**: ten points in the plane, five per class, with labels $y_i \in \{-1, +1\}$. The coordinates are deliberately simple — the two classes sit in opposite corners with a visible corridor between them.
+**Dataset A** is the paper sketch, typed in. Ten points in the plane, five per class, labels $y_i \in \{-1, +1\}$, coordinates I chose by hand rather than measured from anything: the two classes sit in opposite corners with a visible corridor between them. It stands in for any two-class problem with two measurements per case — two blood markers, two sensor readings — where the classes happen not to overlap.
 
-A **linear classifier** is a function
+Making the data up is the point. With ten round numbers I know the answer before the solver runs: the two closest points across the corridor are $(1,1)$ and $(3,3)$, so the best line has to be their perpendicular bisector. That turns every solver output below into a check rather than a claim, which no real dataset could offer, because on real data nobody knows the right answer to check against.
+
+The simplest way to split a plane is to draw a straight line and call one side positive and the other negative. Written as a function of a point $x$, that rule is
 
 $$
 f(x) = w^\top x + b,
 $$
 
-where $w \in \mathbb{R}^2$ is a normal vector perpendicular to the decision boundary and $b \in \mathbb{R}$ is an intercept. We predict class $+1$ when $f(x) > 0$ and class $-1$ when $f(x) < 0$; the **decision boundary** is the line $\{x : w^\top x + b = 0\}$.
+where $w \in \mathbb{R}^2$ points perpendicular to the line and $b \in \mathbb{R}$ slides it back and forth. We predict class $+1$ when $f(x) > 0$ and class $-1$ when $f(x) < 0$, and the line itself — the set $\{x : w^\top x + b = 0\}$ where the rule is undecided — is the **decision boundary**. A rule of this shape is a **linear classifier**; everything in this post is about choosing its two parameters well.
 
 A hyperplane **separates** the training data when every point lands on its own class's side, which is captured in one inequality per point:
 
@@ -118,11 +122,11 @@ $$
 
 Multiplying by the label is a compact trick: for a $+1$ point it requires $f(x_i) > 0$, and for a $-1$ point it flips the inequality to require $f(x_i) < 0$. One formula, both cases.
 
-Here is the immediate problem: **separability does not pick a classifier**. The cell below defines three hand-chosen candidate lines, *verifies numerically* that each one separates Dataset A perfectly (minimum of $y_i f(x_i)$ over the data is strictly positive), and plots them. All three achieve 100% training accuracy. Which should we prefer?
+And here is the trouble the paper sketch already hinted at: satisfying every one of those inequalities does not pick a line. Three hand-chosen candidates make it concrete. Each is checked numerically — the smallest $y_i f(x_i)$ over the ten points comes out strictly positive, so every point is on its own side — and then plotted. All three get 100% of the training data right. Which one should we prefer?
 
 ```{python}
 #| label: fig-many-separators
-#| fig-cap: "Three different lines, each verified to classify all ten training points correctly. Training accuracy alone cannot choose between them — line (c) skims dangerously close to the blue class, yet separates the data just as 'perfectly' as the others."
+#| fig-cap: "Three different lines, each verified to classify all ten training points correctly. Training accuracy alone cannot choose between them — line (c) skims dangerously close to the orange class, yet separates the data just as 'perfectly' as the others."
 #| code-summary: "Verify and plot three separating lines"
 candidates = {
     "(a)  $x_1 + x_2 = 4$":            (np.array([1.0, 1.0]),  -4.0),
@@ -147,21 +151,23 @@ plt.tight_layout()
 plt.show()
 ```
 
-All three lines are *feasible*, but they are not equally trustworthy. Line (c) passes so close to the blue class that a tiny perturbation of one point would flip its predicted label. Intuitively, we want the line with the most **clearance** — the widest empty corridor between it and the nearest data. The rest of the post makes that intuition exact.
+All three lines are *feasible*, but they are not equally trustworthy. Line (c) tilts until it almost grazes the orange point at $(4, 2.5)$, close enough that nudging that one observation would flip its predicted label. What your hand was doing on paper was avoiding exactly that: preferring the line with the most **clearance**, the widest empty corridor between it and the nearest data, whichever class the nearest data belongs to. The rest of the post makes that preference exact enough to optimize.
 
-## Margin from first principles
+## Clearance is a number, so it can be maximized
 
-### Distance from a point to a hyperplane
+Preferring the roomiest line is only a preference until clearance has a definition and a formula. Two steps get there: measure how far a line sits from the data, then remove an ambiguity in how lines are written down that would otherwise make the measurement useless to a solver.
 
-The tool we need is the perpendicular distance from a point $x_i$ to the line $\{x : w^\top x + b = 0\}$. Since $w$ is normal to the line, projecting onto the unit normal $w / \lVert w \rVert$ gives
+### The margin is the distance to the closest point
+
+Clearance has to become arithmetic before anything can maximize it, and the arithmetic is the perpendicular distance from a point $x_i$ to the line $\{x : w^\top x + b = 0\}$. Since $w$ is normal to the line, projecting onto the unit normal $w / \lVert w \rVert$ gives
 
 $$
 \operatorname{dist}(x_i) \;=\; \frac{\left| w^\top x_i + b \right|}{\lVert w \rVert}.
 $$
 
-The numerator $|f(x_i)|$ is called the **functional margin** — it depends on how $(w, b)$ is scaled. Dividing by $\lVert w \rVert$ converts it into the scale-free **geometric margin**, an actual distance in the plane.
+The numerator $|f(x_i)|$ on its own tells you how emphatically the rule votes, not how far away the point is: double $w$ and $b$ and it doubles, while the line has not moved. That raw score is the **functional margin**. Dividing by $\lVert w \rVert$ cancels the scaling and leaves a real distance in the plane, the **geometric margin**.
 
-Define the **margin of a separating hyperplane** as its distance to the *closest* training point:
+A line's clearance is set by whichever point crowds it most, so define the **margin of a separating hyperplane** as its distance to the *closest* training point:
 
 $$
 \gamma(w, b) \;=\; \min_i \frac{y_i \left( w^\top x_i + b \right)}{\lVert w \rVert}.
@@ -180,11 +186,11 @@ md_table(["candidate line", "geometric margin $\\gamma$ (distance)",
           "closest training point"], rows)
 ```
 
-Line (a) keeps every point at least $\sqrt{2} \approx 1.414$ units away; line (c) manages barely $0.86$. "Maximize the margin" now has a precise meaning: among all separating $(w, b)$, find the one with the largest $\gamma$.
+Line (a) keeps every point at least $\sqrt{2} \approx 1.414$ units away; line (c) manages barely $0.86$, and the point doing the crowding is the orange one at $(4, 2.5)$. "Maximize the margin" now has a precise meaning: among all separating $(w, b)$, find the one with the largest $\gamma$. Writing that down as something a solver will accept takes one more step.
 
-### The scaling ambiguity and the canonical form
+### Fixing the scale turns a ratio into a constraint
 
-There is a wrinkle. The pairs $(w, b)$ and $(cw, cb)$ describe **the same line** for any $c > 0$ — every functional margin gets multiplied by $c$, but the geometric margin $\gamma$ is unchanged because the $\lVert w \rVert$ in the denominator absorbs it. So the parametrization is redundant, and "maximize $\gamma$" as written is an awkward, non-smooth objective over a redundant space.
+Scoring lines by $\gamma$ is easy; searching over all lines for the largest $\gamma$ is not, and the obstacle is in the notation rather than the geometry. The pairs $(w, b)$ and $(cw, cb)$ describe **the same line** for any $c > 0$ — every functional margin gets multiplied by $c$, but the geometric margin $\gamma$ is unchanged because the $\lVert w \rVert$ in the denominator absorbs it. So the parametrization is redundant, and "maximize $\gamma$" as written is an awkward, non-smooth objective over a redundant space.
 
 The classical fix is to spend the redundancy: **rescale $(w, b)$ so that the closest points have functional margin exactly 1.** That is, impose the canonical constraints
 
@@ -203,9 +209,9 @@ from the boundary. Two distinct quantities follow, and it pays to keep them stra
 - the **one-sided geometric margin** — boundary to the nearest point on either side: $1 / \lVert w \rVert$;
 - the **full margin width** — the whole empty band from the margin line $w^\top x + b = -1$ across to $w^\top x + b = +1$: $2 / \lVert w \rVert$.
 
-When people say "the margin" they usually mean the band width $2/\lVert w \rVert$, but plots of "the margin lines" show the two one-sided boundaries. Both appear in the figures below.
+When people say "the margin" they usually mean the band width $2/\lVert w \rVert$, but plots of "the margin lines" show the two one-sided boundaries. Both appear in the figures below. With the scale nailed down, the objective simplifies into something a solver recognizes.
 
-## The hard-margin primal problem
+## Maximizing the margin is minimizing a length
 
 Under canonical scaling, maximizing the margin $1 / \lVert w \rVert$ is the same as minimizing $\lVert w \rVert$, and minimizing $\lVert w \rVert$ is the same as minimizing the smooth, differentiable quantity $\tfrac12 \lVert w \rVert^2$ (the $\tfrac12$ just tidies derivatives). That gives the **hard-margin SVM primal**:
 
@@ -218,9 +224,11 @@ $$
 
 In words: *among all hyperplanes that classify every training point correctly with functional margin at least 1, pick the one whose normal vector is shortest — equivalently, whose geometric margin $1/\lVert w \rVert$ is widest.* The constraints do the separating; the objective does the margin-maximizing.
 
-### Solving it with CVXPY
+### The solver recovers the line you can read off the plot
 
-Dataset A was constructed so the answer is knowable in advance: the closest pair of points across the class gap is $(1,1)$ and $(3,3)$, so the optimal boundary should be their perpendicular bisector $x_1 + x_2 = 4$ — candidate (a) from earlier — with $w^\star = (0.5,\, 0.5)$, $b^\star = -2$, and margin width $2/\lVert w^\star \rVert = 2\sqrt{2}$. The cell below solves the QP and **asserts** that the solver agrees, so this post cannot render with numbers that contradict its own prose.
+Dataset A was invented so the answer is knowable in advance, and this is where that pays off. The closest pair of points across the class gap is $(1,1)$ and $(3,3)$, so the widest corridor must be centred on their perpendicular bisector $x_1 + x_2 = 4$ — candidate (a) from earlier — giving $w^\star = (0.5,\, 0.5)$, $b^\star = -2$, and margin width $2/\lVert w^\star \rVert = 2\sqrt{2}$.
+
+Handed to CVXPY, the problem above is a quadratic program: a quadratic objective over linear constraints, the easiest interesting shape in convex optimization. The solve below **asserts** that the solver reproduces those hand-derived numbers, so the post cannot render with figures that contradict its own prose.
 
 ```{python}
 #| code-summary: "Hard-margin QP in CVXPY, with assertions against the analytic solution"
@@ -252,7 +260,7 @@ print(f"support vectors  : {[tuple(p) for p in X_A[sv_mask_hard]]}")
 print(f"min_i y_i(w·x_i+b) = {func_margins.min():.8f}  (≥ 1 − {TOL:g} ✓)")
 ```
 
-The solver recovers the analytic solution to six decimal places. The per-point constraint values make the geometry concrete — a functional margin of exactly $1$ marks a support vector, anything larger means the point sits strictly outside the margin band:
+The solver recovers the hand-derived solution to six decimal places. Going point by point makes the geometry concrete. Under canonical scaling, a point with $y_i f(x_i) = 1$ is touching the edge of the corridor — it is one of the points holding the band open, and points that do this are called **support vectors**. Anything above 1 sits strictly outside the band, contributing nothing:
 
 ```{python}
 #| code-summary: "Per-point constraint check"
@@ -268,7 +276,7 @@ md_table(["$x_i$", "$y_i$", "$y_i(w^\\top x_i + b)$",
           "distance to boundary", "role"], rows)
 ```
 
-Only the two support vectors touch the constraint boundary $y_i f(x_i) = 1$; the other eight constraints are slack (inactive). Delete any non-support point and re-solve — the answer would not move. The two support vectors *are* the solution's memory of the data.
+Only two points touch $y_i f(x_i) = 1$; the other eight constraints have room to spare, or are *inactive*. Delete any of those eight and re-solve and the answer would not move at all. Everything the fit remembers about ten points is stored in two of them.
 
 ```{python}
 #| label: fig-hard-solution
@@ -296,15 +304,17 @@ plt.tight_layout()
 plt.show()
 ```
 
-## Why this is convex optimization
+## Each data point becomes a half-space, and that is what makes this easy
 
-The hard-margin problem is a **convex quadratic program (QP)**, and each ingredient is worth naming:
+The solver found the right line in milliseconds and certified it. Neither of those is luck; both come from the shape of the problem, and the word for that shape is convex.
 
-- **The objective is convex.** $\tfrac12\lVert w \rVert^2 = \tfrac12(w_1^2 + w_2^2)$ is a paraboloid — its Hessian is the identity, which is positive definite, so it is *strictly* convex **in $w$**. (Note $b$ does not appear in the objective at all; as a function of the joint variable $(w, b)$ the objective is convex but not strictly convex. This detail matters for uniqueness, below.)
-- **Each constraint is a half-space *in parameter space*.** For a fixed data point $(x_i, y_i)$, the set $\{(w, b) : y_i(w^\top x_i + b) \ge 1\}$ is defined by a single linear inequality in the unknowns $(w, b)$ — a half-space in $\mathbb{R}^3$. This is the perspective flip that makes SVMs tractable: each *data point* becomes a *linear constraint* on the parameters.
-- **The feasible region is convex.** An intersection of half-spaces (a polyhedron) is always convex.
+Two plain pictures carry it. A *set* is convex when the straight segment between any two of its members stays entirely inside it — a disc is, a crescent is not. A *function* is convex when its graph bows upward, so a chord drawn between two points on it never dips below the graph — a bowl, not a mountain range with valleys between peaks. Minimizing a bowl-shaped function over a disc-shaped set is convex optimization, and the hard-margin problem is exactly that: a **convex quadratic program**. Each ingredient is worth naming.
 
-Minimizing a convex function over a convex set is exactly the definition of a convex optimization problem. To *draw* the feasible set we need one small maneuver: the full feasible region lives in $(w_1, w_2, b)$-space, and slicing it at the optimal $b^\star$ is useless — at the optimum the two support-vector constraints are tight, so that slice degenerates to a line segment with no area to shade. Instead we **eliminate $b$**: a given $w$ admits *some* feasible intercept exactly when $\max_{i \in +} (1 - w^\top x_i) \le \min_{j \in -} (-1 - w^\top x_j)$, i.e. when
+- **The objective is convex.** $\tfrac12\lVert w \rVert^2 = \tfrac12(w_1^2 + w_2^2)$ is a paraboloid, a bowl with a single lowest point. Its matrix of second derivatives is the identity, which curves upward in every direction, so the bowl has no flat floor — it is *strictly* convex **in $w$**. (Note $b$ does not appear in the objective at all; as a function of the joint variable $(w, b)$ the objective is convex but not strictly convex. This detail matters for uniqueness, below.)
+- **Each constraint is a half-space *in parameter space*.** Stop thinking of $(x_i, y_i)$ as a point to be classified and think of it as a rule about the unknowns. For fixed data, $\{(w, b) : y_i(w^\top x_i + b) \ge 1\}$ is one linear inequality in $(w, b)$, which carves $\mathbb{R}^3$ into a "yes" side and a "no" side — a half-space. This perspective flip is what makes SVMs tractable: each *data point* becomes a *linear constraint* on the parameters.
+- **The feasible region is convex.** Overlap any number of half-spaces and what survives is a flat-sided solid, a polyhedron, and a solid like that always contains the segment between any two of its points.
+
+To *draw* that feasible set takes one small maneuver: the full region lives in $(w_1, w_2, b)$-space, and slicing it at the optimal $b^\star$ is useless — at the optimum the two support-vector constraints are tight, so that slice degenerates to a line segment with no area to shade. Instead we **eliminate $b$**: a given $w$ admits *some* feasible intercept exactly when $\max_{i \in +} (1 - w^\top x_i) \le \min_{j \in -} (-1 - w^\top x_j)$, i.e. when
 
 $$
 w^\top (x_i - x_j) \ge 2 \qquad \text{for every cross-class pair } (i \in +,\ j \in -),
@@ -344,29 +354,35 @@ plt.tight_layout()
 plt.show()
 ```
 
-### What convexity buys you
+### Convexity buys a global answer and a certificate
+
+That picture — the shrinking circle settling against the corner of a flat-sided region — is why the fit is dependable. Three guarantees follow from it, and together they explain why nobody trains an SVM with random restarts the way they would a neural network.
 
 - **Every local optimum is a global optimum.** A convex landscape has no false bottoms: if no feasible descent direction exists at a point, no better feasible point exists anywhere.
-- **Solvers can *target* the global optimum**, not just a stationary point, and can certify optimality via duality (a matching lower bound). CLARABEL, the interior-point solver used above, reports `optimal` — a certificate, not a hope.
+- **Solvers can *target* the global optimum**, not just a stationary point, and can certify optimality via duality — a lower bound that meets the value found, leaving no room for anything better. CLARABEL, the solver used above, works toward the answer from strictly inside the feasible region (an *interior-point* method) and reports `optimal`: a certificate, not a hope.
 - **There are no distinct "bad local minima"** to escape, so no restarts, annealing, or initialization tricks are needed.
 
-### What convexity does *not* buy you
+### Convexity does not buy feasibility or a single answer
+
+Those guarantees are narrower than they sound, and it is worth being blunt about the gaps, because all three bite somewhere in this post.
 
 - **Feasibility.** If no hyperplane separates the data, the constraint set is *empty* and the hard-margin problem has no solution at all. (We will hit this in @sec-soft — the solver honestly reports `infeasible`.)
 - **Uniqueness of the optimizer.** Convexity guarantees the set of optima is convex, not that it is a single point. Extra conditions are needed.
 - **Numerical immunity.** Finite-precision solvers return answers to a tolerance (note the `1e-6` and `1e-4` tolerances used throughout this post); badly conditioned or nearly degenerate problems can stress them.
 
-The uniqueness question deserves precision, because the objective is strictly convex in $w$ *but $b$ never appears in it*:
+The second gap deserves precision rather than a shrug, because the two parameters are in genuinely different situations: the objective is strictly convex in $w$, *but $b$ never appears in it at all*.
 
 - **$w^\star$ is always unique** (when the problem is feasible): if two optima had different $w$'s, their midpoint would be feasible (convexity) with strictly smaller $\tfrac12\lVert w\rVert^2$ (strict convexity) — contradiction.
 - **$b^\star$ requires an argument.** Given $w^\star$, the constraints pin $b$ into an interval $[\,b_{\text{lo}},\, b_{\text{hi}}\,]$ where $b_{\text{lo}}$ comes from the $+1$ class and $b_{\text{hi}}$ from the $-1$ class. For a separable two-class problem this interval collapses to a point: if it had positive length, an interior $b$ would leave *every* constraint slack, and $(w, b)$ could be scaled down to a feasible point with smaller norm — contradicting optimality of $w^\star$. So the standard two-class hard-margin solution $(w^\star, b^\star)$ — and hence **the geometric boundary — is unique**.
 - **Degenerate formulations can break this**, as the next section shows with actual solves: $b$ (and even the existence of a boundary) can fail to be pinned down.
 
-## Making uniqueness concrete {#sec-unique}
+## Uniqueness holds here, and it is easy to break {#sec-unique}
 
-### The generic case: Dataset A's solution is unique
+That argument was made on paper, and paper arguments about degeneracy are exactly the ones worth testing against a solver. So take the two-class case first, where uniqueness should hold, then a formulation where it visibly fails.
 
-Following the argument above, we compute the interval of intercepts compatible with $w^\star$ and check it collapses; and we re-solve the same QP with two different solver algorithms (interior-point CLARABEL and first-order OSQP) to see them agree:
+### Two unrelated algorithms land on the same line
+
+An argument on paper is worth less than a solve, so put the uniqueness claim to work twice over. First compute the interval of intercepts compatible with $w^\star$ and watch it collapse to a point. Then re-solve the same problem with two algorithms that share almost no machinery: CLARABEL, which approaches from inside the feasible region, and OSQP, which takes cheap repeated steps toward it from wherever it starts. Genuine uniqueness means they cannot disagree.
 
 ```{python}
 #| code-summary: "b-interval collapse + independent solvers agree"
@@ -382,11 +398,11 @@ assert np.allclose(w.value, w_hard, atol=1e-3) and abs(b.value - b_hard) < 1e-3
 hard.solve(solver=cp.CLARABEL)   # restore the reference solution
 ```
 
-Two very different algorithms land on the same $(w^\star, b^\star)$ — as they must, since the optimum is a single point.
+Two very different algorithms land on the same $(w^\star, b^\star)$ — as they must, since the optimum is a single point. Take one class away, though, and that agreement evaporates.
 
-### A genuinely degenerate case: one class only
+### Show it one class and the intercept floats free
 
-Feed the hard-margin QP only the five $+1$ points and it is still a perfectly valid convex program — but the constraints $w^\top x_i + b \ge 1$ can be satisfied with $w = 0,\ b \ge 1$, which achieves the *unbeatable* objective value $0$. The optimal set is the entire ray $\{(0, b) : b \ge 1\}$:
+Feed the same problem only the five $+1$ points and it stays a perfectly valid convex program, with nothing to warn you. But the constraints $w^\top x_i + b \ge 1$ can be satisfied with $w = 0,\ b \ge 1$, which achieves the *unbeatable* objective value $0$. The optimal set is the entire ray $\{(0, b) : b \ge 1\}$:
 
 - $w^\star = 0$ **is** unique (strict convexity in $w$ still applies),
 - $b^\star$ is **wildly non-unique** — any $b \ge 1$ is optimal,
@@ -408,9 +424,11 @@ Both solvers agree that $w^\star = 0$, but each returns whatever intercept its a
 
 *A caution about symmetry:* it is tempting to think a symmetric dataset must admit multiple maximum-margin hyperplanes. Usually the opposite is true — by uniqueness, the one optimal hyperplane must itself be invariant under any symmetry of the data (swap the classes of Dataset A's support vectors across the corridor and the boundary $x_1 + x_2 = 4$ maps to itself). Symmetry constrains the unique solution; it does not multiply it.
 
-## Lagrangian and dual intuition {#sec-dual}
+## Duality explains why eight of the ten points do not matter {#sec-dual}
 
-Where do "support vectors" get their name and their power? From duality. Attach a multiplier $\alpha_i \ge 0$ to each constraint and form the **Lagrangian**
+Uniqueness says the line is pinned down; it does not say what pins it. The per-point table hinted at the answer — two points touching, eight with room to spare — and duality turns that hint into arithmetic.
+
+The idea is to put a price on each constraint. Instead of forbidding a point from crossing its margin, charge it whenever it does, and let the charge rise until nobody crosses. Every constraint gets its own price $\alpha_i \ge 0$, and a constraint nobody is pushing against settles at a price of zero, exactly like a resource in surplus. Folding those prices into the objective gives one function of everything at once, the **Lagrangian**
 
 $$
 \mathcal{L}(w, b, \alpha)
@@ -418,7 +436,7 @@ $$
 - \sum_{i} \alpha_i \left[ y_i \left( w^\top x_i + b \right) - 1 \right].
 $$
 
-Setting the derivatives with respect to the primal variables to zero gives the **stationarity conditions**
+At the optimum, nudging $w$ or $b$ can no longer improve this combined function, so its derivatives in those directions vanish. Setting them to zero gives the **stationarity conditions**
 
 $$
 \frac{\partial \mathcal{L}}{\partial w} = 0
@@ -432,10 +450,10 @@ $$
 
 Two consequences, both checkable on our solved problem:
 
-1. **The optimal $w$ is a weighted combination of data points.** Complementary slackness ($\alpha_i \cdot [\text{slack of constraint } i] = 0$) forces $\alpha_i = 0$ for every point whose constraint is inactive — every point strictly outside the margin. Only points *on* the margin can carry weight. That is why they *support* the hyperplane.
+1. **The optimal $w$ is a weighted combination of data points.** A constraint that is not binding cannot be worth paying for, and a price that is positive must be buying something — for each point, one of the two is zero. (That pairing has a name, *complementary slackness*: $\alpha_i \cdot [\text{slack of constraint } i] = 0$.) So every point strictly outside the margin gets $\alpha_i = 0$, and only points *on* the margin carry weight. That is why they *support* the hyperplane.
 2. **The weights balance across classes** ($\sum_i \alpha_i y_i = 0$): the positive-class pull equals the negative-class pull, which is why the boundary settles in equilibrium between the classes.
 
-CVXPY hands us the optimal multipliers as the constraint's `dual_value`. For Dataset A the analytic prediction is $\alpha = 0.25$ for each support vector (solve $\alpha \cdot \big[(3,3)-(1,1)\big] = w^\star$ with balanced weights) and $0$ elsewhere:
+CVXPY hands back the optimal prices as the constraint's `dual_value`, so both consequences can be checked rather than believed. Dataset A predicts them by hand too: with the weights balanced across the two classes, $\alpha \cdot \big[(3,3)-(1,1)\big] = w^\star$ gives $\alpha = 0.25$ on each support vector and $0$ everywhere else.
 
 ```{python}
 #| code-summary: "Dual variables: support vectors carry all the weight"
@@ -464,11 +482,17 @@ $$
 \;\; \sum_i \alpha_i - \tfrac12 \sum_{i,j} \alpha_i \alpha_j y_i y_j \, x_i^\top x_j,
 $$
 
-whose value ($0.25$, printed above) matches the primal optimum exactly — strong duality. Notice the data enters the dual **only through dot products $x_i^\top x_j$**. That single observation is the doorway to kernel methods — replace the dot product with a kernel function and everything above survives — but linear geometry is enough for this post, so we leave that door ajar.
+Its value, the $0.25$ printed above, matches the primal optimum exactly. The two problems close on the same number with no gap between them, which is what *strong duality* means and is not guaranteed in general — convexity is what earns it here. Notice too that the data enters the dual **only through dot products $x_i^\top x_j$**. That single observation is the doorway to kernel methods: swap the dot product for a kernel function and everything above survives unchanged. Linear geometry is enough for this post, so the door stays ajar.
 
-## Soft margins for non-separable data {#sec-soft}
+Everything so far has assumed a corridor exists. Real data rarely offers one.
 
-Real data rarely offers a clean corridor. **Dataset B** below draws two overlapping Gaussian blobs (fixed seed) and adds one blue outlier deep inside orange territory. First, an honest check that the hard-margin machinery genuinely breaks here — the constraint set is empty and the solver says so:
+## When no line can separate, points buy their way across {#sec-soft}
+
+**Dataset B** is the awkward case, and like Dataset A it is invented rather than collected. Two clusters of twenty points each are drawn from Gaussian distributions centred at $(1.4, 1.6)$ and $(3.3, 3.1)$ with a standard deviation of $0.75$, close enough together that their tails overlap, from a fixed random seed so the figures never move. Then one point labelled $-1$ is planted at $(4.3, 3.7)$, deep inside the $+1$ cluster.
+
+It stands in for the ordinary situation Dataset A skipped: two classes whose measurements genuinely overlap, plus one record that is either mislabelled at the source or a real case that behaves nothing like its peers. Simulating beats borrowing a real dataset here for the same reason as before — I know the outlier is planted and I know no straight line can ever place it correctly, so when the fit fails on it I can be sure that is the data's fault and not the solver's. Where this shape of problem is real, that one point is usually the expensive one: the misread patient, the fraudulent transaction that looks ordinary. Everything in the rest of this section is about how much you should bend a boundary to chase it.
+
+Before any of that, an honest check that the machinery built so far genuinely breaks here. The constraint set is empty, and the solver says so rather than returning something plausible:
 
 ```{python}
 #| code-summary: "Dataset B + hard margin is infeasible on it"
@@ -488,9 +512,9 @@ print(f"hard margin on Dataset B: status = {infeas.status}")
 assert infeas.status == "infeasible"
 ```
 
-### Slack variables
+### Charging for violations keeps the problem convex
 
-The soft-margin SVM keeps the same objective and constraints but lets each point *buy its way out* of its constraint with a **slack variable** $\xi_i \ge 0$, at a price $C$ per unit:
+An infeasible problem has no answer to soften, so something in the statement has to give, and the constraints are the only candidate. The fix is to stop treating "stay outside the margin" as an absolute rule and start treating it as one you can break for a fee. Give each point a personal allowance $\xi_i \ge 0$ by which it may fall short of the margin, and charge $C$ per unit of allowance used, added straight to the thing being minimized. A point that behaves buys nothing; a point that misbehaves makes the objective worse in proportion to how badly. These allowances are the **slack variables**, and they turn the hard-margin problem into the soft-margin one:
 
 $$
 \begin{aligned}
@@ -500,13 +524,13 @@ $$
 \end{aligned}
 $$
 
-This is still a convex QP — the objective gains a linear term, the constraints stay linear — so everything from the convexity section carries over. At the optimum, $\xi_i = \max\!\big(0,\, 1 - y_i f(x_i)\big)$, and its value tells you exactly where the point ended up:
+Nothing about the earlier argument breaks: the objective gains a linear term, the constraints stay linear, so this is still a convex quadratic program with the same global-optimum guarantee. Better still, the allowances are self-reporting. No point buys more than it needs, so at the optimum $\xi_i = \max\!\big(0,\, 1 - y_i f(x_i)\big)$, and reading off one number tells you where that point ended up:
 
 - $\xi_i = 0$: correctly classified, on or outside the margin — the constraint needed no help;
 - $0 < \xi_i \le 1$: correctly classified but **inside** the margin band;
 - $\xi_i > 1$: **misclassified** ($y_i f(x_i) < 0$; at $\xi_i = 1$ the point sits exactly on the boundary).
 
-$C$ is the exchange rate between the two goals: margin width versus violation. We solve for a small, medium, and large $C$:
+$C$ is therefore an exchange rate between two things the fit wants and cannot both have: a wide corridor, and few points inside it. Nothing in the mathematics chooses it, so solve the same data at a low, a middling and a high price and watch what each one buys.
 
 ```{python}
 #| code-summary: "Solve the soft-margin QP for three values of C"
@@ -539,9 +563,11 @@ md_table(["$C$", "$w$", "$b$", "margin width $2/\\lVert w\\rVert$",
           "misclassified ($y_if_i<0$)", "SV-like points ($\\alpha_i>0$)"], rows)
 ```
 
-The pattern in the table: as $C$ grows, the margin narrows and total slack falls — the optimizer pays more per violation, so it buys fewer of them by shrinking the corridor. Note the outlier stays misclassified at every $C$: no linear boundary can rescue a blue point sitting inside the orange blob, so raising $C$ past some point mostly reshapes the boundary around a lost cause.
+Read the table down the $C$ column and the exchange rate is doing exactly what it charges for: the band narrows from $2.79$ to $0.91$ while total slack falls from $13.09$ to $8.68$. Violations got expensive, so the fit bought fewer of them by shrinking the corridor. What it never buys is the outlier, which stays misclassified at every price — no straight line can rescue a $-1$ point sitting inside the $+1$ cluster, so past a certain $C$ the extra money goes on reshaping the boundary around a lost cause.
 
-One honest caveat on terminology: in the soft-margin problem, "support vector" is characterized through the **dual coefficients / active constraints**, not by lying exactly on the margin. Points with $0 < \alpha_i < C$ sit on the margin ($\xi_i = 0$); points with $\alpha_i = C$ are *bound* support vectors that violate the margin ($\xi_i > 0$). The SV-like count above uses $\alpha_i > 0$ within solver tolerance.
+One honest caveat on terminology before the plots. In the soft-margin problem "support vector" is defined by the price a point carries, not by whether it lies exactly on the margin: points with $0 < \alpha_i < C$ sit on the margin with $\xi_i = 0$, while points at the ceiling price $\alpha_i = C$ are *bound* support vectors that have paid to cross it ($\xi_i > 0$). The count above takes any $\alpha_i > 0$, within solver tolerance.
+
+Splitting the middle fit by category shows how few points are in play at all:
 
 ```{python}
 #| code-summary: "Per-point slack summary for the medium C = 1 fit"
@@ -556,7 +582,9 @@ rows = [[k, int((kinds == k).sum()),
 md_table(["point status at $C=1$", "count", "total slack $\\sum \\xi_i$"], rows)
 ```
 
-### Visualizing the $C$ trade-off
+### Raising the price narrows the corridor without saving the outlier
+
+Counts in a table only go so far; the trade-off is a geometric one, and it is easier to believe when you can see the same twenty-one blue and twenty orange points under three different prices side by side. The axes are identical across the three panels, so the boundary and the width of the band can be compared directly by eye.
 
 ```{python}
 #| label: fig-c-sweep
@@ -589,11 +617,21 @@ Read the panels left to right:
 - **Medium $C = 1$:** a balance — moderate margin, moderate slack.
 - **Large $C = 100$:** every unit of slack is expensive, so the boundary tightens against the training points and the margin band narrows sharply. The fit chases individual observations harder — including reshaping itself around an outlier it still cannot classify.
 
-Neither extreme is "better" in general. Large $C$ tracks the training data more tightly (risking sensitivity to noise); small $C$ prioritizes a wide margin (risking underfit if genuine structure is sacrificed). On held-out data the best $C$ is an empirical question — typically settled by cross-validation, which is deliberately out of scope for this geometric tour.
+Neither extreme is better in general, and the panels are not a ranking. A large $C$ tracks the training data more closely and inherits its noise; a small $C$ protects the corridor and may flatten structure that was real. Which one generalizes is a question about data you have not seen, so it is settled empirically — usually by cross-validation, deliberately out of scope for a geometric tour.
 
-### Soft margins revive non-uniqueness {#sec-flat}
+Softening the constraints also gives something back that the hard-margin problem had: it takes away the guarantee that the answer is a single line.
 
-@sec-unique promised a genuine two-class example where the *intercept* is non-unique. The soft-margin problem delivers one, because the hinge penalty can go **flat in $b$**. Take the minimal dataset $x_- = (-1, 0)$ with $y = -1$ and $x_+ = (+1, 0)$ with $y = +1$, and a small price $C = 0.25 < \tfrac12$. Working through the objective $\tfrac12 w_1^2 + C\big[\max(0, 1 - w_1 - b) + \max(0, 1 - w_1 + b)\big]$: while *both* points violate the margin, the two hinge terms consume $b$ in opposite directions and it **cancels exactly**, leaving $\tfrac12 w_1^2 + 2C(1 - w_1)$, minimized at $w_1 = 2C = 0.5$. The result: $w^\star = (0.5, 0)$ is unique, but **every $b \in [-0.5, +0.5]$ is optimal**, with identical objective value $0.375$. The decision boundary $x_1 = -2b$ can sit anywhere in $[-1, 1]$ — anywhere between the two data points, endpoints included. The optimizer is genuinely indifferent:
+### Soft margins bring non-uniqueness back {#sec-flat}
+
+@sec-unique promised a genuine two-class example where the *intercept* is non-unique, and the soft-margin problem supplies one. The reason is that the penalty can stop depending on $b$ altogether. Take the smallest interesting dataset: $x_- = (-1, 0)$ labelled $-1$, $x_+ = (+1, 0)$ labelled $+1$, and a low price $C = 0.25$. Substituting the optimal slack from earlier turns the objective into
+
+$$
+\tfrac12 w_1^2 + C\big[\max(0, 1 - w_1 - b) + \max(0, 1 - w_1 + b)\big],
+$$
+
+where each $\max(0, \cdot)$ charges a point only once it is inside the margin and nothing at all when it is safely outside. A price below $\tfrac12$ is too cheap to push either point clear, so both charges are live. And when both are live, $b$ appears once with each sign and cancels exactly, leaving $\tfrac12 w_1^2 + 2C(1 - w_1)$ — an expression the intercept has vanished from.
+
+What is left is minimized at $w_1 = 2C = 0.5$. So $w^\star = (0.5, 0)$ is pinned, but **every $b \in [-0.5, +0.5]$ scores the same objective value of $0.375$**. Since the boundary sits at $x_1 = -2b$, it can be placed anywhere between the two data points, endpoints included, and the optimizer has no preference at all:
 
 ```{python}
 #| label: fig-flat-b
@@ -649,11 +687,13 @@ plt.tight_layout()
 plt.show()
 ```
 
-To be precise about **which quantity is non-unique** here: $w^\star$ is unique (strict convexity in $w$ never lets go), the optimal objective value is unique (it always is, for a convex problem), but the intercept — and with it the *position* of the decision boundary — is an entire interval. Convexity guarantees the set of optima is convex (here, a line segment in $(w, b)$-space); it never promised a single point. This flat-$b$ phenomenon is a recognized property of soft-margin SVMs at small $C$ (analyzed in detail by Burges & Crisp, *Uniqueness of the SVM Solution*, NeurIPS 1999), not a solver artifact — which is exactly what the two-solver disagreement on a shared flat floor shows.
+Be precise about *which* quantity came loose. The normal vector $w^\star$ is still unique, because strict convexity in $w$ never lets go. The optimal objective value is unique too, as it always is for a convex problem. What spreads out is the intercept, and with it the position of the boundary. Convexity promised that the set of optima would be convex — here a line segment in $(w, b)$-space — and never promised it would be one point.
 
-## Numerical verification and interpretation
+None of that is a solver bug. The flat floor is a known property of soft-margin SVMs at small $C$, analyzed by Burges and Crisp in *Uniqueness of the SVM Solution* (NeurIPS 1999), and two solvers stopping at two different places on the same floor is what it looks like from the outside.
 
-A compact audit of every claim, in one place. For the hard-margin fit, all constraints must hold with functional margin at least $1$; for the soft-margin fits, the *relaxed* constraints $y_i f(x_i) + \xi_i \ge 1$ must hold, with the slack doing exactly the work the plots show:
+## Two independent code paths land on the same hyperplane
+
+Every number above came from a solver, which means every number above is worth auditing rather than trusting. The audit is mechanical: for the hard-margin fit, every functional margin must be at least $1$; for the soft-margin fits, the relaxed version $y_i f(x_i) + \xi_i \ge 1$ must hold with non-negative slack doing the work the plots attribute to it.
 
 ```{python}
 #| code-summary: "Constraint audits for all solved problems"
@@ -671,7 +711,7 @@ for f in fits:
 
 The slack values connect directly back to @fig-c-sweep: points printed as violations are precisely the ringed-or-crossed points drawn inside or across each panel's margin band, and each panel's ${\sum_i \xi_i}$ shrinks as $C$ grows while its band narrows.
 
-As a final sanity check, `scikit-learn`'s `SVC` — an independent implementation solving the *dual* with a specialized algorithm (SMO), rather than our primal QP — should land on the same hyperplanes:
+A stronger check is a second opinion from code that shares nothing with this one. `scikit-learn`'s `SVC` solves the *dual* problem with sequential minimal optimization, an algorithm built specifically for SVMs that updates two prices $\alpha_i$ at a time, rather than the general-purpose primal solve used throughout this post. Different formulation, different algorithm, different library — and it should still land on the same hyperplanes:
 
 ```{python}
 #| code-summary: "Cross-check against scikit-learn (optional, not the primary solve)"
@@ -692,21 +732,27 @@ for f in fits:
     assert dw < 1e-3 and db < 1e-3
 ```
 
-Same $w$, same $b$, to solver tolerance, on every problem — two independent code paths agreeing on the unique optimum that convexity promised.
+Same $w$, same $b$, to solver tolerance, on every problem — two unrelated code paths agreeing on the unique optimum that convexity promised.
 
-Fitting an SVM *is* solving an optimization problem, but understanding what the fit did requires holding four views of the same object at once:
+Agreement on the numbers is not the same as understanding what the fit did, though, and that takes holding four views of one object at once:
 
 - **geometry in input space** — a boundary, a band, and points that touch it;
 - **feasibility and objective in parameter space** — each data point is a half-space constraint on $(w, b)$, and the optimum is where the shrinking norm ball last touches the feasible set (@fig-parameter-space);
 - **support vectors / active constraints** — the sparse subset of data with $\alpha_i > 0$ that actually holds the solution in place;
 - **the regularization trade-off** — $C$ pricing margin width against violations, with neither extreme universally right.
 
-## Common misconceptions
+## Five traps the four views disarm
 
-A closing checklist of traps this post was built to disarm:
+Each of those views also kills a plausible-sounding claim that survives when you hold only one of them:
 
 1. **"Any separating line is equally good."** All separators achieve 100% training accuracy, but they differ enormously in clearance (@fig-many-separators: $\gamma = 1.414$ vs $0.86$). The max-margin criterion is precisely a principled tiebreaker among them.
 2. **"Convex means the answer must be unique."** Convexity eliminates bad *local* minima; it says nothing about a unique minimizer. We exhibited a genuine two-class problem whose optimal intercepts form an interval (@fig-flat-b). Uniqueness needs extra conditions — strict convexity in *all* variables, or the two-class separable structure of @sec-unique.
 3. **"The margin is the distance from the boundary to a support vector."** That is the *one-sided* geometric margin $1/\lVert w \rVert$. The margin band — the full empty street the SVM maximizes — is twice that, $2/\lVert w \rVert$ (both are drawn in @fig-hard-solution).
 4. **"Larger $C$ always gives a better classifier."** Larger $C$ only penalizes *training* violations more heavily. On Dataset B it progressively contorts the fit around an outlier that no linear boundary can classify, narrowing the margin band substantially (see the widths printed in each panel of @fig-c-sweep) without ever fixing the outlier. Training-set obedience is not generalization.
 5. **"The solver found a solution, so one always exists."** Hard-margin feasibility is an assumption about the data, not a gift of convexity — on our overlapping dataset the solver correctly returned `infeasible`, and slack variables had to be invented before any answer existed at all.
+
+## The instinct, written down
+
+The line your hand drew down the middle of the paper was doing one thing: keeping as far as possible from the closest point on either side. Every piece of machinery in this post is that preference made precise enough to compute — clearance measured as $1/\lVert w\rVert$, the scale pinned so the measurement means something, the widest corridor found by shrinking a norm ball onto a polyhedron, and the answer certified rather than hoped for.
+
+What the arithmetic adds is the part the instinct has no answer for. It tells you which two points out of ten the line is actually resting on. It tells you what to do when the clouds overlap and no line exists at all, and what it costs to bend one around a case that cannot be saved. And it is honest about where it stops: on Dataset B the outlier stayed wrong at every price, and at a low enough price the boundary's position stopped being determined at all. A wide street is a good default, not a guarantee — the guarantee is only that this is the widest one.

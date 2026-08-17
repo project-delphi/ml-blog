@@ -25,7 +25,7 @@ Nothing broke. **An LLM is stateless per call**: you send a request, it computes
 
 ## Short-term memory is just the context window, replayed every turn
 
-Within one call the assistant appears to remember because you re-send the conversation. Turn three is not a lone question; it is the system prompt and every prior turn, shipped as one request:
+Within one call the assistant appears to remember because you re-send the conversation. The model reads one block of text per request and nothing else, so anything it should still know has to be inside that block. There is a ceiling on how much text fits — that ceiling is the *context window*, and the whole conversation lives underneath it. Turn three is therefore not a lone question; it is the system prompt and every prior turn, shipped again as one request:
 
 ```{python}
 SYSTEM = "You are a phone assistant. Two sentences max; replies are spoken aloud."
@@ -43,9 +43,9 @@ print(f"{len(request)} messages, {sum(len(m['content']) for m in request)} chara
 
 Every one of those messages goes over the wire on *this* turn, and again on the next. That transcript is short-term memory, and the call is its lifetime.
 
-It is bounded, and it grows every turn with latency and cost behind it. Truncation — dropping the oldest turns — silently discards the turn where Alex gave their name, usually the most valuable thing in the window.
+That transcript grows every turn, and it is billed and read in full every time, so latency and cost climb with it. The crude answer is to drop the oldest turns once the window fills. It is also the wrong one: the oldest turn is where Alex gave their name, usually the most valuable line in the window.
 
-Compaction, or context editing, is the better fix: as the window fills, replace older turns with a summary, or clear content that has done its job, such as a long tool result already acted on. Applied to a call that has run long:
+A better answer keeps the information and throws away the wording. As the window fills, replace the older turns with a short summary of them, or delete content that has already done its job — a long tool result you have acted on and will not consult again. That is compaction, sometimes called context editing. Applied to a call that has run long:
 
 ```{python}
 def compact(history, keep=4):
@@ -60,7 +60,7 @@ long_call = turns * 8
 print(f"{len(long_call)} messages -> {len(compact(long_call))} after compaction")
 ```
 
-The salient facts survive because you chose them rather than letting position decide. It is still lossy: that summary cannot answer a question about a number mentioned in turn two.
+The salient facts survive because you chose them rather than letting position decide. It is still lossy: that summary cannot answer a question about a number mentioned in turn two. And however carefully you manage it, the window dies when the call does — so anything Alex should still hear tomorrow has to be written down somewhere else. The first place people look is the prompt.
 
 ## The system and user prompts are injection points, not memory
 
@@ -70,9 +70,11 @@ Neither *is* memory. They are slots. If something must survive the call, no prom
 
 ## Long-term memory is a storage choice, and there are four
 
+Storing the fact outside the call is not one technique but four, and picking between them is an ordinary engineering question: how big is the thing you are keeping, do you know its shape in advance, and how do you find it again. A help-centre article, a user's preferred voice and an offhand remark about tone pull in three different directions; a fourth option, baking the fact into the model's weights, mostly pulls the wrong way.
+
 ### RAG, when the fact lives in a large fuzzy corpus
 
-Alex asks whether the training plan syncs with a particular bike computer. The answer sits in a help-centre corpus of a few thousand articles that changes weekly. [Retrieval-augmented generation](../how-does-rag-work/) fits: embed the corpus ahead of time, embed the question at call time, paste the nearest chunks into the prompt. The match is semantic — Alex says "does it talk to my Garmin", the article says "supported head unit integrations". You pay an embedding call, extra tokens, and the occasional irrelevant chunk.
+Alex asks whether the training plan syncs with a particular bike computer. The answer sits in a help-centre corpus of a few thousand articles that changes weekly. Nobody can paste a few thousand articles into a prompt, so the trick is to fetch only the handful that bear on the question and paste those. Finding them means turning each chunk of text into a list of numbers positioned so that passages about similar things sit close together — an *embedding* — doing the same to Alex's question at call time, and taking the nearest neighbours. That pattern, retrieval then generation over what you retrieved, is [retrieval-augmented generation](../how-does-rag-work/), or RAG. The match is by meaning rather than by words: Alex says "does it talk to my Garmin", the article says "supported head unit integrations". You pay an embedding call, extra tokens, and the occasional irrelevant chunk.
 
 ### A key-value lookup, when the fact is small and discrete
 
@@ -80,7 +82,7 @@ Alex's preferred voice is not a fuzzy question. It is one row: `user_id → voic
 
 ### A memory tool, when the model should decide what is worth keeping
 
-Both of those assume you know in advance what to store. A memory tool inverts that: give the agent read and write access to a file-like store through tool calls, and let it decide what is durable. Alex mentions the default voice is a bit sharp, and the agent writes itself a note — one tool call, no schema:
+Both of those assume you know in advance what is worth storing. Some things you cannot anticipate — a passing complaint about the voice, a habit you never thought to model. So hand the decision to the agent: give it a couple of functions it is allowed to call, one that appends a line to a file and one that reads the file back, and let it judge what deserves writing down. Functions offered to a model this way are its *tools*, and a pair of them pointed at durable storage is a memory tool. Alex mentions the default voice is a bit sharp, and the agent writes itself a note — one tool call, no schema:
 
 ```{python}
 import tempfile
@@ -105,15 +107,19 @@ On a new call it reads that back before replying. You get memory for what no sch
 
 ### Fine-tuning, which is rarely the answer for personalisation
 
-You can bake facts into weights instead. It is almost always wrong here: you cannot edit one user's preference out of a model, cannot inspect what it stored, and retrain to fix a typo. Fine-tuning shapes behaviour; use retrieval for what a model knows about a person.
+The fourth option is to change the model itself — carry on training it on your own examples until the fact is part of its weights. That is fine-tuning, and for personal facts it is almost always the wrong tool. You cannot edit one user's preference back out, you cannot inspect what was stored, and correcting a typo means another training run. Fine-tuning shapes how a model behaves; what it knows about a particular person belongs in storage you can read and delete.
 
-## The tooling that makes this practical
+Three usable mechanisms, then, plus one to avoid. Running them together takes a little more machinery than the four ideas suggest.
 
-**Compaction paired with a memory tool** for long sessions — the pairing matters, since the agent should write durable facts out before a summary discards them. **Prompt caching** for a large fixed prefix: not memory, but a latency and billing optimisation over content you were resending anyway. And a **vector database** under RAG.
+## Compaction and a memory tool have to be paired
 
-## Two calls with Alex
+On a long session the two in-call mechanisms collide. Compaction rewrites older turns into a summary; the memory tool is what makes a fact outlive the call. Run compaction first and the summary eats the sentence where Alex said the voice was too sharp before anything durable was written. So the agent should write out what matters before the summary lands, which makes the pairing an ordering constraint rather than a stylistic choice.
 
-Session one wrote those two lines out and put the voice ID in a key-value store. Session two is next morning: new call, empty window, no shared history. Everything the assistant "knows" is assembled by your code before the model is invoked:
+Two supporting pieces sit underneath. RAG needs somewhere to keep the embedded corpus and search it quickly, which is what a vector database is for. And a large fixed prefix — a long system prompt, a stable set of instructions — can be cached by the provider so it is not re-processed on every turn. Prompt caching is not memory: it is a latency and billing optimisation over content you were resending anyway.
+
+## The second call is assembled, not remembered
+
+Put the pieces on one timeline and the illusion comes apart. Session one wrote those two lines to the memory file and put the voice ID in a key-value store. Session two is the next morning: new call, empty window, nothing shared with yesterday. Everything the assistant "knows" about Alex, your code assembles before the model sees a single token:
 
 ```{python}
 voices = {"u_8213": "bm_george"}  # key-value store: user_id -> Kokoro voice pack
@@ -128,13 +134,15 @@ print(system_prompt)
 
 That is the whole trick: a key lookup for the voice, a memory file read into the system prompt slot, and an empty window that fills as the call proceeds. Ten turns later the bike computer question arrives and the agent falls back to RAG mid-call.
 
-Four mechanisms, one call, each doing what it is good at. Choosing *between* them is usually the wrong framing; they answer different questions.
+Three of the four storage mechanisms in a single call, alongside the window that fills as it runs, each doing the one thing it is good at. Choosing *between* them is usually the wrong framing; they answer different questions. The cheapest of the three is worth a second look, because of what it is standing in for.
 
 ## The voice is a model too, and it fits in 82 million parameters
 
-`bm_george` is not a vendor SKU. It is a voice pack from [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), an open-weight TTS model — 82 million parameters, Apache-2.0 weights, a StyleTTS 2 architecture with an ISTFTNet vocoder rather than a diffusion stack — shipping 54 voices across eight languages in about 327MB. That is why one key-value row is enough: personalising the voice means remembering a short string, and the model that speaks it runs locally.
+`bm_george` is not a product code from a speech vendor. It names a voice pack in [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), a text-to-speech model whose weights are published for anyone to download and run — 82 million parameters under an Apache-2.0 licence, built on the StyleTTS 2 architecture, with the final step from the model's internal representation to an audio waveform handled by an ISTFTNet vocoder rather than a diffusion stack. It ships 54 voices across eight languages in about 327MB.
 
-Listen to what the memory lookup buys. Both clips are Kokoro, same code path — only the name and the voice ID differ:
+That size is the point. Personalising the voice costs one short string in a key-value row, and the model that speaks it runs on your own machine, so the lookup stays on the latency path without a network call behind it.
+
+Listen to what the lookup buys. Both clips came out of the same script in this post's `src/` directory, run ahead of the render against Kokoro's own weights; only the name in the greeting and the voice ID differ:
 
 ::: {.widget}
 
@@ -197,7 +205,9 @@ document.querySelectorAll('.tts-play').forEach(function (button) {
 
 The second clip knows two things the first does not, and neither of them came out of the model.
 
-## Where each mechanism actually lives
+## Only one of these mechanisms lives inside the model
+
+Laid side by side, the mechanisms sort themselves by a single question: where do the bytes sit when nobody is on the call. The answer is a request you rebuild, a datastore you own, or — in exactly one row — the weights themselves, which is the row you least want to be using for a person's name.
 
 | Concept | What it stores | Where it lives | Persists across sessions? | Best for |
 |---|---|---|---|---|

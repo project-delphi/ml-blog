@@ -14,13 +14,17 @@ format:
 
 ![Skills Ate Commands](./cover.png)
 
-If you built custom slash commands for Claude Code — those little `.claude/commands/*.md` prompt files — the ground shifted under them: [custom commands have been merged into skills](https://code.claude.com/docs/en/skills). A file at `.claude/commands/deploy.md` and a skill at `.claude/skills/deploy/SKILL.md` both create `/deploy` and work the same way. Nothing breaks: your existing command files keep working, and the [commands reference](https://code.claude.com/docs/en/commands) now points at skills as the way to add your own. What changed is what you get *on top* of the `/command-name` interface: a directory for supporting files, frontmatter that controls who invokes the skill, and — the big one — Claude can now load your prompt automatically when it's relevant, without you typing anything.
+Most people who use Claude Code — Anthropic's coding agent, driven from a terminal — end up with a `.claude/commands/` directory. Inside it sit markdown files you wrote yourself: a canned prompt for opening a pull request, one for the release checklist you keep half-remembering, one for the way *this* repo wants a commit message. Each file name becomes a slash command, so `deploy.md` gives you `/deploy`, and typing it pastes the file's contents into the conversation. It is the cheapest automation in the tool: one file, one name, no configuration.
 
-This post walks through what a skill is, when it stops being a prompt and becomes an agent, and builds a real one: a WCAG contrast auditor for CSS files, executed live in this post.
+The ground has shifted under those files. [Custom commands have been merged into skills](https://code.claude.com/docs/en/skills), a format that keeps the same idea — a prompt you wrote, stored in the repo, summoned by name — and gives it a directory instead of a single file, plus a block of settings at the top saying who is allowed to summon it. A file at `.claude/commands/deploy.md` and a skill at `.claude/skills/deploy/SKILL.md` both produce `/deploy` and behave identically when you type it.
 
-## Two ways to invoke a skill
+Nothing breaks. Existing command files keep working, and the [commands reference](https://code.claude.com/docs/en/commands) now simply points at skills as the way to add your own. What changed is everything you get *on top* of the `/name` interface: somewhere to put supporting files, frontmatter controlling who may invoke the skill, and — the change that matters most — Claude loading your prompt on its own when the conversation calls for it, without you typing anything.
 
-A slash command had one entry point: you typed it. A skill has two.
+That last one is where the two formats stop being the same thing wearing different filenames.
+
+## A skill has two doors; a command had one
+
+A slash command had exactly one entry point: you typed it. A skill has two, and the second is what the old format could not do at all.
 
 **Directly**, slash-command style. Type `/skill-name` plus any arguments. Arguments land in the skill body via `$ARGUMENTS` (the whole argument string), `$ARGUMENTS[N]` or its shorthand `$N` for positional access (0-based, so `$0` is the first argument), or named placeholders declared in the frontmatter `arguments` field — `arguments: [file, format]` makes `$file` and `$format` expand to the first and second arguments.
 
@@ -41,11 +45,13 @@ against that new background color?
 ```
 :::
 
-The left invocation substitutes `styles/main.css` into the skill body and runs it. The right one works because the skill's description says it audits CSS color contrast — Claude matches your phrasing against that description and invokes the skill on its own, arguments inferred from the conversation.
+The left invocation substitutes `styles/main.css` into the skill body and runs it. The right one works because the skill's description says it audits CSS color contrast — Claude matches your phrasing against that description and invokes the skill on its own, with the arguments inferred from what you were talking about.
 
-## Anatomy of a skill
+A second door only helps if there is a room worth entering, though, and the room is bigger than a command's was.
 
-A command was one markdown file. A skill is a directory, with `SKILL.md` as the required entrypoint:
+## A skill is a directory, and that is the whole point
+
+A command was one markdown file, so everything it knew had to fit in that file and be read every time. A skill is a directory with `SKILL.md` as its required entrypoint, and the other files in that directory are the reason the format exists at all.
 
 ```text
 my-skill/
@@ -62,11 +68,13 @@ my-skill/
 1. **YAML frontmatter** — metadata Claude uses to decide *when* to use the skill. Only the description is loaded into context up front.
 2. **Markdown body** — the actual instructions. When the skill is invoked, the rendered body is [inserted into the conversation as a message](https://code.claude.com/docs/en/skills#skill-content-lifecycle) and stays there for the rest of the session. There is no magic: a skill *is* a prompt, injected on demand.
 
-The supporting files are the reason the directory format exists. `reference.md` and friends cost zero context until Claude decides it needs them; scripts are executed, never read into the window at all. The body can also pull in live data before Claude sees it — a line like `` !`git diff HEAD` `` runs the command at invocation time and splices its output into the rendered prompt ([dynamic context injection](https://code.claude.com/docs/en/skills#inject-dynamic-context)).
+The split matters because of what it costs to know something. Everything Claude has in front of it competes for room in a finite context window, so a single-file command pays full price for every word it contains, every time it runs. `reference.md` and its siblings cost nothing until Claude decides it needs them, and scripts are executed rather than read, so their contents never enter the window at all. The body can also fetch live data before Claude sees any of it: a line like `` !`git diff HEAD` `` runs at invocation time and splices its output into the rendered prompt ([dynamic context injection](https://code.claude.com/docs/en/skills#inject-dynamic-context)).
 
-Skills live at four levels — enterprise (managed settings), personal (`~/.claude/skills/`), project (`.claude/skills/`), and plugins — and the directory name becomes the command name.
+Where the directory lives decides who gets the skill. There are four homes — enterprise (managed settings), personal (`~/.claude/skills/`), project (`.claude/skills/`), and plugins — and in each case the directory name becomes the command name.
 
-## Frontmatter reference
+## The frontmatter is where you decide who may invoke it
+
+The settings block at the top of `SKILL.md` is small but it is where the interesting decisions live, because most of the fields are about *permission* and *timing* rather than behavior: who may fire this skill, with which tools, on which files, and whether it runs in your conversation or off to one side.
 
 All fields are optional. `description` is the only *recommended* one, because it's what drives automatic invocation: Claude matches your phrasing against it, so write it as "what this does **+** when to use it," keywords a user would actually say. (The combined `description` + `when_to_use` text is truncated at 1,536 characters in the skill listing, so front-load the key use case.)
 
@@ -90,9 +98,9 @@ All fields are optional. `description` is the only *recommended* one, because it
 | `paths` | Glob patterns; the skill only auto-activates when Claude is working with matching files. |
 | `shell` | `bash` (default) or `powershell` for `` !`command` `` dynamic-context lines. |
 
-## The recipe analogy
+## A cookbook explains why the pieces are split up this way
 
-The cleanest mental model for all of this is a cookbook:
+That is a lot of fields for what is, after all, a prompt in a folder. The arrangement makes more sense if you stop thinking of it as configuration and think of it as a cookbook — a thing designed around the fact that a cook cannot hold every recipe in their head at once, which is exactly the constraint a context window imposes.
 
 - The **name and description** are the recipe card in the index: what dish this makes, and when you'd want it. The cook (Claude) skims the index constantly; it's the only part always in memory.
 - The **`SKILL.md` body** is the method — the actual numbered steps, read only when the dish is being made.
@@ -101,9 +109,11 @@ The cleanest mental model for all of this is a cookbook:
 
 Old-style commands were recipe cards with the entire method crammed onto the card, and a cook who never opened the box unless you handed them a specific card. Skills give the cook an index and a drawer.
 
-## Skills vs. agents
+The analogy has one limit worth naming before it misleads you: the cook is still the same cook. A recipe does not hire a second chef, and by default neither does a skill.
 
-These get conflated constantly, and the distinction matters:
+## A skill is instructions; a subagent is a second worker
+
+Those two get conflated constantly, and the confusion is expensive, because it leads people to expect isolation they are not getting.
 
 **A skill (by default) is not an actor.** Invoking it loads its instructions *inline* into the current conversation — reference material or a procedure handed to the same Claude that's already talking to you. It shares your context, sees your history, and its content persists in the session after it runs.
 
@@ -113,6 +123,8 @@ The bridge between them is `context: fork`. Add it to a skill's frontmatter and 
 
 The same machinery composes in the reverse direction too: a custom subagent can declare a [`skills` field](https://code.claude.com/docs/en/sub-agents#preload-skills-into-subagents), which injects the *full content* of the listed skills into the subagent's context at startup as reference material.
 
+Three combinations, then, differing in whose system prompt is in charge, where the task text comes from, and whether the work happens in your context or somewhere else:
+
 | Approach | System prompt | Task comes from | Context |
 |---|---|---|---|
 | Skill (default) | your session's | SKILL.md body, inline | shared with your conversation, persists |
@@ -121,11 +133,15 @@ The same machinery composes in the reverse direction too: a custom subagent can 
 
 Rule of thumb: knowledge and procedures → skill. Work whose intermediate output you don't want flooding your context → subagent. A task you author but want executed off to the side → skill with `context: fork`.
 
-## A real skill: `contrast-audit`
+## Building one: a contrast auditor that keeps its work out of context
 
-Enough taxonomy. Here's a skill a front-end developer would actually keep: it scans a CSS file for foreground/background color pairs, computes [WCAG](https://www.w3.org/TR/WCAG21/#contrast-minimum) contrast ratios, and produces a chart plus an HTML report. Everything below actually executes when this post is rendered — the chart and report are real output, not screenshots pasted in.
+Enough taxonomy — the argument for the directory format only lands when you watch a skill spend almost none of the context window on work that would otherwise fill it.
 
-The skill directory:
+Here is a skill a front-end developer would actually keep. Text is readable only when it is bright enough against what is behind it, and the accessibility standard everyone is measured against, the [Web Content Accessibility Guidelines](https://www.w3.org/TR/WCAG21/#contrast-minimum) or WCAG, makes that precise: compute how much light each color reflects, take the ratio of the lighter to the darker, and demand at least 4.5 to 1 for ordinary body text. That threshold is the AA level; a stricter 7 to 1 is AAA. Fail it and some fraction of your users — anyone with low vision, anyone outdoors in sunlight — simply cannot read the words. It is also the kind of failure nobody notices in review, because the person reviewing has good eyes and a good monitor.
+
+The skill scans a CSS file for foreground and background color pairs, computes the ratio for each, and produces a chart plus an HTML report. Everything below actually executes when this post is rendered — the chart and the report are real output, not screenshots pasted in.
+
+The skill directory is two files:
 
 ```text
 contrast-audit/
@@ -164,11 +180,13 @@ After it runs:
 3. Point the user at `contrast-report.html` for the visual version.
 ````
 
-Because the description says *what it does and when to use it*, "is this text readable against the background?" triggers it without the slash. Typing `/contrast-audit styles/main.css` gets you there deliberately.
+Notice how little the body says. It names a command to run and three things to do afterwards, and that is the entire prompt — because the description says *what it does and when to use it*, "is this text readable against the background?" reaches it without the slash, and `/contrast-audit styles/main.css` reaches it deliberately.
 
-### The script
+### The script does the arithmetic so the model never has to
 
-`scripts/audit.py` is plain Python — regex parsing, the WCAG relative-luminance formula, matplotlib for the chart, string-built HTML for the report. No exotic dependencies.
+Everything the body delegated lives in `scripts/audit.py`, which is plain Python with no exotic dependencies: a regex to pull color pairs out of CSS rules, the WCAG relative-luminance formula, matplotlib for the chart, and string-built HTML for the report. The luminance formula is the fiddly part — each channel is scaled, gamma-corrected, and weighted (green counts for far more than blue, because the eye is more sensitive to it), and the ratio adds 0.05 to both terms so that pure black against pure black does not divide by zero.
+
+None of that arithmetic belongs in a language model, and none of it enters the context window. Claude runs the script and reads its printed summary.
 
 ```{python}
 #| code-fold: true
@@ -311,9 +329,9 @@ if __name__ == "__main__" and "ipykernel" not in sys.modules:
     sys.exit(main(sys.argv[1:]))
 ```
 
-### Running it
+### Running it on eight color pairs that a real project would have
 
-Here's a small stylesheet with a deliberate mix of good, marginal, and broken pairs:
+The script needs a stylesheet to chew on, and the one below is written by hand for this post rather than lifted from a repo — eight rules covering a deliberate mix of comfortably passing, marginal, and outright broken pairs. Real project CSS would work identically, but it would also be mostly uninteresting: a genuine stylesheet is a few hundred lines in which two or three pairs matter, and the point here is the two or three. The hexes are not made up, though: `#0d6efd` is Bootstrap's link blue, and `#ffc107` is the yellow behind a thousand warning badges. The failures below are ones that shipped.
 
 ```{python}
 #| code-fold: false
@@ -335,7 +353,7 @@ for p in sorted(pairs, key=lambda p: p.ratio):
     print(f"{p.selector:<12} {p.fg} on {p.bg}  {p.ratio:5.2f}:1  {p.grade}")
 ```
 
-The chart, built at render time:
+The printed lines are what Claude would read. The chart is for you: one bar per selector, sorted worst-first, with the two thresholds drawn in so a failure is a position rather than a number to look up.
 
 ```{python}
 #| code-fold: false
@@ -343,9 +361,9 @@ The chart, built at render time:
 fig = contrast_chart(pairs, "contrast-chart.png")
 ```
 
-Two things worth noticing in the results. White-on-`#ffc107` (the classic "warning badge") manages a dismal 1.63:1 — nearly invisible, yet everywhere on the web. And `#0d6efd` (Bootstrap's link blue) on white clears AA by 0.0008. Someone at Bootstrap tuned that hex to land *exactly* on the line.
+Two results are worth stopping on. White on `#ffc107` — the classic warning badge — manages a dismal 1.63:1, which is close to invisible and yet is everywhere on the web. And `#0d6efd` on white clears the 4.5 threshold by 0.0008, landing at 4.5008:1. That is not luck. Someone tuned that hex until it sat *exactly* on the line, which is a decision you can only make if you were measuring, and a decision that leaves no margin at all for the next person who nudges the background a shade.
 
-And the HTML report the skill leaves next to the CSS file — embedded live here rather than screenshotted:
+Neither observation is something a model would reliably produce by looking at hex codes, and both fall out of the script for free. What the model adds is the layer above: which failures matter, and what to change them to. The skill also leaves an HTML report next to the CSS file, embedded live here rather than screenshotted:
 
 ```{python}
 #| code-fold: false
@@ -359,19 +377,23 @@ Path("contrast-report.html").write_text(
 HTML(report_fragment)
 ```
 
-That's the whole pattern: `SKILL.md` carries a thin instruction ("run this script, then interpret"), the script does the deterministic work, and Claude handles orchestration and the follow-up reasoning — proposing replacement hexes, explaining which failures matter. The heavy lifting never touches the context window.
+That is the whole pattern. `SKILL.md` carries a thin instruction — run this script, then interpret — the script does the deterministic work, and Claude handles orchestration and the follow-up reasoning: proposing replacement hexes, explaining which failures matter. The heavy lifting never touches the context window, which is precisely the thing a single markdown file could not arrange.
 
-## Should you migrate your commands?
+Which raises the obvious question about the single markdown files you already have.
+
+## Migration got cheap enough that "later" stopped being the right answer
+
+My first answer to that was this, and I no longer believe it:
 
 ~~No — not for the sake of it. Everything in `.claude/commands/` keeps working, same names, [same frontmatter support](https://code.claude.com/docs/en/skills#where-skills-live). If a command and a skill share a name, the skill wins, so you can migrate one at a time whenever you touch one.~~
 
-Struck through, because my friend [Scott Mountenay](https://www.linkedin.com/in/scott-mountenay-58706147/) read that and pushed back:
+It is struck through because my friend [Scott Mountenay](https://www.linkedin.com/in/scott-mountenay-58706147/) read it and pushed back:
 
 > As far as the blog and the question should you change all your commands to skills, and you say "no rush, they'll keep working for now"… my instinct is more like "hell yeah, have Claude do it for you!" In the past there was more of a cost like "it's not a high priority thing to do right now", but now it's like "go do this for me Claude, migrate my commands to skills and create a [PR]", done in 5 minutes, why not?
 
 He's right, and the reason he's right is that my original answer was priced in an older currency. "Migrate when you next touch it" is what you say when migrating means *you* sit down, read each command file, make a directory, move the body, write a description, and check nothing broke — an afternoon of clerical work against a benefit you can defer. That was the honest trade for as long as the clerical work was yours to do. It isn't the trade now: the migration is a mechanical, well-specified, entirely-in-context transformation, which is exactly the shape of work you hand to an agent. The cost isn't "an afternoon," it's one prompt and a PR review.
 
-So: migrate them, in bulk, today.
+So: migrate them, in bulk, today. A prompt roughly like this is the whole job.
 
 ```text
 Migrate every file in .claude/commands/ to .claude/skills/<name>/SKILL.md.
@@ -383,7 +405,9 @@ commit, release). Delete the old command files and open a PR.
 
 Read the PR, though — don't merge it blind. The one judgement call in there is which commands should stay user-only: a skill without `disable-model-invocation` is now something Claude can fire on its own, and a `/deploy` that used to run only when you typed it is a different object once its description is sitting in context. That's the review, and it's minutes, not an afternoon.
 
-And write anything *new* as a skill. The moment a prompt wants a helper script, a reference doc, an `allowed-tools` grant, or — most usefully — the ability to fire when the user merely describes the problem, the single-file command format has nothing to offer. The cookbook with an index and a drawer beats the stack of index cards.
+And write anything *new* as a skill. The moment a prompt wants a helper script, a reference doc, an `allowed-tools` grant, or — most usefully — the ability to fire when someone merely describes the problem, the single-file command format has nothing left to offer.
+
+Which is the real shift, and it is not a file-format one. A command was something you remembered to type; the burden of knowing it existed was yours. A skill is something the cook can pick off the index, run from a drawer you never open, and hand back a result without ever having loaded the recipe into working memory. The `/name` still works exactly as it did — but it is now the least interesting way in.
 
 ## References
 
