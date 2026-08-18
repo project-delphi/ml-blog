@@ -67,9 +67,6 @@ W <- array(apply(X, 3, whiten), dim(X))
 sim <- procGPA(X, scale = TRUE, reflect = TRUE)
 aff <- procGPA(W, scale = TRUE, reflect = TRUE)
 
-# procGPA leaves its aligned configurations at a common non-unit size, while
-# affine_gpa renormalises every pass. Put both on unit centroid size before
-# comparing, or the two Procrustes sums of squares are in different units.
 # procGPA leaves its aligned configurations at a common non-unit size. Put both
 # runs on unit centroid size before comparing, or the two Procrustes sums of
 # squares are in different units.

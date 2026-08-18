@@ -26,7 +26,7 @@ OUT = Path(__file__).resolve().parent.parent / "photos"
 # IMG_0555 (1).HEIC is a byte-identical re-download of the first and is skipped.
 FRAMES = ["IMG_0555", "IMG_0556", "IMG_0557", "IMG_0558", "IMG_0559"]
 
-# Half of 4032x3024. Big enough that the kite is still 250-310 px across --
+# Half of 3024x4032. Big enough that the kite is still 250-310 px across --
 # landmark noise stays small next to the sail -- and small enough to commit.
 SCALE = 2
 

@@ -110,10 +110,15 @@ def configuration(frame: int) -> np.ndarray:
 def signed_area(config: np.ndarray) -> float:
     """Twice the signed area of the landmark polygon (the shoelace formula).
 
-    The sign says which way round the traversal runs in image coordinates. The
-    kite is photographed from both sides, so the sign flips between frames --
-    that is a genuine reflection, not a digitising mistake, and it is why the
-    Procrustes fits downstream have to allow reflection.
+    The sign says which way round the traversal runs in image coordinates. All
+    five come out negative, because frame 5's arm labels are swapped above to
+    make them. That is the check on that swap: a positive value here would mean
+    one frame's landmarks run the opposite way round the sail from the rest.
+
+    It is not, on its own, a reason to allow reflection downstream. The reason
+    for that is the same free choice seen from the other side -- nothing in a
+    photograph says which physical wing is which -- and the post's alignment
+    allows reflection so the answer does not depend on how this swap went.
     """
     x, y = config[:, 0], config[:, 1]
     return float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
@@ -198,7 +203,7 @@ def main() -> int:
     for frame in sorted(LANDMARKS):
         area = signed_area(configuration(frame))
         print(
-            f"frame {frame}: signed area {area:9.1f}  ({'CW' if area > 0 else 'CCW'})"
+            f"frame {frame}: signed area {area:9.1f}  ({'CW' if area > 0 else 'CCW'})",
         )
     print(f"\nwrote {CSV_OUT.name} and {OVERLAY_OUT.name}")
     return 0

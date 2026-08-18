@@ -33,9 +33,9 @@ belongs upstream of Procrustes, not inside it.
 ## Five frames of one kite, nine seconds apart
 
 The data is five photographs I took at the kite festival at Villa de Leyva, in Boyacá, Colombia,
-on 15 August 2026. They are iPhone HEIC frames, 4032 × 3024, timestamped 13:26:12 through
-13:26:21 — so the whole sample spans nine seconds. I have committed them here at half resolution,
-1512 × 2016, and every coordinate in this post lives in that pixel grid.
+on 15 August 2026. They are iPhone HEIC frames, 3024 wide by 4032 tall, timestamped 13:26:12 through 13:26:21 — so
+the whole sample spans nine seconds. I have committed them here at half resolution, 1512 × 2016,
+and every coordinate in this post lives in that pixel grid.
 
 There was no protocol. I stood in a field and pointed a phone at the sky, handheld, with no
 tripod, no scale bar, no fixed distance and no attempt to keep the camera still between frames.
@@ -79,9 +79,9 @@ grey = np.asarray(photo.convert("L"))
 
 fig, axes = plt.subplots(1, 3, figsize=(13, 5))
 axes[0].imshow(rgb)
-axes[0].set_title(f"colour: {rgb.shape[0]}x{rgb.shape[1]}x{rgb.shape[2]}")
+axes[0].set_title(f"colour: {rgb.shape[1]} wide x {rgb.shape[0]} tall x {rgb.shape[2]}")
 axes[1].imshow(grey, cmap="gray")
-axes[1].set_title(f"brightness: {grey.shape[0]}x{grey.shape[1]}")
+axes[1].set_title(f"brightness: {grey.shape[1]} wide x {grey.shape[0]} tall")
 
 patch = grey[600:610, 500:510]
 axes[2].imshow(patch, cmap="gray", interpolation="nearest", vmin=0, vmax=255)
@@ -170,6 +170,15 @@ label. Six points, all corners of the band stack:
 - `armA_in` and `armB_in`, the far ends of the band stack's inner boundary on each arm;
 - `apex_in`, the inner apex where those two inner boundaries meet.
 
+One of these labels is not determined by the photograph, and it is worth being blunt about it.
+The sail is bilaterally symmetric and so are its colour bands, so nothing in a single image says
+which physical wing is `armA` and which is `armB`. I fixed the choice by making every frame's
+traversal run the same way round the sail, which meant swapping the two labels in frame 5
+relative to how that photograph reads. That is a free choice about labelling, not a measurement —
+but it is a free choice that would set the headline number if the analysis were sensitive to it,
+so the alignment below is built to be insensitive to it instead, by allowing reflections. Get
+this wrong and the same landmarks report a Procrustes sum of squares of 0.855 rather than 0.111.
+
 I placed these by hand off the committed photographs, the way a morphometrician places them in
 tpsDig, and checked them against the overlay below. Placement is good to about ±5 pixels on a
 sail 160 pixels across. Hold on to that number — it decides what this analysis can and cannot
@@ -220,9 +229,10 @@ for frame, angle in enumerate(angles, start=1):
 print(f"\nspread: {angles.max() - angles.min():.1f} degrees")
 ```
 
-Thirty-one degrees of spread on a quantity that similarity cannot touch. My landmarks are good to
-±5 pixels, which on these arms is worth about two degrees — nowhere near enough to manufacture
-thirty. Whatever maps one frame onto another, it is not a similarity, and that is settled without
+Thirty-one degrees of spread on a quantity that similarity cannot touch. Jittering the landmarks
+by 5 pixels and remeasuring puts the standard deviation of this angle between 3.6 and 6.3 degrees
+depending on the frame — so my digitising is worth a few degrees, nowhere near enough to
+manufacture thirty. Whatever maps one frame onto another, it is not a similarity, and that is settled without
 running Procrustes once.
 
 The interesting question is no longer *whether* the pipeline will struggle. It is what the
@@ -247,22 +257,25 @@ def centre_and_scale(config):
     centred = config - config.mean(axis=0)
     return centred / np.linalg.norm(centred)
 
-def rotate_onto(config, target):
-    """Least-squares rotation of `config` onto `target`, via an SVD."""
+def align_onto(config, target):
+    """Least-squares orthogonal map of `config` onto `target`, via an SVD.
+
+    Reflections are allowed, deliberately. The usual version of this function
+    forbids them, on the grounds that a mirror image is a different shape. That
+    is right for a left and a right hand; it is wrong here, because which wing
+    of a symmetric sail got labelled `armA` is a free choice rather than a fact
+    about the kite (see above). Forbidding reflection would charge that free
+    choice to the kite's shape.
+    """
     u, _, vt = np.linalg.svd(target.T @ config)
-    rotation = vt.T @ u.T
-    if np.linalg.det(rotation) < 0:      # a reflection is not a rotation
-        vt = vt.copy()
-        vt[-1] *= -1
-        rotation = vt.T @ u.T
-    return config @ rotation
+    return config @ (vt.T @ u.T)
 
 def gpa(configs, prepare=centre_and_scale, tol=1e-13, max_iter=500):
     """Generalised Procrustes: prepare each configuration, then iterate to a mean."""
     aligned = np.stack([prepare(c) for c in configs])
     mean = aligned[0]
     for _ in range(max_iter):
-        aligned = np.stack([centre_and_scale(rotate_onto(c, mean)) for c in aligned])
+        aligned = np.stack([centre_and_scale(align_onto(c, mean)) for c in aligned])
         new_mean = centre_and_scale(aligned.mean(axis=0))
         if np.linalg.norm(new_mean - mean) < tol:
             break
@@ -329,11 +342,17 @@ def fit_similarity(src, dst):
     s0, d0 = src - mu_s, dst - mu_d
     u, sv, vt = np.linalg.svd(d0.T @ s0)
     rotation = u @ vt
+    trace = sv.sum()
     if np.linalg.det(rotation) < 0:
+        # Flipping the last axis to keep this a rotation also flips the sign of
+        # the smallest singular value's contribution to the optimal scale.
+        # Leaving `trace` as sv.sum() here is a real bug: it overshoots the
+        # scale and the fit stops attaining the best similarity map.
         u = u.copy()
         u[:, -1] *= -1
         rotation = u @ vt
-    return (s0 @ rotation.T) * (sv.sum() / (s0 ** 2).sum()) + mu_d
+        trace = sv[0] - sv[1]
+    return (s0 @ rotation.T) * (trace / (s0 ** 2).sum()) + mu_d
 
 def fit_affine(src, dst):
     design = np.hstack([src, np.ones((len(src), 1))])
@@ -389,8 +408,11 @@ for j in range(1, 5):
 print(f"\n{'mean':>14}" + "".join(f"{np.mean(v):15.2f}" for v in totals.values()) + "   px")
 ```
 
-The ladder is monotone, as it has to be: each model contains the one before it, so its residual
-cannot be larger. What matters is the size of each step against the ±5 pixel noise floor of my
+The ladder comes out monotone, which is what should happen: each model contains the one before
+it, so a fit that truly attains its group's optimum cannot do worse than the group inside it.
+Worth saying that this is a property of the answers rather than a guarantee from the code —
+`fit_projective` is a local refinement from a DLT seed with no global optimality promise, which
+is exactly why its unrefined version scored *worse* than affine. What matters is the size of each step against the ±5 pixel noise floor of my
 own digitising.
 
 Similarity leaves 12.5 pixels of error on a sail 160 pixels across. That is two and a half times
@@ -466,9 +488,15 @@ really two curved panels hinged at the spine, and no two-dimensional map of any 
 shape that is genuinely bending in three dimensions. The other is me, placing six landmarks by
 eye to about ±5 pixels.
 
-These are easy to tell apart, because the second one can be simulated. Take a single frame,
-replicate it five times so the true shape difference is exactly zero, jitter every landmark, and
-measure the Procrustes sum of squares that digitising error alone manufactures.
+These are easy to tell apart, because the second one can be simulated. Take a frame, replicate it
+five times so the true shape difference is exactly zero, jitter every landmark, and measure the
+Procrustes sum of squares that digitising error alone manufactures.
+
+One wrinkle before the numbers. The jitter below is Gaussian with standard deviation sigma, while
+my ±5 pixels was meant as a rough bound — and a Gaussian at sigma = 5 puts about a third of its
+points beyond 5 pixels, with an RMS displacement nearer 7. So the simulated floor at sigma = 5 is
+if anything a little pessimistic about my hand. That cuts against the conclusion I want, which is
+the right direction for a check to err in.
 
 ```{python}
 #| label: noise-floor
@@ -478,35 +506,48 @@ def procrustes_ss(configs, prepare):
     aligned, mean = gpa(configs, prepare=prepare)
     return float((np.linalg.norm(aligned - mean, axis=(1, 2)) ** 2).sum())
 
-print(f"{'jitter':>9}{'similarity SS':>16}{'affine SS':>12}")
+# Every frame gets a turn as the base. Which one you pick matters: the flattest
+# sails amplify jitter under the affine quotient, so a single base frame can
+# understate the floor by a factor of three.
+print(f"{'sigma':>7}{'similarity SS':>26}{'affine SS':>26}")
 for sigma in [2, 3, 5, 8]:
-    trials = [
-        (procrustes_ss(rep, centre_and_scale), procrustes_ss(rep, remove_affine))
-        for rep in (X[4] + rng.normal(0, sigma, (5,) + X[4].shape) for _ in range(400))
-    ]
-    sim_mean, aff_mean = np.mean(trials, axis=0)
-    print(f"{sigma:7.0f}px{sim_mean:16.5f}{aff_mean:12.5f}")
+    per_base = np.array([
+        [np.mean([procrustes_ss(base + rng.normal(0, sigma, (5,) + base.shape), prepare)
+                  for _ in range(300)])
+         for prepare in (centre_and_scale, remove_affine)]
+        for base in X
+    ])
+    cells = "".join(
+        f"{per_base[:, k].mean():14.4f}  [{per_base[:, k].min():.4f}-{per_base[:, k].max():.4f}]"
+        for k in (0, 1))
+    print(f"{sigma:5.0f}px{cells}")
 
-print(f"\n{'observed':>9}{similarity_ss:16.5f}{affine_ss:12.5f}")
+print(f"\n{'observed':>7}{similarity_ss:14.4f}{'':12}{affine_ss:14.4f}")
 ```
 
-This is the number that decides how much of this post's conclusion survives.
+This table decides how much of the post survives, and it is worth reading the brackets rather
+than the means. The spread across base frames is wide, because whitening a nearly flat
+configuration amplifies whatever jitter you put into it — frames 1 and 2 are the most
+foreshortened sails, and they generate roughly three times the affine floor that frame 4 does.
+A simulation run off a single base frame would have hidden that entirely.
 
-The observed similarity SS of 0.111 is roughly four times what ±5 pixel jitter produces, so the
-failure of the similarity quotient is real and comfortably outside my digitising error. That
-conclusion holds.
+The similarity result holds. Observed SS is 0.111 against a sigma = 5 floor of 0.032 on average,
+so about three and a half times the noise — and still 2.7 times it even against the most
+pessimistic base frame. The similarity quotient fails for reasons that are not my handwriting.
 
-The affine result does not hold nearly as well. After quotienting out the affine group the
-residual is 0.068, and jitter of ±8 pixels alone produces 0.074 — more than the entire remaining
-signal. My hand is good to about ±5, not ±8, so there is probably *something* left. But it is
-close enough to the noise floor that I cannot honestly attribute it to the sail's billow, which
-is the answer I went looking for. To measure the billow you would need more landmarks placed more
-precisely than I placed these, and ideally a kite filling more of the frame.
+The affine result does not hold. After quotienting out the affine group the residual is 0.068
+against a floor of 0.042, which is 1.6 times the noise on average and only 1.1 times against the
+worst base frame. At sigma = 8 the floor passes the observed value outright. There is no residual
+here I can claim, and in particular I cannot claim the sail's billow, which is the answer I went
+looking for. Measuring that would need more landmarks, placed more precisely, on a kite filling
+more of the frame.
 
-So the defensible summary is narrower than the one I expected to write: the viewpoint explains
-the great majority of why these five photographs disagree, similarity is decisively the wrong
-group to quotient by, and whether the kite's own bending contributes anything measurable is
-beyond what six hand-placed landmarks can resolve.
+So the defensible summary is narrower than the one I set out to write. Similarity is decisively
+the wrong group to quotient by, and moving to the affine group removes a large and real chunk of
+the disagreement between these photographs. Whether *anything at all* is left after that — the
+kite's own bending, or any other departure from a flat plane under an affine camera — is below
+what six hand-placed landmarks can resolve, and this analysis should not be read as evidence
+either way.
 
 ## The same pipeline in R's shapes package
 
