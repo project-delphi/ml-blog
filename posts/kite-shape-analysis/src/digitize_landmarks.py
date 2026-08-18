@@ -127,7 +127,9 @@ def signed_area(config: np.ndarray) -> float:
 def write_csv() -> None:
     """Write ``landmarks.csv`` in long form, one row per landmark."""
     with CSV_OUT.open("w", newline="") as handle:
-        writer = csv.writer(handle)
+        # Explicit LF: csv.writer defaults to CRLF, which git rewrites on every
+        # checkout and shows the file as modified when nothing has changed.
+        writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(["frame", "landmark", "x", "y"])
         for frame in sorted(LANDMARKS):
             for name in ORDER:
@@ -187,7 +189,9 @@ def write_overlay() -> None:
             transform=legend.transAxes,
         )
     fig.tight_layout()
-    fig.savefig(OVERLAY_OUT, dpi=110)
+    # 72 rather than a higher dpi on purpose: at 110 this file was 1.3 MB and
+    # the largest asset in the repository, for a figure nobody zooms into.
+    fig.savefig(OVERLAY_OUT, dpi=72)
     plt.close(fig)
 
 
