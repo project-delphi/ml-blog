@@ -587,7 +587,9 @@ Everything above is hand-rolled, which makes it worth checking against an implem
 wrote for this post. Ian Dryden's [`shapes`](https://cran.r-project.org/package=shapes) package
 is the reference implementation of this material in R — it ships `procGPA` for generalised
 Procrustes, `riemdist` for Riemannian distance in shape space, `tpsgrid` for thin-plate spline
-deformation grids, and `shapepca` for principal components of shape.
+deformation grids, and `shapepca` for principal components of shape. What it does not do is touch
+the photographs: `tpsgrid` draws a deformation, it does not apply one to pixels. That comes in the
+next section, and needs a little more machinery.
 
 The R script reads the same `landmarks.csv` and runs the same two analyses. It is not executed by
 the render — it runs ahead of time and commits its figures, so this post builds on a machine with
@@ -648,6 +650,15 @@ The Riemannian distances are worth reading on their own. They measure separation
 shape space rather than straight through it, and the largest is 0.33 — between two photographs of
 one rigid object, nine seconds apart. That single number is the whole problem in one line.
 
+Before the grids, the plainest view `shapes` offers. `plotshapes` draws configurations on one
+set of axes: on the left the five frames as digitised, scattered across the photograph in raw
+pixel coordinates, and on the right the same five after `procGPA` has removed position, size and
+rotation.
+
+![`plotshapes` on the raw landmarks and after `procGPA`. Removing position, size and rotation
+brings the five configurations onto one another — and the scatter still visible on the right is
+the 0.111 the post has been quoting all along.](./fig-r-plotshapes.png)
+
 The deformation grids show the same story pictorially. `tpsgrid` draws the thin-plate spline that
 carries the mean shape onto one frame: a grid drawn on the average kite, then bent so its
 landmarks land on that frame's.
@@ -659,6 +670,96 @@ landmarks land on that frame's.
 This is what "the thin-plate splines were not good" looks like when you diagnose it rather than
 tune it. TPS was never the problem. It was faithfully drawing a deformation that was mostly
 camera.
+
+## Warping the photographs themselves shows the size of what was fixed
+
+Everything so far has been six points per frame. The grids above deform an abstract mean, and a
+reader has to take on trust that this corresponds to anything in the sky. The thin-plate spline
+that bends a grid will just as happily bend an image, so the honest way to finish is to send the
+photographs through the same pipeline and look at them.
+
+Each frame gets transported into one shared panel twice — once by the best similarity map, once
+by the best affine map — and then the animation morphs between consecutive frames, interpolating
+the landmarks linearly and bending both photographs onto the intermediate shape before
+cross-dissolving. That last part is the spline doing the work that `tpsgrid` only illustrates.
+
+```{r}
+#| eval: false
+# U(r) = r^2 log r^2, the 2D biharmonic kernel: the shape a thin metal plate
+# takes when pinned at the landmarks. Solving for an affine part plus one
+# radial term per landmark gives the smoothest map carrying every source
+# landmark exactly onto its target.
+tps_kernel <- function(d2) ifelse(d2 > 0, d2 * log(d2), 0)
+
+tps_fit <- function(src, dst) {
+  K <- tps_kernel(as.matrix(dist(src))^2)
+  P <- cbind(1, src)
+  L <- rbind(cbind(K, P), cbind(t(P), matrix(0, 3, 3)))
+  W <- solve(L, rbind(dst, matrix(0, 3, 2)))
+  list(src = src, w = W[seq_len(nrow(src)), ], a = W[nrow(src) + 1:3, ])
+}
+
+tps_apply <- function(fit, pts) {
+  d2 <- outer(pts[, 1], fit$src[, 1], "-")^2 + outer(pts[, 2], fit$src[, 2], "-")^2
+  cbind(1, pts) %*% fit$a + tps_kernel(d2) %*% fit$w
+}
+
+# Warping an image is the same map run backwards: for every output pixel, ask
+# where in the original photograph it came from, then sample there.
+warp <- function(photo, from, to) {
+  sample_image(photo, tps_apply(tps_fit(to, from), output_grid))
+}
+```
+
+The static version first, because it carries the finding on its own and an animation should never
+be the only copy of a result.
+
+![Five photographs of one kite. Top: as photographed, a fixed window at native scale and
+orientation. Middle: transported into a shared frame by the best similarity map. Bottom: by the
+best affine map.](./fig-r-warped-stack.png)
+
+The top-to-middle step is the dramatic one, and it is worth being clear that this is *not* the
+post's argument — it is just Procrustes doing the job it has always been able to do. Position,
+size and rotation come off, and five wildly different views become five broadly comparable ones.
+
+The middle-to-bottom step is the post's argument, and it is small. That is the correct size. A
+38% reduction in Procrustes sum of squares does not look like much when you paint it onto
+pixels, and pretending otherwise would be the wrong lesson to take from this.
+
+### Caveat: outside six landmarks the spline is guessing
+
+The streamers tear, smear and swirl in both warped rows, and that is not a bug to be tuned out.
+A thin-plate spline is pinned only where you pin it. Inside the hull of the six sail landmarks it
+interpolates between constraints; outside, it extrapolates from none, and the ribbons trailing off
+the back edge are entirely outside. They are also genuinely non-rigid, so there is no
+correspondence out there to get right in the first place.
+
+Read that way the smearing is informative: it marks exactly where this analysis has something to
+say and where it does not.
+
+### The animation, and what it can and cannot show
+
+![Five photographs morphing through a common frame, aligned by similarity (left) and by affine
+(right). The white dashed hexagon is the mean shape, fixed in both panels. Spikes run from each
+mean landmark to where that frame's landmark actually lands, **drawn at three times life size** —
+`tpsgrid` has a `mag` argument for the same reason. Shorter spikes on the right are the affine
+map's 28% improvement in landmark registration.](./fig-r-morph.gif)
+
+The magnification is not showmanship, and the reason is worth stating because it is a result in
+itself. Measured on the pixels alone, the two panels are indistinguishable: the per-pixel standard
+deviation across the five aligned frames is 0.128 under similarity and 0.129 under affine. Nothing
+to see.
+
+That is not because the affine map fails. It is because pixel disagreement between these
+photographs is dominated by things no two-dimensional alignment can touch — which colour bands a
+given viewpoint exposes, how the light falls, and the streamers, which are not in correspondence
+at all. The affine map improves landmark registration from 7.7 to 5.6 panel pixels, roughly a
+quarter, and on a 220-pixel panel a two-pixel improvement is invisible without help.
+
+So the animation shows two true things at once. The kite really does settle into a common frame,
+which is what alignment is for. And the improvement this post spent its length establishing is
+real, reproducible, and far too small to see unless you draw it. Both are worth knowing before
+trusting an alignment because the overlay looked convincing.
 
 ## Shape analysis only subtracts what you tell it to
 
@@ -673,7 +774,10 @@ thing that varies. Point a lens at something in the air and the nuisance group g
 Procrustes will not tell you this has happened. It will converge, return a mean shape, and hand
 you a number.
 
-Two cheap habits catch it. Measure something the group you are quotienting by cannot change — an
-angle, for similarity — and check whether it holds still. And simulate your own measurement error
+Three cheap habits catch it. Measure something the group you are quotienting by cannot change —
+an angle, for similarity — and check whether it holds still. Simulate your own measurement error
 before believing any residual, because the number that decided how much of this post I could
-defend was not the Procrustes sum of squares. It was ±5 pixels.
+defend was not the Procrustes sum of squares; it was ±5 pixels. And do not let a picture settle
+it either way: warping the photographs into register made a real 38% improvement look like
+nothing at all, and a convincing overlay would have hidden the same gap just as easily in the
+other direction.
