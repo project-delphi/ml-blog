@@ -201,8 +201,8 @@ cat("wrote fig-r-plotshapes.png\n")
 # SD of 0.128 under similarity and 0.129 under affine. Pixel disagreement here
 # is dominated by things no 2D alignment can fix -- which colour bands a
 # viewpoint exposes, and the streamers, which are not in correspondence at all.
-# What the affine map genuinely improves is the landmark registration, from 7.7
-# to 5.6 panel pixels, and you can only see that if the landmarks are visible.
+# What the affine map genuinely improves is the landmark registration, from 7.0
+# to 5.1 panel pixels, and you can only see that if the landmarks are visible.
 gap <- 16
 tmp <- file.path(tempdir(), "morph")
 dir.create(tmp, showWarnings = FALSE)
