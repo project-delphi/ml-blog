@@ -176,8 +176,12 @@ which physical wing is `armA` and which is `armB`. I fixed the choice by making 
 traversal run the same way round the sail, which meant swapping the two labels in frame 5
 relative to how that photograph reads. That is a free choice about labelling, not a measurement —
 but it is a free choice that would set the headline number if the analysis were sensitive to it,
-so the alignment below is built to be insensitive to it instead, by allowing reflections. Get
-this wrong and the same landmarks report a Procrustes sum of squares of 0.855 rather than 0.111.
+so the Procrustes alignment below is built not to care, by allowing reflections. Forbid
+reflection and these same landmarks report a Procrustes sum of squares of 0.855 instead of 0.111;
+allow it, and the two labellings differ by under 6%. The model ladder further down fits each
+frame separately rather than to a common mean, so it is not insensitive in the same clean way —
+relabelling permutes points rather than exactly mirroring them, so even a six-parameter affine
+fit shifts a little under it.
 
 I placed these by hand off the committed photographs, the way a morphometrician places them in
 tpsDig, and checked them against the overlay below. Placement is good to about ±5 pixels on a
@@ -337,17 +341,22 @@ Fit each of the three to each frame and see which one explains the photographs.
 #| label: ladder
 from scipy.optimize import least_squares
 
-def fit_similarity(src, dst):
+def fit_similarity(src, dst, allow_reflection=True):
+    """Best similarity map from `src` onto `dst` (Umeyama).
+
+    Reflection is allowed by default, matching the Procrustes alignment above
+    and for the same reason: the wing labelling is a free choice. Refusing it
+    takes more than flipping the rotation matrix -- the smallest singular
+    value's contribution to the optimal scale flips sign with it. Leaving
+    `trace` at ``sv.sum()`` in that branch overshoots the scale, and is an easy
+    bug to write by accident.
+    """
     mu_s, mu_d = src.mean(0), dst.mean(0)
     s0, d0 = src - mu_s, dst - mu_d
     u, sv, vt = np.linalg.svd(d0.T @ s0)
     rotation = u @ vt
     trace = sv.sum()
-    if np.linalg.det(rotation) < 0:
-        # Flipping the last axis to keep this a rotation also flips the sign of
-        # the smallest singular value's contribution to the optimal scale.
-        # Leaving `trace` as sv.sum() here is a real bug: it overshoots the
-        # scale and the fit stops attaining the best similarity map.
+    if not allow_reflection and np.linalg.det(rotation) < 0:
         u = u.copy()
         u[:, -1] *= -1
         rotation = u @ vt
@@ -412,18 +421,41 @@ The ladder comes out monotone, which is what should happen: each model contains 
 it, so a fit that truly attains its group's optimum cannot do worse than the group inside it.
 Worth saying that this is a property of the answers rather than a guarantee from the code —
 `fit_projective` is a local refinement from a DLT seed with no global optimality promise, which
-is exactly why its unrefined version scored *worse* than affine. What matters is the size of each step against the ±5 pixel noise floor of my
-own digitising.
+is exactly why its unrefined version scored *worse* than affine.
 
-Similarity leaves 12.5 pixels of error on a sail 160 pixels across. That is two and a half times
-the digitising noise, and it is the quantitative version of what the nose angle already said.
-Affine cuts it to 8.2. Projective gets to 6.7 — better, but it spends two more parameters to buy
-1.5 pixels, on six landmarks where eight parameters are already fitting twelve numbers.
+These numbers mean nothing on their own, because every extra parameter buys some fit even against
+pure noise. Each model needs its own floor, and the floor is not "±5 pixels" — it is whatever
+that model scores between two independently jittered copies of one frame, where the true
+difference is zero by construction.
 
-So the honest reading is that the camera was far enough away for weak perspective to hold, and
-**affine is the smallest model that does the job**. The projective term is not resolvable here.
-That is a claim about my data, not about cameras: with more landmarks, or a kite closer to the
-lens, the projective step would separate.
+```{python}
+#| label: ladder-floor
+rng = np.random.default_rng(1)
+
+print(f"{'':12}{'observed':>10}{'noise floor':>13}{'ratio':>8}")
+for name, _, fit in MODELS:
+    scores = []
+    for base in X:
+        for _ in range(120):
+            a = base + rng.normal(0, 5, base.shape)
+            b = base + rng.normal(0, 5, base.shape)
+            scores.append(rms(fit(a, b), b))
+    floor, seen = float(np.mean(scores)), float(np.mean(totals[name]))
+    print(f"{name:12}{seen:10.2f}{floor:13.2f}{seen / floor:7.1f}x")
+```
+
+That reframes the ladder. Similarity leaves 12.5 pixels against a floor of 7.9 — clearly above
+its own noise, and the quantitative version of what the nose angle already said. Affine drops to
+8.2 against a floor of 6.7, barely above it, and projective to 6.7 against 5.8, the same ratio
+again.
+
+So affine does not merely beat similarity: it brings the residual **down to roughly what my own
+digitising manufactures**, which is as far as this data can take it. There is nothing measurable
+left for the projective term to explain, and its extra 1.5 pixels are bought with two more
+parameters on six landmarks. The reading is that the camera was far enough away for weak
+perspective to hold, and **affine is the smallest model that does the job** — a claim about these
+photographs, not about cameras. With more landmarks, or a kite closer to the lens, the projective
+step would separate.
 
 ## Quotient out the affine group and most of the shape difference disappears
 
@@ -522,7 +554,7 @@ for sigma in [2, 3, 5, 8]:
         for k in (0, 1))
     print(f"{sigma:5.0f}px{cells}")
 
-print(f"\n{'observed':>7}{similarity_ss:14.4f}{'':12}{affine_ss:14.4f}")
+print(f"\n{'observed':>7}{similarity_ss:14.4f}{'':15}{affine_ss:14.4f}")
 ```
 
 This table decides how much of the post survives, and it is worth reading the brackets rather
