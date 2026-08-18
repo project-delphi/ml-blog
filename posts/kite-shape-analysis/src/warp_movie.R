@@ -150,18 +150,22 @@ transports <- list(
 )
 
 # ---- static figure: as photographed, then both transports ------------------
-# A plain window on the original photograph -- centred on the kite so it is in
-# view, but at native scale and native orientation. No alignment of any kind.
-# This is the baseline the two transports have to improve on.
+# A plain window on the original photograph. The only thing done to it is
+# centring on the kite, so that it stays in frame at all; orientation is
+# untouched and the window is the same size in source pixels for every frame,
+# so relative size differences between frames survive. It is the baseline the
+# two transports improve on, but it is not literally raw -- translation is
+# already gone, which is why the post credits the next row with size and
+# rotation rather than all three.
 crop_raw <- function(i) {
   centre <- colMeans(X[, , i])
   offset <- sweep(grid_xy, 2, c(BOX, BOX) / 2) * (RAW_CROP / BOX)
   sample_image(photos[[i]], sweep(offset, 2, centre, "+"))
 }
 
-png(file.path(post, "fig-r-warped-stack.png"), width = 5 * BOX + 190,
+png(file.path(post, "fig-r-warped-stack.png"), width = n * BOX + 190,
     height = 3 * BOX + 60, res = 120)
-par(mfrow = c(3, 5), mar = c(0.4, 0.4, 1.9, 0.4), oma = c(0, 7.5, 0, 0))
+par(mfrow = c(3, n), mar = c(0.4, 0.4, 1.9, 0.4), oma = c(0, 7.5, 0, 0))
 rows <- list(
   list(lab = "as photographed", get = function(i) crop_raw(i)),
   list(lab = "similarity-aligned",
@@ -183,12 +187,43 @@ cat("wrote fig-r-warped-stack.png\n")
 # ---- plotshapes: raw versus aligned configurations -------------------------
 png(file.path(post, "fig-r-plotshapes.png"), width = 1100, height = 520, res = 120)
 par(mfrow = c(1, 2), mar = c(4, 4, 3, 1))
-plotshapes(X, joinline = c(1:6, 1))
+plotshapes(X, joinline = c(seq_len(k), 1))
 title(main = "raw landmarks, five frames")
-plotshapes(gpa$rotated, joinline = c(1:6, 1))
+plotshapes(gpa$rotated, joinline = c(seq_len(k), 1))
 title(main = "after procGPA")
 invisible(dev.off())
 cat("wrote fig-r-plotshapes.png\n")
+
+# ---- the two numbers the post quotes -----------------------------------------
+# Neither of these is used to draw anything; they exist so the prose is checkable
+# against a run of this script instead of against a scratch file.
+report_statistics <- function() {
+  # 1. Landmark registration: how far each frame's landmarks still sit from the
+  #    shared mean, in panel pixels, under each transport.
+  resid <- sapply(names(transports), function(nm) {
+    mean(sapply(seq_len(n), function(i) {
+      sqrt(mean(rowSums((apply_map(transports[[nm]][[i]], X[, , i]) - mu)^2)))
+    }))
+  })
+  cat(sprintf("landmark registration: similarity %.2f px, affine %.2f px (%.0f%% better)\n",
+              resid[["similarity"]], resid[["affine"]],
+              100 * (1 - resid[["affine"]] / resid[["similarity"]])))
+
+  # 2. Pixel agreement: the SD across the five aligned frames at each pixel and
+  #    channel, averaged. Restricted to the landmarks' bounding box, because
+  #    over the whole panel most of the frame is empty sky, which dilutes both
+  #    numbers equally and makes neither interpretable. The post says which.
+  rows <- seq(floor(min(mu[, 2])), ceiling(max(mu[, 2])))
+  cols <- seq(floor(min(mu[, 1])), ceiling(max(mu[, 1])))
+  for (nm in names(transports)) {
+    stack <- vapply(seq_len(n), function(i) warp_frame(i, transports[[nm]]),
+                    array(0, c(BOX, BOX, 3)))
+    sd_map <- apply(stack, c(1, 2, 3), sd)
+    cat(sprintf("per-pixel SD across the 5 aligned frames, %-10s sail box %.4f, whole panel %.4f\n",
+                nm, mean(sd_map[rows, cols, ]), mean(sd_map)))
+  }
+}
+report_statistics()
 
 # ---- the morph -------------------------------------------------------------
 # Between consecutive frames the landmarks are interpolated linearly and both
@@ -196,20 +231,22 @@ cat("wrote fig-r-plotshapes.png\n")
 # thin-plate spline is what carries the pixels.
 #
 # The landmarks are drawn on, against the fixed mean shape in white, and that is
-# not decoration. Measured on the pixels alone the two panels are nearly
-# indistinguishable: the spread of the five aligned frames has a mean per-pixel
-# SD of 0.128 under similarity and 0.129 under affine. Pixel disagreement here
-# is dominated by things no 2D alignment can fix -- which colour bands a
-# viewpoint exposes, and the streamers, which are not in correspondence at all.
-# What the affine map genuinely improves is the landmark registration, from 7.0
-# to 5.1 panel pixels, and you can only see that if the landmarks are visible.
+# not decoration: measured on the pixels alone the two panels are nearly
+# indistinguishable. Pixel disagreement here is dominated by things no 2D
+# alignment can fix -- which colour bands a viewpoint exposes, and the
+# streamers, which are not in correspondence at all. What the affine map
+# genuinely improves is the landmark registration, and on a BOX-pixel panel that
+# is a couple of pixels, invisible without magnifying it.
+#
+# Both numbers the post quotes are printed by report_statistics() below, so the
+# prose can be checked against a run rather than taken on trust.
 gap <- 16
 tmp <- file.path(tempdir(), "morph")
 dir.create(tmp, showWarnings = FALSE)
 paths <- character(0)
 counter <- 0
 hull <- c(1:k, 1)
-DOT <- c("#FFFFFF", "#FF3B30", "#FF9500", "#34C759", "#00C7FF", "#BF5AF2")
+DOT <- hcl.colors(k, "Dark 3")
 
 MAG <- 3   # residuals are drawn magnified, as tpsgrid's `mag` does
 
