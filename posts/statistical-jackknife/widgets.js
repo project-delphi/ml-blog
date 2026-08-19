@@ -83,7 +83,8 @@ const JK = (function () {
       viewBox: `0 0 380 300`,
       width: "380",
       height: "300",
-      style: "background:#fff;border:1px solid #E2E6E1;border-radius:6px;cursor:crosshair"
+      style: "background:#fff;border:1px solid #E2E6E1;border-radius:6px;cursor:grab;"
+           + "max-width:100%;height:auto"
     });
 
     // Right: Influence bar chart svg
@@ -91,7 +92,8 @@ const JK = (function () {
       viewBox: `0 0 280 300`,
       width: "280",
       height: "300",
-      style: "background:#fff;border:1px solid #E2E6E1;border-radius:6px"
+      style: "background:#fff;border:1px solid #E2E6E1;border-radius:6px;"
+           + "max-width:100%;height:auto"
     });
 
     svgWrap.appendChild(scatterSvg);
@@ -275,9 +277,13 @@ const JK = (function () {
 
     function handleMove(clientX, clientY) {
       if (activeDrag === null) return;
+      // The SVG is CSS-scalable (max-width:100%), so client pixels are not viewBox
+      // units on a narrow screen. Rescale by the rendered size before converting.
       const rect = scatterSvg.getBoundingClientRect();
-      const sx = clientX - rect.left;
-      const sy = clientY - rect.top;
+      const kx = rect.width ? 380 / rect.width : 1;
+      const ky = rect.height ? 300 / rect.height : 1;
+      const sx = (clientX - rect.left) * kx;
+      const sy = (clientY - rect.top) * ky;
       points[activeDrag].x = toDataX(sx);
       points[activeDrag].y = toDataY(sy);
       update();
@@ -435,6 +441,7 @@ const JK = (function () {
               h("th", { text: "User" }),
               h("th", { text: "Spend" }),
               h("th", { text: "Ratio without them" }),
+              h("th", { text: "Leverage" }),
               h("th", { text: "Pseudovalue" })
             ])
           ]),
@@ -451,6 +458,7 @@ const JK = (function () {
               h("td", { text: u.name }),
               h("td", { text: `$${u.net_spend}` }),
               h("td", { text: u.subR.toFixed(3) }),
+              h("td", { text: `+${u.leverage.toFixed(3)}` }),
               h("td", { text: u.pseudovalue.toFixed(2) })
             ]);
           }))
@@ -461,11 +469,12 @@ const JK = (function () {
       // Status alert
       clear(statusBanner);
       const ringleader = results.find(r => r.type === "syndicate_hub");
-      if (ringleader && botSpokes > 0) {
+      const runnerUp = results.find(r => r.type !== "syndicate_hub");
+      if (ringleader) {
         statusBanner.appendChild(h("div", {
           class: "jackknife-hero",
           style: { borderColor: C.danger, background: "rgba(198, 40, 40, 0.05)" },
-          html: `<strong>🎯 Jackknife Isolation:</strong> Removing <em>${ringleader.name}</em> (${botSpokes} referrals, $${ringleader.net_spend} spend) causes the cohort Promo-to-Spend ratio to drop from <strong>${clusterRatio.toFixed(3)}</strong> to <strong>${ringleader.subR.toFixed(3)}</strong>. The jackknife identifies the coordinator without requiring network-graph clustering.`
+          html: `<strong>🎯 Jackknife Isolation:</strong> Removing <em>${ringleader.name}</em> (${botSpokes} referrals, $${ringleader.net_spend} spend) drops the cohort Promo-to-Spend ratio from <strong>${clusterRatio.toFixed(3)}</strong> to <strong>${ringleader.subR.toFixed(3)}</strong> — leverage <strong>${ringleader.leverage.toFixed(3)}</strong>, <strong>${(ringleader.leverage / runnerUp.leverage).toFixed(1)}×</strong> the next account. ${botSpokes > 0 ? "The jackknife isolates the coordinator without any network-graph clustering." : "With no spokes to coordinate, the hub is just a low-spending customer and its lead all but vanishes."}`
         }));
       }
     }
@@ -487,7 +496,7 @@ const JK = (function () {
 
     const ctrlWrap = h("div", { class: "widget-controls", style: { alignItems: "center" } });
     const toggleBtn = h("button", {
-      text: "⚡ Inject Outlier Patient into LINC009",
+      text: "⚡ Inject artifact patients into LINC009 and FAM83A",
       style: {
         background: C.primary,
         color: "#FFF",
@@ -501,8 +510,8 @@ const JK = (function () {
     toggleBtn.addEventListener("click", () => {
       injectOutlier = !injectOutlier;
       toggleBtn.textContent = injectOutlier 
-        ? "🔄 Remove Outlier Patient (Restore Baseline)"
-        : "⚡ Inject Outlier Patient into LINC009";
+        ? "🔄 Remove artifact patients (restore baseline)"
+        : "⚡ Inject artifact patients into LINC009 and FAM83A";
       toggleBtn.style.background = injectOutlier ? C.danger : C.primary;
       render();
     });
@@ -510,7 +519,7 @@ const JK = (function () {
     ctrlWrap.appendChild(toggleBtn);
     ctrlWrap.appendChild(h("span", {
       style: { fontSize: "0.85rem", color: C.muted },
-      text: "Watch how naive fold change promotes a fragile target, while Jackknife Stability Index demotes it."
+      text: "Watch naive fold change promote both artifacts to the top, while the stability index leaves the genuine targets in place."
     }));
 
     const displayGrid = h("div", {
@@ -529,14 +538,17 @@ const JK = (function () {
       // Create N patient expression differences
       let diffs = [];
       for (let i = 0; i < n; i++) {
-        // Normal dist approx
+        // Deterministic stand-in for patient-to-patient noise: a fixed sinusoid, not a
+        // random draw, so the widget renders identically on every load.
         const base = (gene.tumor_mean - gene.normal_mean) + (Math.sin(i * 3 + gene.name.length) * gene.std);
         diffs.push(base);
       }
       // A gene declaring an outlier patient in the data file gets that patient's
       // reading replaced when the artifact is injected. Genes without one are untouched.
-      if (injectOutlier && gene.outlier_patient !== undefined) {
+      let injected = false;
+      if (injectOutlier && gene.outlier_patient !== undefined && gene.outlier_patient < n) {
         diffs[gene.outlier_patient] = gene.outlier_val;
+        injected = true;
       }
 
       const meanLFC = diffs.reduce((s, v) => s + v, 0) / n;
@@ -555,6 +567,7 @@ const JK = (function () {
       return {
         name: gene.name,
         type: gene.type,
+        injected,
         meanLFC,
         jackLFC,
         seJack,
@@ -565,8 +578,9 @@ const JK = (function () {
     function render() {
       const results = genes.map(g => simulateGene(g, 30));
 
-      // Sort by naive LFC
-      const naiveSorted = [...results].sort((a, b) => b.meanLFC - a.meanLFC);
+      // Sort by naive |LFC| so down-regulated targets (BRCA1, TP53) compete on the
+      // same scale as up-regulated ones, matching how the stability panel ranks.
+      const naiveSorted = [...results].sort((a, b) => Math.abs(b.meanLFC) - Math.abs(a.meanLFC));
       // Sort by Jackknife Stability
       const jackSorted = [...results].sort((a, b) => b.stability - a.stability);
 
@@ -587,7 +601,7 @@ const JK = (function () {
             ])
           ]),
           h("tbody", {}, naiveSorted.slice(0, 5).map((g, i) => {
-            const isLinc = g.name === "LINC009";
+            const isLinc = g.injected;
             return h("tr", {
               style: {
                 borderBottom: "1px solid #F0F2F2",
@@ -620,7 +634,7 @@ const JK = (function () {
             ])
           ]),
           h("tbody", {}, jackSorted.slice(0, 5).map((g, i) => {
-            const isLinc = g.name === "LINC009";
+            const isLinc = g.injected;
             return h("tr", {
               style: {
                 borderBottom: "1px solid #F0F2F2",
