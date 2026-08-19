@@ -1,0 +1,714 @@
+---
+title: "The Matrix That Rotates, Stretches, and Rotates Again"
+subtitle: "An intuitive tour of the SVD: start with what a matrix does to a circle, and the factorisation, the condition number, and image compression all fall out of the same picture."
+author: "Ravi Kalia"
+date: "2026-08-19"
+categories: [Linear Algebra, Numerical Methods, Mathematics]
+tags: [svd, singular-value-decomposition, condition-number, low-rank-approximation, image-compression, recommender-systems]
+image: "./cover.png"
+description: "Every matrix turns space, stretches it, and turns it again — and that one fact prices image compression in decibels per byte, predicts when a solver will return garbage, and explains why nobody computes the SVD from A-transpose-A. With two widgets you can drive yourself."
+jupyter: svd-blog
+resources:
+  - widget-data
+  - cover.png
+execute:
+  warning: false
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    theme: [zephyr, theme.scss]
+    fig-width: 8
+    fig-height: 4.5
+    fig-dpi: 150
+---
+
+![](./cover.png){fig-alt="Cover card reading The Matrix That Rotates, Stretches, and Rotates Again."}
+
+A grayscale photograph is a matrix. One number per pixel, nothing more. The one
+below is 512 rows by 512 columns, so it is 262,144 numbers, and if you stored it
+as raw bytes that is exactly what it would cost you.
+
+Almost all of those numbers are redundant. Neighbouring rows of pixels look like
+each other, and so do neighbouring columns, and a factorisation finds that
+redundancy knowing nothing about faces, fabric or sky — only the arithmetic. You
+can then throw away most of the matrix and still recognise the picture, and price
+the trade exactly: so many decibels of quality for so many bytes.
+
+That factorisation is the **singular value decomposition**. Most introductions
+write it down first and explain it afterwards, which hides what it actually is.
+This one starts somewhere else: with a question about geometry. What can a
+matrix *do* to space? The answer turns out to be short, and everything else in
+this post — the compression, the condition number, the reason no one computes
+the SVD the obvious way — is a consequence of it.
+
+```{python}
+#| label: setup
+import json
+import sys
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+sys.path.insert(0, "src")
+
+import data as filip          # NIST StRD Filip loader
+import imagery as im          # the photograph and its SVD
+
+PURPLE, TEAL, AMBER = "#4A3AA7", "#1D6E6E", "#9A5B00"
+INK, MUTED, RULE = "#1F2430", "#5F6672", "#D8DBE2"
+PAPER = "#F4F5F7"
+
+plt.rcParams.update({
+    "figure.facecolor": PAPER, "axes.facecolor": "white",
+    "axes.edgecolor": RULE, "axes.labelcolor": INK, "text.color": INK,
+    "xtick.color": MUTED, "ytick.color": MUTED, "font.size": 10,
+    "axes.grid": True, "grid.color": RULE, "grid.alpha": 0.7,
+    "axes.spines.top": False, "axes.spines.right": False,
+})
+
+# The figures and the widgets read the same committed payload, so a number
+# quoted in the prose cannot drift from the number on the slider.
+WIDGET = json.loads(Path("widget-data/image.json").read_text())
+MOVIES = json.loads(Path("widget-data/movielens.json").read_text())
+```
+
+## Every matrix turns, stretches, then turns again
+
+Pick any real matrix, square or not, and feed it every vector of length one. In
+two dimensions those vectors trace a circle, and their images trace some new
+shape. The question is which shapes are possible.
+
+The answer is that only one shape is possible: an ellipse. Not usually an
+ellipse, not an ellipse for nice matrices. Always. A matrix can stretch the
+circle unevenly, spin it, flip it, or squash it flat onto a line, but it cannot
+bend it into anything with a corner or a wobble. That constraint is what makes
+the rest of this post possible, and it is easiest to believe by watching the
+circle deform in three moves.
+
+```{python}
+#| label: fig-three-panel
+#| fig-cap: "One matrix, four moments. A shear takes the unit circle to an ellipse in three steps: a rotation that moves nothing but the labelled directions, a stretch along the axes, and a second rotation into the final pose. The dashed circle marks where things started."
+A2 = np.array([[1.0, 1.2], [0.0, 1.0]])
+U2, s2, Vt2 = np.linalg.svd(A2)
+
+theta = np.linspace(0, 2 * np.pi, 361)
+circle = np.stack([np.cos(theta), np.sin(theta)])
+marks = np.stack([np.cos(np.arange(4) / 4 * 2 * np.pi + 0.35),
+                  np.sin(np.arange(4) / 4 * 2 * np.pi + 0.35)])
+
+stages = [
+    (np.eye(2), "unit circle"),
+    (Vt2, r"after $V^\mathsf{T}$ — a rotation"),
+    (np.diag(s2) @ Vt2, r"after $\Sigma V^\mathsf{T}$ — the stretch"),
+    (A2, r"after $A = U\Sigma V^\mathsf{T}$"),
+]
+
+fig, axes = plt.subplots(1, 4, figsize=(10.5, 3.0))
+for ax, (T, title) in zip(axes, stages):
+    shape = T @ circle
+    ax.plot(*np.stack([np.cos(theta), np.sin(theta)]), ls="--", lw=1,
+            color=RULE, zorder=1)
+    ax.fill(*shape, color=PURPLE, alpha=0.10, zorder=2)
+    ax.plot(*shape, color=PURPLE, lw=1.8, zorder=3)
+    ax.scatter(*(T @ marks), s=22, color=PURPLE, zorder=4)
+    for i, colour in enumerate((TEAL, AMBER)):
+        image = T @ Vt2[i]
+        ax.annotate("", xy=image, xytext=(0, 0),
+                    arrowprops=dict(arrowstyle="-|>", color=colour, lw=2))
+    ax.set_title(title, fontsize=9.5)
+    ax.set_xlim(-2.05, 2.05); ax.set_ylim(-2.05, 2.05)
+    ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([])
+    ax.grid(False)
+fig.tight_layout()
+plt.show()
+
+print(f"singular values: sigma1 = {s2[0]:.4f}, sigma2 = {s2[1]:.4f}")
+```
+
+Read the panels left to right and you have the whole decomposition. The first
+move is a rotation: the circle is unchanged as a set, but the arrows swing onto
+the axes. The second stretches along those axes — by
+`{python} f"{s2[0]:.3f}"` one way and `{python} f"{s2[1]:.3f}"` the other — which
+is what makes it an ellipse. The third rotates that ellipse into its final pose.
+
+Three moves, three matrices, and the formula has somewhere to land. Call the
+first rotation $V^\mathsf{T}$, the stretch $\Sigma$, and the second rotation $U$.
+Applied in order they send $x$ to $U\Sigma V^\mathsf{T} x$, which must equal $Ax$
+for every $x$, so
+
+$$A = U\Sigma V^\mathsf{T}.$$
+
+$U$ and $V$ are **orthogonal** — their columns are perpendicular unit vectors, so
+they rotate and reflect without changing any length. The diagonal entries
+$\sigma_1 \ge \sigma_2 \ge \dots \ge 0$ of $\Sigma$ are the **singular values**,
+and they are the entire stretching budget of the matrix.
+
+A different matrix should change the ellipse and the two numbers, and nothing
+else about the story. The widget below computes a real SVD of whatever you type,
+in the browser, by exactly the argument the next section makes.
+
+::: {.widget-container}
+::: {.widget-header}
+<span class="widget-title">Widget 1 — your matrix, your ellipse</span>
+<span class="widget-badge">runs in your browser</span>
+:::
+<div id="widget-ellipse"></div>
+<div class="widget-note">Try the <em>near-singular</em> preset: the ellipse
+collapses towards a line, σ₂ drops near zero, and the condition number blows up.
+That is the same failure the Filip dataset shows later, in eleven dimensions
+instead of two.</div>
+:::
+
+The static figure above is that widget at its default matrix, so with scripts off
+you have already seen the argument; the widget only lets you check it on matrices
+you chose rather than one I chose.
+
+## The decomposition exists because $A^\mathsf{T}A$ hands you the right basis
+
+Watching one matrix behave is not a proof. The claim is that *every* matrix
+factors this way, and the reason is a short piece of algebra that is worth
+seeing, because it also explains where the singular values come from.
+
+Start from a matrix you know is well behaved: $A^\mathsf{T}A$. It is square, and
+it is symmetric, since $(A^\mathsf{T}A)^\mathsf{T} = A^\mathsf{T}A$. The spectral
+theorem says a real symmetric matrix has a full set of orthonormal eigenvectors —
+this is the result the companion post on
+[eigendecomposition](../eigendecomposition/) develops. Call them
+$v_1, \dots, v_n$ with $A^\mathsf{T}A\,v_i = \lambda_i v_i$.
+
+Now ask what happens to those particular directions under $A$ itself. Take the
+inner product of two of their images:
+
+$$\langle Av_i, Av_j \rangle = v_i^\mathsf{T} A^\mathsf{T} A v_j
+  = \lambda_j\, v_i^\mathsf{T} v_j = \lambda_j\, \delta_{ij}.$$
+
+For $i \ne j$ that is zero. The images $Av_i$ are perpendicular to each other,
+automatically, with no further conditions on $A$. And setting $i = j$ gives
+$\|Av_i\|^2 = \lambda_i$, so the length of each image is $\sqrt{\lambda_i}$ —
+which is the singular value $\sigma_i$. Divide each nonzero image by its length
+to get the orthonormal $u_i$, and $Av_i = \sigma_i u_i$ is the decomposition,
+column by column.
+
+The load-bearing part is the first line: *these* directions stay perpendicular,
+and a generic perpendicular pair does not. That is checkable in three lines.
+
+```{python}
+#| label: orthogonality-check
+rng = np.random.default_rng(20260819)
+A3 = rng.standard_normal((3, 3))
+
+# The eigenvectors of A^T A, ordered by eigenvalue.
+lam, V3 = np.linalg.eigh(A3.T @ A3)
+order = np.argsort(lam)[::-1]
+lam, V3 = lam[order], V3[:, order]
+
+# An arbitrary orthonormal pair, built by rotating that basis inside its own
+# plane -- still perpendicular, still unit length, just not the special pair.
+c, s = np.cos(0.6), np.sin(0.6)
+w1, w2 = c * V3[:, 0] + s * V3[:, 1], -s * V3[:, 0] + c * V3[:, 1]
+
+print(f"before A:  v1 . v2 = {V3[:, 0] @ V3[:, 1]: .3e}    w1 . w2 = {w1 @ w2: .3e}")
+print(f"after  A: Av1 . Av2 = {(A3 @ V3[:, 0]) @ (A3 @ V3[:, 1]): .3e}   Aw1 . Aw2 = {(A3 @ w1) @ (A3 @ w2): .3e}")
+print(f"sqrt(lambda_i) = {np.sqrt(lam)}")
+print(f"numpy's sigma  = {np.linalg.svd(A3, compute_uv=False)}")
+```
+
+Both pairs start perpendicular to machine precision. After the matrix acts, one
+still is and the other is not, by about thirteen orders of magnitude. The
+eigenvectors of $A^\mathsf{T}A$ are not merely *a* convenient basis — they are the
+only one whose perpendicularity survives — and $\sqrt{\lambda_i}$ reproduces what
+`np.linalg.svd` returns.
+
+```{python}
+#| label: fig-orthogonality
+#| fig-cap: "Left: two perpendicular pairs on the unit circle — the singular directions v₁, v₂ and an arbitrary pair w₁, w₂ rotated 34° from them. Right: their images. The singular pair lands on the ellipse axes and stays at 90°; the arbitrary pair closes to an acute angle."
+lam2, V2e = np.linalg.eigh(A2.T @ A2)
+V2e = V2e[:, np.argsort(lam2)[::-1]]
+c, s = np.cos(0.6), np.sin(0.6)
+W2e = np.stack([c * V2e[:, 0] + s * V2e[:, 1], -s * V2e[:, 0] + c * V2e[:, 1]], axis=1)
+
+def angle(m):
+    a, b = m[:, 0], m[:, 1]
+    return np.degrees(np.arccos(np.clip(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)), -1, 1)))
+
+fig, axes = plt.subplots(1, 2, figsize=(8.5, 4.0))
+for ax, (M, shape, title) in zip(axes, [
+    (np.eye(2), circle, f"before: both pairs at 90°"),
+    (A2, A2 @ circle, "after: only one pair still is"),
+]):
+    ax.plot(*shape, color=PURPLE, lw=1.6)
+    for pair, colours, style, names in [
+        (V2e, (TEAL, TEAL), "-", (r"$v_1$", r"$v_2$")),
+        (W2e, (AMBER, AMBER), "--", (r"$w_1$", r"$w_2$")),
+    ]:
+        for i in range(2):
+            tip = M @ pair[:, i]
+            ax.annotate("", xy=tip, xytext=(0, 0),
+                        arrowprops=dict(arrowstyle="-|>", color=colours[i], lw=2, ls=style))
+            ax.annotate(names[i], xy=tip * 1.12, color=colours[i], fontsize=11, ha="center")
+    ax.set_title(f"{title}\n" +
+                 rf"$\angle(v_1,v_2)={angle(M @ V2e):.1f}°$   " +
+                 rf"$\angle(w_1,w_2)={angle(M @ W2e):.1f}°$", fontsize=9.5)
+    ax.set_xlim(-2.3, 2.3); ax.set_ylim(-2.3, 2.3)
+    ax.set_aspect("equal"); ax.set_xticks([]); ax.set_yticks([]); ax.grid(False)
+fig.tight_layout()
+plt.show()
+```
+
+Ninety degrees in, ninety degrees out for the singular pair; the other pair
+closes to an acute angle. So the decomposition always exists, and $\Sigma$ is
+never a free choice — it is fixed by the matrix. The natural next question is
+what those numbers are worth.
+
+## The singular values are the stretch factors, and their ratio is the danger
+
+Each $\sigma_i$ is a length: how far the matrix stretches one particular
+direction. The largest, $\sigma_1$, is the most any unit vector can be stretched,
+which is the definition of the matrix's operator norm. The smallest is the least.
+If the smallest is zero, some direction is crushed to nothing and the matrix is
+rank-deficient — information went in and cannot come out.
+
+The ratio of the two, $\kappa(A) = \sigma_1 / \sigma_n$, is the **condition
+number**, and it is the number that decides whether solving $Ax = b$ on a
+computer will give you an answer worth having. The rule of thumb is blunt:
+solving a system in double precision starts with about 16 correct digits and
+loses roughly $\log_{10}\kappa$ of them. At $\kappa = 10^{15}$ there is nothing
+left.
+
+Seeing that happen needs a matrix that is genuinely hard and an answer you
+genuinely know. **Filip** is one of the Statistical Reference Datasets published
+by NIST's Statistical Engineering Division: 82 measured $(x, y)$ pairs
+contributed by A. Filippelli, to be fitted by a degree-10 polynomial. NIST
+assembled the StRD collection to certify statistical software, so these datasets
+exist precisely to break solvers that look healthy on easy problems, and the
+certified coefficients were computed in multiple precision and quoted to 15
+digits. That certification is what makes Filip usable here — a real least-squares
+problem with a real right answer, which no synthetic ill-conditioned matrix
+offers. The stakes are ordinary: a package that quietly returns the wrong
+polynomial here returns the wrong calibration curve in somebody's laboratory, and
+nothing in its output says so.
+
+The design matrix is the one the model implies: 82 rows, and column $j$ holding
+$x^j$ for $j = 0 \dots 10$. Its singular values are the first thing to look at.
+
+```{python}
+#| label: fig-filip-spectrum
+#| fig-cap: "Singular values of Filip's degree-10 design matrix, log scale. Fifteen orders of magnitude separate the first from the last, and the ratio is the condition number."
+x_f, y_f, beta_cert = filip.load_filip()
+A_f = filip.filip_design(x_f)
+s_f = np.linalg.svd(A_f, compute_uv=False)
+kappa_f = s_f[0] / s_f[-1]
+
+def sci(value, digits=2):
+    """Render a number as LaTeX \\times 10^n -- mathtext turns "1.77e+15" into
+    "1.77e + 15", which reads as arithmetic rather than a magnitude."""
+    exponent = int(np.floor(np.log10(abs(value))))
+    return rf"{value / 10 ** exponent:.{digits}f} \times 10^{{{exponent}}}"
+
+fig, ax = plt.subplots(figsize=(7.2, 4.0))
+ax.semilogy(np.arange(1, len(s_f) + 1), s_f, "o-", color=PURPLE, lw=1.8, ms=6)
+ax.set_xlabel("index $i$"); ax.set_ylabel(r"$\sigma_i$")
+ax.set_xticks(np.arange(1, len(s_f) + 1))
+ax.annotate(rf"$\sigma_1 = {sci(s_f[0])}$", xy=(1, s_f[0]), xytext=(2.2, s_f[0] * 0.5),
+            color=TEAL, fontsize=10)
+ax.annotate(rf"$\sigma_{{11}} = {sci(s_f[-1])}$", xy=(11, s_f[-1]), xytext=(5.6, s_f[-1] * 3.0),
+            color=AMBER, fontsize=10)
+ax.set_title(rf"$\kappa(A) = \sigma_1/\sigma_{{11}} = {sci(kappa_f)}$", fontsize=11)
+fig.tight_layout()
+plt.show()
+```
+
+$\kappa \approx 1.8 \times 10^{15}$, against the $4.5 \times 10^{15}$ of
+resolution double precision carries in total. Before any solver runs, the
+spectrum says this fit sits at the edge of what the arithmetic can represent. So
+run three solvers and score them on the residual sum of squares, which NIST also
+certifies.
+
+```{python}
+#| label: filip-solve
+rss = lambda b: float(np.sum((A_f @ b - y_f) ** 2))
+rss_cert = rss(beta_cert)
+
+solvers = {
+    "normal equations, (AᵀA)⁻¹Aᵀy": np.linalg.solve(A_f.T @ A_f, A_f.T @ y_f),
+    "QR least squares, np.linalg.lstsq": np.linalg.lstsq(A_f, y_f, rcond=None)[0],
+    "pseudoinverse, np.linalg.pinv": np.linalg.pinv(A_f) @ y_f,
+}
+
+print(f"{'method':36s} {'RSS':>13s}  {'vs certified':>12s}")
+print(f"{'NIST certified coefficients':36s} {rss_cert:13.6e}  {'—':>12s}")
+for name, beta in solvers.items():
+    print(f"{name:36s} {rss(beta):13.6e}  {rss(beta) / rss_cert:11.2f}×")
+
+# Same data, same model, different basis: centre and scale x before building
+# the powers, and the condition number falls by eleven orders of magnitude.
+x_s = (x_f - x_f.mean()) / x_f.std()
+A_s = np.vander(x_s, 11, increasing=True)
+beta_s = np.linalg.pinv(A_s) @ y_f
+print(f"\nrescaled design: kappa = {np.linalg.cond(A_s):.3e}")
+print(f"rescaled pseudoinverse RSS = {float(np.sum((A_s @ beta_s - y_f) ** 2)):.6e}")
+```
+
+Every solver on the raw design matrix fits the data about a third worse than the
+certified answer does, and no warning is raised by any of them. Then the last two
+lines change one thing — centre and scale $x$ before raising it to powers — and
+$\kappa$ drops from $10^{15}$ to about $10^4$, at which point the residual matches
+NIST's certified value to every digit printed.
+
+The ill-conditioning was never in the data. It was in the basis chosen to
+describe it, where $x^{10}$ ranges over twelve orders of magnitude while $x^0$
+sits at 1. The singular values are what let you see that before trusting a
+number: a diagnostic, not just a description.
+
+## Rank-$k$ truncation is a storage-versus-quality dial you can price
+
+Same decomposition, opposite use. On Filip the small singular values were a
+warning; on a photograph they are an opportunity, because writing
+$A = U\Sigma V^\mathsf{T}$ out term by term turns a matrix into a sum:
+
+$$A = \sum_{i=1}^{r} \sigma_i\, u_i v_i^\mathsf{T},$$
+
+a stack of rank-one layers, each one an outer product weighted by its singular
+value. Keep the first $k$ layers and drop the rest and you have the rank-$k$
+truncation. It is not merely *a* good approximation: it is the best one any
+rank-$k$ matrix can be, in least-squares error — the Eckart–Young theorem, which
+[the companion post on matrix factorisations](../matrix-factorizations/) derives
+as an optimisation problem.
+
+The photograph is `skimage.data.astronaut()`: a NASA photograph of astronaut
+Eileen Collins, taken as mission documentation and in the public domain, shipped
+inside scikit-image so nothing here needs a network. It earns its place by being
+an ordinary photograph rather than a pattern chosen to compress well — a face,
+fabric, hardware and a flat background, with no structure planted in it. In
+grayscale it is one matrix of 512 × 512, or 262,144 bytes raw. How few of those
+does the picture actually need? The answer matters wherever a thumbnail, a
+preview or a slow connection has to decide what to send first.
+
+```{python}
+#| label: fig-rank-grid
+#| fig-cap: "The same photograph at four truncation ranks, against the original. Rank 5 is a handful of bands; by rank 50 the face is unmistakable; rank 100 is close enough that the differences are in texture."
+photo = im.load_image()
+U_p, s_p, Vt_p = im.svd(photo)
+
+ranks_shown = [5, 20, 50, 100]
+fig, axes = plt.subplots(1, 5, figsize=(11.5, 2.6))
+axes[0].imshow(photo, cmap="gray", vmin=0, vmax=255)
+axes[0].set_title("original\n262,144 bytes", fontsize=9)
+for ax, k in zip(axes[1:], ranks_shown):
+    ax.imshow(im.reconstruct(U_p, s_p, Vt_p, k), cmap="gray", vmin=0, vmax=255)
+    stored = im.stored_bytes(*photo.shape, k, im.BYTES_INT16)
+    ax.set_title(f"rank {k}\n{stored:,} bytes  ·  {WIDGET['psnr'][k - 1]:.1f} dB", fontsize=9)
+for ax in axes:
+    ax.set_xticks([]); ax.set_yticks([]); ax.grid(False)
+fig.tight_layout()
+plt.show()
+```
+
+Rank 5 keeps `{python} f"{WIDGET['energy'][4] * 100:.1f}"`% of the matrix's
+squared Frobenius norm and still looks like nothing in particular — a warning
+about energy as a proxy for quality. By rank 50 the photograph is plainly itself.
+What each rank costs has a definite answer: a rank-$k$ truncation means storing
+$U_k$ ($512k$ numbers), $V_k$ (another $512k$) and $k$ singular values, so
+$k(m + n + 1)$ numbers against $mn$ bytes for the raw pixels.
+
+```{python}
+#| label: fig-quality-price
+#| fig-cap: "Left: reconstruction quality against rank, with the elbow of the singular value spectrum marked. Right: what the factors cost, as a fraction of the raw pixel array, under two storage choices. Stored as float32 the factors overtake the original image just past rank 64."
+k_axis = np.arange(1, WIDGET["maxRank"] + 1)
+psnr = np.array(WIDGET["psnr"])
+elbow = WIDGET["elbow"]
+marginal = im.marginal_rank(psnr)
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10.5, 4.2))
+
+ax1.plot(k_axis, psnr, color=PURPLE, lw=2)
+ax1.axvline(elbow, color=TEAL, ls="--", lw=1.4)
+# The curve rises left to right, so the free space is above it on the right and
+# below it on the right. Anchor both labels to the range rather than to psnr[0],
+# which is the minimum.
+lo, hi = psnr[0], psnr[-1]
+ax1.annotate(f"spectrum elbow, k = {elbow}", xy=(elbow, psnr[elbow - 1]),
+             xytext=(elbow + 6, hi - 0.8), color=TEAL, fontsize=9, va="top",
+             arrowprops=dict(arrowstyle="->", color=TEAL))
+ax1.axvline(marginal, color=AMBER, ls=":", lw=1.4)
+ax1.annotate(f"< 0.2 dB per extra rank\nfrom k = {marginal}", xy=(marginal, psnr[marginal - 1]),
+             xytext=(marginal + 20, lo + 4.0), color=AMBER, fontsize=9, va="top",
+             arrowprops=dict(arrowstyle="->", color=AMBER))
+ax1.set_ylim(lo - 1.5, hi + 1.5)
+ax1.set_xlabel("rank $k$"); ax1.set_ylabel("PSNR (dB)")
+ax1.set_title("quality bought", fontsize=11)
+
+ax2.plot(k_axis, np.array(WIDGET["fracF32"]) * 100, color=AMBER, lw=2, label="stored as float32")
+ax2.plot(k_axis, np.array(WIDGET["fracI16"]) * 100, color=TEAL, lw=2, label="stored as int16")
+ax2.axhline(100, color=INK, ls="--", lw=1.2)
+ax2.annotate("raw pixel array", xy=(4, 103), color=INK, fontsize=9)
+ax2.axhline(WIDGET["pngBytes"] / WIDGET["rawBytes"] * 100, color=MUTED, ls=":", lw=1.4)
+ax2.annotate("lossless PNG of the same image", xy=(4, WIDGET["pngBytes"] / WIDGET["rawBytes"] * 100 + 3),
+             color=MUTED, fontsize=9)
+ax2.set_xlabel("rank $k$"); ax2.set_ylabel("storage, % of raw pixels")
+ax2.set_title("price paid", fontsize=11)
+ax2.legend(frameon=False, fontsize=9, loc="upper left")
+
+fig.tight_layout()
+plt.show()
+
+for k in ranks_shown:
+    print(f"k={k:4d}  PSNR {psnr[k - 1]:5.2f} dB   energy {WIDGET['energy'][k - 1] * 100:6.3f}%"
+          f"   int16 {WIDGET['fracI16'][k - 1] * 100:6.1f}% of raw"
+          f"   float32 {WIDGET['fracF32'][k - 1] * 100:6.1f}%")
+```
+
+The left panel shows where the returns stop: the spectrum bends at
+$k = `{python} str(elbow)`$ — the point furthest below a line drawn across the
+first 100 ranks, so it moves if you widen the window — and from
+$k = `{python} str(marginal)`$ onward each extra rank buys under a fifth of a
+decibel. The right panel is the part people skip. Stored naively as float32 the
+factors pass the size of the raw image just past rank 64, and by rank 100 they
+take `{python} f"{WIDGET['fracF32'][99] * 100:.0f}"`% of what you were trying to
+compress. Quantised to int16 — which the widget below does, at a quality cost too
+small to see — rank 50 costs `{python} f"{WIDGET['fracI16'][49] * 100:.0f}"`% of
+raw for `{python} f"{psnr[49]:.1f}"` dB.
+
+::: {.widget-container}
+::: {.widget-header}
+<span class="widget-title">Widget 2 — the rank dial</span>
+<span class="widget-badge">100 triplets, 452 KB</span>
+:::
+<div id="widget-rank"></div>
+<div class="widget-note">The page ships the leading 100 singular triplets, not
+100 images. Every rank you land on is rebuilt in the browser from those factors,
+which is the same trick that makes truncation useful in the first place: the
+generator is far smaller than what it generates.</div>
+:::
+
+### Caveat: this is not JPEG
+
+Truncated SVD is the best rank-$k$ approximation of a matrix. It is not the best
+*image compressor*, and the gap is not close.
+
+```{python}
+#| label: jpeg-comparison
+import io
+from PIL import Image
+
+pil = Image.fromarray(np.round(photo).astype("uint8"))
+buf = io.BytesIO()
+pil.save(buf, format="JPEG", quality=5)
+jpeg_bytes = len(buf.getvalue())
+jpeg_back = np.asarray(Image.open(io.BytesIO(buf.getvalue()))).astype(float)
+
+k_ref = 20
+svd_bytes = im.stored_bytes(*photo.shape, k_ref, im.BYTES_INT16)
+print(f"SVD rank {k_ref}: {svd_bytes:,} bytes, {psnr[k_ref - 1]:.2f} dB")
+print(f"JPEG quality 5: {jpeg_bytes:,} bytes, {im.psnr(photo, jpeg_back):.2f} dB")
+```
+
+JPEG at its worst setting uses about a sixth of the bytes and still scores higher.
+It knows it is compressing an image: it works on local 8 × 8 blocks, discards
+high spatial frequencies the eye barely registers, and entropy-codes the rest.
+The SVD knows only that it has a matrix, and spends its budget on structure
+spanning the whole picture. Reach for truncation when the low-rank structure is
+itself what you care about, not when you want a smaller file.
+
+### The same dial, on ratings
+
+Where low-rank structure *is* the point, the same truncation becomes a model.
+**MovieLens 100k** is 100,000 ratings on a 1–5 scale from real users of the
+MovieLens site, collected by the GroupLens group at the University of Minnesota,
+who ran the service partly to gather exactly this data for recommender research.
+As a matrix it is 943 users by 1,682 films and only about 6% filled — nearly
+every entry is a rating nobody gave. Predicting those wrong costs little each
+time and a lot in aggregate: a recommendation ignored, a film that never
+surfaces.
+
+Truncation belongs here for a reason unrelated to storage. Taste is not
+1,682-dimensional. If a few dozen latent factors explain most of what separates
+viewers, the ratings matrix is *nearly* low rank, and keeping the leading $k$
+layers keeps the signal while dropping one person's mood on one evening. Where
+that boundary sits is empirical, so hold out 10% of the ratings and score
+reconstructions against them.
+
+```{python}
+#| label: fig-movielens
+#| fig-cap: "Held-out RMSE against truncation rank on MovieLens 100k, after removing per-user and per-film offsets. Too few ranks and the model has not learned taste; too many and it is memorising noise in the training ratings."
+ranks_ml = np.array(MOVIES["ranks"])
+rmse_ml = np.array(MOVIES["rmse"])
+
+fig, ax = plt.subplots(figsize=(7.2, 4.0))
+ax.semilogx(ranks_ml, rmse_ml, "o-", color=PURPLE, lw=1.8, ms=5)
+ax.axhline(MOVIES["baseline_rmse"], color=MUTED, ls="--", lw=1.3)
+ax.annotate("baseline: user + film offsets only", xy=(1.15, MOVIES["baseline_rmse"] + 0.0012),
+            color=MUTED, fontsize=9)
+ax.scatter([MOVIES["best_rank"]], [MOVIES["best_rmse"]], s=90, facecolor="none",
+           edgecolor=TEAL, lw=2, zorder=5)
+ax.annotate(f"best: k = {MOVIES['best_rank']}, RMSE {MOVIES['best_rmse']:.4f}",
+            xy=(MOVIES["best_rank"], MOVIES["best_rmse"]),
+            xytext=(210, MOVIES["best_rmse"] - 0.0011), ha="right",
+            color=TEAL, fontsize=9.5, arrowprops=dict(arrowstyle="->", color=TEAL))
+ax.set_xlabel("truncation rank $k$"); ax.set_ylabel("held-out RMSE (stars)")
+ax.set_xticks([1, 3, 10, 30, 100, 200]); ax.set_xticklabels([1, 3, 10, 30, 100, 200])
+fig.tight_layout()
+plt.show()
+
+print(f"{MOVIES['n_train']:,} train / {MOVIES['n_test']:,} test ratings, "
+      f"{MOVIES['density'] * 100:.1f}% of the matrix observed")
+```
+
+The curve is a U, and that is the point. The photograph's PSNR rose forever,
+because there the target was the matrix itself. Here the target is ratings the
+model has never seen, so past $k = `{python} str(MOVIES['best_rank'])`$ the extra
+layers fit the training ratings better and the held-out ratings worse. Rank has
+stopped being a compression setting and become a capacity knob.
+
+### The same dial, on ill-posed systems
+
+Filip's tiny singular values return here. Solving $Ax = b$ through the SVD means
+computing $x = \sum_i (u_i^\mathsf{T}b / \sigma_i) v_i$, and dividing by a
+$\sigma_i$ of $4 \times 10^{-6}$ amplifies whatever noise sits in that direction
+by a quarter of a million. Dropping the terms whose $\sigma_i$ falls below a
+threshold is what `np.linalg.pinv` does by default — the same operation as
+dropping image layers, aimed at stability instead of storage. It trades a little
+bias for an answer that does not move when the data twitches, which is why it has
+a name of its own in the inverse problems literature: truncated SVD
+regularisation.
+
+## Squaring the matrix to compute it throws away half your digits
+
+The derivation above reads like a recipe: form $A^\mathsf{T}A$, diagonalise it,
+take square roots. Nobody does this, and Filip shows why in one line of output.
+
+Squaring a matrix squares its condition number. If $A$ has singular values
+$\sigma_i$ then $A^\mathsf{T}A$ has eigenvalues $\sigma_i^2$, so
+$\kappa(A^\mathsf{T}A) = \kappa(A)^2$: a matrix merely awkward at $\kappa = 10^8$
+becomes unsolvable at $10^{16}$. The damage lands where it is least visible, on
+the small singular values — precisely where rank and regularisation decisions get
+made.
+
+```{python}
+#| label: ata-precision
+sigma_svd = np.linalg.svd(A_f, compute_uv=False)
+sigma_ata = np.sqrt(np.clip(np.linalg.eigvalsh(A_f.T @ A_f), 0, None))[::-1]
+
+print(f"kappa(A)      = {np.linalg.cond(A_f):.3e}")
+print(f"kappa(AᵀA)    = {np.linalg.cond(A_f.T @ A_f):.3e}\n")
+print(f"{'i':>3s} {'np.linalg.svd':>16s} {'via eigh(AᵀA)':>16s} {'relative error':>15s}")
+for i in (0, 4, 7, 8, 9, 10):
+    rel = abs(sigma_ata[i] - sigma_svd[i]) / sigma_svd[i]
+    print(f"{i + 1:3d} {sigma_svd[i]:16.6e} {sigma_ata[i]:16.6e} {rel:15.2e}")
+```
+
+The largest singular value survives to full precision. The smallest does not
+survive at all: routed through $A^\mathsf{T}A$ it comes back as exactly zero, so
+the matrix looks rank-deficient when it is not, while $\sigma_{10}$ is too large
+by a factor of several hundred. Any rank decision taken from that column would be
+wrong. Working on $A$ directly, `np.linalg.svd` puts $\sigma_{11}$ at
+`{python} f"{sigma_svd[-1]:.3e}"` — small, but real.
+
+LAPACK never forms $A^\mathsf{T}A$. It squeezes $A$ into bidiagonal form using
+Householder reflections — orthogonal, so they leave every length and therefore
+every singular value untouched — and only then diagonalises, iteratively, on the
+bidiagonal matrix.
+
+```{mermaid}
+%%| label: fig-algorithm
+%%| fig-cap: "How a dense SVD is actually computed. Every arrow on the top row is an orthogonal transformation, so the singular values are identical at each stage; the condition number is never squared."
+flowchart LR
+  A["<b>A</b><br/>m × n, dense"] -->|"Householder reflections<br/>left and right"| B["<b>B</b><br/>bidiagonal<br/>same singular values"]
+  B -->|"implicit QR sweeps<br/>(Golub–Kahan)"| S["<b>Σ</b><br/>diagonal"]
+  B -.->|"reflections<br/>accumulated"| UV["<b>U</b>, <b>V</b><br/>orthogonal factors"]
+  S --> R["A = UΣVᵀ"]
+  UV --> R
+```
+
+Which algorithm you want depends on how much of the decomposition you need.
+
+| method | cost | when to use it |
+|---|---|---|
+| full SVD — `np.linalg.svd`, LAPACK `gesdd` | $O(mn \min(m, n))$ | you need every singular value, or the full $U$ and $V$, and the matrix fits in memory |
+| eigendecomposition of $A^\mathsf{T}A$ | $O(mn^2 + n^3)$, at $\kappa^2$ | effectively never — the cost saving is small and the accuracy loss is the one shown above |
+| Lanczos — `scipy.sparse.linalg.svds` | $O(k \cdot \mathrm{nnz}(A))$ per restart | $k \ll n$ and the matrix is sparse, or reachable only as a matrix–vector product |
+| randomized SVD — `sklearn.utils.extmath.randomized_svd` | $O(mnk)$ | $k \ll n$, dense and large, and a small probabilistic error on the trailing singular values is acceptable |
+
+The bottom two rows are why a recommender on a hundred million ratings is
+tractable at all: nobody needs all 512 layers of the photograph, and nobody needs
+all 943 of MovieLens.
+
+## Back to the photograph
+
+The claim at the top was that a photograph is mostly redundant, that one
+factorisation finds the redundancy without being told what a face is, and that
+the trade can be priced. All three are now numbers. The elbow of this image's
+spectrum sits at rank
+`{python} str(elbow)` out of 512, and a rank-`{python} str(elbow)` reconstruction
+holds `{python} f"{WIDGET['energy'][elbow - 1] * 100:.1f}"`% of the matrix's
+squared norm and `{python} f"{psnr[elbow - 1]:.1f}"` dB of quality for
+`{python} f"{WIDGET['fracI16'][elbow - 1] * 100:.1f}"`% of the raw bytes, a
+compression ratio of
+`{python} f"{WIDGET['rawBytes'] / im.stored_bytes(512, 512, elbow, im.BYTES_INT16):.1f}"`×
+chosen by nothing but the size of the singular values. Push to rank
+50 and you get `{python} f"{psnr[49]:.1f}"` dB at
+`{python} f"{WIDGET['fracI16'][49] * 100:.0f}"`% of raw, which is where the dial
+stops being generous.
+
+The pricing cuts both ways, and that is the honest ending. A lossless PNG of the
+same photograph is `{python} f"{WIDGET['pngBytes'] / WIDGET['rawBytes'] * 100:.0f}"`%
+of raw with *no* quality lost, and JPEG beats every rank on this chart. What the
+SVD gives you is not the smallest file. It is one ordering of a matrix's
+structure, strongest first, that answers three questions with the same
+arithmetic: which layers to keep, which directions a solver will destroy, and how
+many latent factors a taste model supports before it starts memorising. The
+circle became an ellipse; everything after that was reading off the axes.
+
+## Data and attribution
+
+**Photograph** — `skimage.data.astronaut()`, distributed with
+[scikit-image](https://scikit-image.org/). A NASA photograph of astronaut Eileen
+Collins, in the public domain as a work of the US federal government. Used here
+converted to grayscale at its native 512 × 512.
+
+**Filip** — [NIST Statistical Reference Datasets](https://www.itl.nist.gov/div898/strd/lls/data/Filip.shtml),
+Linear Least Squares collection; data contributed by A. Filippelli, NIST.
+Certified values computed by NIST in multiple precision. A work of the US federal
+government, in the public domain. The 82-observation file is cached in this
+post's `assets/` directory exactly as published.
+
+**MovieLens 100k** — [GroupLens Research](https://grouplens.org/datasets/movielens/100k/),
+University of Minnesota; F. M. Harper and J. A. Konstan, "The MovieLens
+Datasets: History and Context", *ACM TiiS* 5(4), 2015. GroupLens' terms do not
+permit redistribution, so the raw archive is downloaded on demand into a
+gitignored directory and **is not committed**; only the derived RMSE curve in
+`widget-data/movielens.json` is.
+
+Both widgets, the figures and the prose read the same committed payload, so a
+number here cannot disagree with a number on a slider. Regenerating everything is
+documented in this post's `README.md`.
+
+```{python}
+#| label: widget-injection
+#| echo: false
+#| output: asis
+# Inline the widget payload and the widget code into the page. Doing it here,
+# rather than through a `resources:` fetch, is what lets the widgets work from a
+# file:// copy of the page with no server at all.
+#
+# NOTE: Quarto keys frozen output on an md5 of index.qmd alone, so editing
+# widgets.js or widget-data/*.json does NOT invalidate _freeze/ and a project
+# render will keep serving the old bundle. After changing either, re-render this
+# post explicitly (or delete _freeze/posts/svd-rotate-stretch-rotate/) before
+# committing.
+payload = {
+    "image": json.loads(Path("widget-data/image.json").read_text()),
+    "movielens": json.loads(Path("widget-data/movielens.json").read_text()),
+}
+js_code = Path("widgets.js").read_text()
+
+print("```{=html}")
+print('<script id="svd-data" type="application/json">'
+      + json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
+      + "</script>")
+print("<script>" + js_code + "</script>")
+print("```")
+```
