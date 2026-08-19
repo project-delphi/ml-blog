@@ -180,7 +180,12 @@ def elbow(s: np.ndarray, limit: int = MAX_RANK) -> int:
 
 
 def marginal_rank(psnr_curve: np.ndarray, threshold: float = 0.2) -> int:
-    """First rank whose next rank buys less than ``threshold`` dB.
+    """First rank from which *every* later rank buys less than ``threshold`` dB.
+
+    The post claims diminishing returns hold "from k onward", which is stronger
+    than the first rank to dip below the threshold -- a curve can dip, recover,
+    and dip again. So this looks for the last rank that still pays and returns
+    the one after it.
 
     Unlike :func:`elbow` this needs no window, so the post leans on it for the
     claim about diminishing returns and uses the elbow only to mark the figure.
@@ -190,8 +195,10 @@ def marginal_rank(psnr_curve: np.ndarray, threshold: float = 0.2) -> int:
         threshold: Decibels per extra rank below which returns are "diminishing".
 
     Returns:
-        The 1-indexed rank at which the gain first falls below ``threshold``.
+        The 1-indexed rank from which no further rank gains ``threshold`` dB.
+        ``1`` if no rank ever does.
     """
+    # gains[j] is what moving from rank j+1 to rank j+2 buys.
     gains = np.diff(psnr_curve)
-    below = np.flatnonzero(gains < threshold)
-    return int(below[0] + 2) if below.size else int(psnr_curve.size)
+    paying = np.flatnonzero(gains >= threshold)
+    return int(paying[-1] + 3) if paying.size else 1

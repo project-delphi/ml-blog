@@ -9,7 +9,8 @@ image: "./cover.png"
 description: "Every matrix turns space, stretches it, and turns it again — and that one fact prices image compression in decibels per byte, predicts when a solver will return garbage, and explains why nobody computes the SVD from A-transpose-A. With two widgets you can drive yourself."
 jupyter: svd-blog
 resources:
-  - widget-data
+  # widget-data is deliberately NOT listed: the payload is inlined into the page
+  # at render time, so a published copy would be 462 KB nothing ever reads.
   - cover.png
 execute:
   warning: false
@@ -416,11 +417,15 @@ $k(m + n + 1)$ numbers against $mn$ bytes for the raw pixels.
 
 ```{python}
 #| label: fig-quality-price
-#| fig-cap: "Left: reconstruction quality against rank, with the elbow of the singular value spectrum marked. Right: what the factors cost, as a fraction of the raw pixel array, under two storage choices. Stored as float32 the factors overtake the original image just past rank 64."
+#| fig-cap: "Left: reconstruction quality against rank, with the elbow of the singular value spectrum marked. Right: what the factors cost, as a fraction of the raw pixel array, under two storage choices. The float32 line crosses the raw-pixel baseline inside this range, so past that point the factorisation saves nothing."
 k_axis = np.arange(1, WIDGET["maxRank"] + 1)
 psnr = np.array(WIDGET["psnr"])
 elbow = WIDGET["elbow"]
 marginal = im.marginal_rank(psnr)
+
+# The rank at which float32 factors stop saving anything at all. Derived, so it
+# cannot go stale if the image or MAX_RANK changes.
+crossover = int(np.flatnonzero(np.array(WIDGET["fracF32"]) >= 1.0)[0] + 1)
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10.5, 4.2))
 
@@ -466,8 +471,8 @@ $k = `{python} str(elbow)`$ — the point furthest below a line drawn across the
 first 100 ranks, so it moves if you widen the window — and from
 $k = `{python} str(marginal)`$ onward each extra rank buys under a fifth of a
 decibel. The right panel is the part people skip. Stored naively as float32 the
-factors pass the size of the raw image just past rank 64, and by rank 100 they
-take `{python} f"{WIDGET['fracF32'][99] * 100:.0f}"`% of what you were trying to
+factors reach the size of the raw image at rank `{python} str(crossover)`, and by
+rank 100 they take `{python} f"{WIDGET['fracF32'][99] * 100:.0f}"`% of what you were trying to
 compress. Quantised to int16 — which the widget below does, at a quality cost too
 small to see — rank 50 costs `{python} f"{WIDGET['fracI16'][49] * 100:.0f}"`% of
 raw for `{python} f"{psnr[49]:.1f}"` dB.
@@ -705,10 +710,14 @@ payload = {
 }
 js_code = Path("widgets.js").read_text()
 
+# Both the data and the code get the same guard. A literal `</` anywhere in
+# either -- `h()` accepts an `html:` key, so it only takes one innerHTML string
+# -- would close the inline <script> early and kill both widgets with no build
+# error. `<\/` is valid inside a JS string literal and inside a regex.
 print("```{=html}")
 print('<script id="svd-data" type="application/json">'
       + json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
       + "</script>")
-print("<script>" + js_code + "</script>")
+print("<script>" + js_code.replace("</", "<\\/") + "</script>")
 print("```")
 ```
