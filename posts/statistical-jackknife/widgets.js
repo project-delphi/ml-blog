@@ -372,20 +372,19 @@ const JK = (function () {
       // Charge each account the credits it caused: its own signup bonus plus one
       // bonus per referee it recruited. The hub's referral count tracks the bot slider,
       // so its cost is the whole syndicate's payout, not a single $20 credit.
-      activeUsers.forEach(u => {
+      const priced = activeUsers.map(u => {
         const referrals = u.type === "syndicate_hub" ? botSpokes : (u.referrals || 0);
-        u.referrals = referrals;
-        u.promo_cost = bonus * (1 + referrals);
+        return { ...u, referrals, promo_cost: bonus * (1 + referrals) };
       });
 
-      const n = activeUsers.length;
-      const totalPromo = activeUsers.reduce((s, u) => s + u.promo_cost, 0);
-      const totalSpend = activeUsers.reduce((s, u) => s + u.net_spend, 0);
+      const n = priced.length;
+      const totalPromo = priced.reduce((s, u) => s + u.promo_cost, 0);
+      const totalSpend = priced.reduce((s, u) => s + u.net_spend, 0);
       const clusterRatio = totalSpend > 0 ? (totalPromo / totalSpend) : 999;
 
       // Leave-one-out
-      const results = activeUsers.map((u, idx) => {
-        const sub = activeUsers.filter((_, i) => i !== idx);
+      const results = priced.map((u, idx) => {
+        const sub = priced.filter((_, i) => i !== idx);
         const subP = sub.reduce((s, x) => s + x.promo_cost, 0);
         const subS = sub.reduce((s, x) => s + x.net_spend, 0);
         const subR = subS > 0 ? (subP / subS) : 999;
@@ -534,8 +533,10 @@ const JK = (function () {
         const base = (gene.tumor_mean - gene.normal_mean) + (Math.sin(i * 3 + gene.name.length) * gene.std);
         diffs.push(base);
       }
-      if (injectOutlier && gene.name === "LINC009") {
-        diffs[14] = 12.5; // Inject massive outlier in patient 15
+      // A gene declaring an outlier patient in the data file gets that patient's
+      // reading replaced when the artifact is injected. Genes without one are untouched.
+      if (injectOutlier && gene.outlier_patient !== undefined) {
+        diffs[gene.outlier_patient] = gene.outlier_val;
       }
 
       const meanLFC = diffs.reduce((s, v) => s + v, 0) / n;
@@ -733,7 +734,7 @@ const JK = (function () {
         style: { marginTop: "0.8rem", fontSize: "0.88rem", color: C.ink },
         html: statType === "mean"
           ? `<strong>Smooth Response:</strong> When leaving out observations from the mean, each point creates a gentle, continuous shift proportional to its distance from the sample mean. The influence function is differentiable.`
-          : `<strong>Discontinuous Jumps:</strong> For the median, dropping points that are not adjacent to the center produces a change of exactly <strong>0.00</strong>, while dropping a central point causes an abrupt step jump. The jackknife variance formula fails because the sample median lacks Fréchet differentiability.`
+          : `<strong>Discontinuous Jumps:</strong> For the median, every point outside the centre moves the estimate by exactly the same <strong>\u00b10.20</strong> \u2014 the gap between two neighbouring central values \u2014 no matter how extreme it is, while dropping the central point itself changes nothing at all (<strong>0.00</strong>). The leave-one-out spread has stopped measuring influence, so the jackknife variance formula fails: the sample median lacks Fr\u00e9chet differentiability.`
       });
       canvasWrap.appendChild(expl);
     }
