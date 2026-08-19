@@ -10,7 +10,6 @@ description: "Why statistical significance does not imply biological importance,
 jupyter: volcano-blog
 resources:
   - cover.png
-  - data/airway_de_results.csv
 execute:
   warning: false
 format:
@@ -90,10 +89,12 @@ change; 300 deeply measured features whose shift is real but tiny — 6% to 32% 
 standard errors are small enough to make it overwhelmingly significant; and 150 genuine
 responders, moving 3- to 16-fold, which are the only features we want back.
 
-Each feature gets four replicates per group and an ordinary two-sample $t$-test. Then we
-hand each of three selection rules the same budget — the number of candidates the dual
-filter picks, so nobody wins by simply choosing more — and count how many of the 150
-genuine responders each rule recovers.
+Each feature is measured in four replicates per group and gets an ordinary two-sample
+$t$-test, with the variance estimated from those four rather than assumed — so a feature
+can clear the bar on a sample variance that came out small by luck, which is a failure
+mode the post comes back to. Then we hand each of three selection rules the same budget —
+the number of candidates the dual filter picks, so nobody wins by simply choosing more —
+and count how many of the 150 genuine responders each rule recovers.
 
 ```{python}
 #| label: fig-rankings
@@ -103,26 +104,34 @@ N, N_TRUE, N_MICRO, N_REP = 3000, 150, 300, 4
 n_noisy = round(0.30 * (N - N_TRUE - N_MICRO))
 n_null = N - N_TRUE - N_MICRO - n_noisy
 
-def block(size, lfc_lo, lfc_hi, se_lo, se_hi):
-    """Signed true log2 fold changes and standard errors for one population."""
+def block(size, lfc_lo, lfc_hi, sd_lo, sd_hi):
+    """Signed true log2 fold changes and per-replicate noise SDs for one population."""
     lfc = rng.choice([-1.0, 1.0], size) * rng.uniform(lfc_lo, lfc_hi, size)
-    return lfc, rng.uniform(se_lo, se_hi, size)
+    return lfc, rng.uniform(sd_lo, sd_hi, size)
 
-populations = [                        # (label, true |log2FC| range, SE range)
-    (n_null,  0.00, 0.00, 0.15, 0.45),  # unchanged background
-    (n_noisy, 0.00, 0.00, 0.80, 1.80),  # low-count, high-variance
-    (N_MICRO, 0.08, 0.40, 0.02, 0.07),  # real but negligible, measured precisely
-    (N_TRUE,  1.50, 4.00, 0.20, 0.50),  # genuine responders
+populations = [                        # (count, true |log2FC| range, per-replicate SD)
+    (n_null,  0.00, 0.00, 0.21, 0.64),  # unchanged background
+    (n_noisy, 0.00, 0.00, 1.13, 2.55),  # low-count, high-variance
+    (N_MICRO, 0.08, 0.40, 0.03, 0.10),  # real but negligible, measured precisely
+    (N_TRUE,  1.50, 4.00, 0.28, 0.71),  # genuine responders
 ]
 drawn = [block(*p) for p in populations]
 true_lfc = np.concatenate([d[0] for d in drawn])
-se = np.concatenate([d[1] for d in drawn])
+sd = np.concatenate([d[1] for d in drawn])
 kind = np.concatenate([np.full(p[0], i) for i, p in enumerate(populations)])
 is_real = kind == 3
 
-obs = true_lfc + rng.normal(0, se)                      # observed log2 fold change
-t_stat = obs / (se / np.sqrt(N_REP))                    # two-sample t statistic
-p_vals = np.clip(2 * stats.t.sf(np.abs(t_stat), df=2 * N_REP - 2), 1e-16, 1.0)
+# Measure every feature in N_REP replicates per group and run a real two-sample
+# t-test on the draws. Simulating the replicates rather than assuming a known
+# standard error is what makes the variance itself an estimate -- so a feature
+# can clear the bar on a lucky small sample variance, which is the failure the
+# post is about, and so adding replicates tightens the estimate instead of
+# merely shrinking a denominator.
+ctrl = rng.normal(0.0, sd[:, None], (N, N_REP))
+treat = rng.normal(true_lfc[:, None], sd[:, None], (N, N_REP))
+obs = treat.mean(axis=1) - ctrl.mean(axis=1)            # observed log2 fold change
+t_stat, p_raw = stats.ttest_ind(treat, ctrl, axis=1)
+p_vals = np.clip(p_raw, 1e-16, 1.0)
 neg_log_p = -np.log10(p_vals)
 
 LFC_CUT, SIG_CUT = 1.0, 2.0                             # |log2FC| >= 1, p <= 0.01
@@ -158,18 +167,17 @@ for name, picked in selections.items():
 ```
 
 Teal is a genuine responder, amber an impostor. All three rules spent the same budget of
-213 candidates. Effect size alone returned 114 of the 150 responders, padded with 99
-low-count artifacts. Significance alone did slightly worse — 104 responders, alongside
-109 features whose shift is real, certain, and far too small to act on. Requiring both
-gates returned 148 of the 150, at 69% precision against 54% and 49%.
+154 candidates. Effect size alone returned 97 of the 150 responders, padded with 57
+low-count artifacts. Significance alone did worse — 68 responders, alongside 85 features
+whose shift is real, certain, and far too small to act on. Requiring both gates returned
+140 of the 150, at 91% precision against 63% and 44%.
 
-The impostors each rule admits say why. Effect-size ranking took 99 noisy features and
-not one negligible-but-certain feature; significance ranking took 109 of the negligible
-ones and not a single noisy one. Each rule is blind along exactly the axis it does not
-use. Requiring both gates still leaves 65 impostors — 56 low-count features and nine
-unchanged background ones that cleared a $p \le 0.01$ bar by luck across 3,000 tests.
-That residue is what multiple-testing control is for, and it is the last thing this post
-fixes.
+The impostors each rule admits say why. Effect-size ranking took 57 noisy features and not
+one negligible-but-certain feature; significance ranking took 85 of the negligible ones
+and not a single noisy one. Each rule is blind along exactly the axis it does not use.
+Requiring both gates still leaves 14 impostors — nine low-count features and five
+unchanged background ones that cleared a $p \le 0.01$ bar by luck across 3,000 tests. That
+residue is what multiple-testing control is for, and it is the last thing this post fixes.
 
 ## The gates are yours to move
 
@@ -192,11 +200,13 @@ same budget, handed to each rule in turn.
 Four things are worth doing to it before reading on. Drag the significance gate to zero:
 the filter degenerates into effect-size ranking and the amber low-count wings flood in.
 Drag the effect-size gate to zero instead and the plum band of negligible-but-certain
-features climbs into the selection. Raise the replicate count to 12 and watch that band
-rise straight up the plot — more data does not shrink a small effect, it only measures it
-better. And switch the vertical axis from raw $p$ to a Benjamini–Hochberg $q$, which is
-what turns a threshold picked by convention into one with a false-discovery guarantee
-behind it.
+features climbs into the selection. Raise the replicate count to 12 and watch two things
+happen at once: the plum band climbs straight up while staying exactly as far from the
+centre, because more data does not shrink a small effect, it only measures it better — and
+the amber wings pull inward, because more data *does* shrink an apparent effect that was
+only ever noise. And switch the vertical axis from raw $p$ to a Benjamini–Hochberg $q$,
+which is what turns a threshold picked by convention into one with a false-discovery
+guarantee behind it.
 
 ## Microarray genomics forced dual filtering into existence
 
@@ -339,7 +349,7 @@ adjust_text([ax.text(r["log2_fold_change"], r["neg_log10_padj"], r["gene_symbol"
 ax.set_xlabel("Effect size: $\\log_2(\\mathrm{Fold\\,Change})$ [dexamethasone / untreated]")
 ax.set_ylabel("Significance: $-\\log_{10}(q)$, Benjamini–Hochberg")
 ax.set_title("Airway smooth muscle response to dexamethasone (GSE52778)", fontsize=11)
-ax.set_xlim(-6.5, 9.0)
+ax.set_xlim(-6.5, 10.0)
 ax.set_ylim(-2, 145)
 ax.legend(loc="upper right", fontsize=8.5, frameon=True, facecolor="white", edgecolor=RULE)
 plt.tight_layout()
@@ -398,7 +408,7 @@ for y in (-LFC_CUT, LFC_CUT):
 ax_m.set_xlabel("$\\log_{10}(\\mathrm{mean\\,normalised\\,expression})$")
 ax_m.set_ylabel("$\\log_2(\\mathrm{Fold\\,Change})$")
 ax_m.set_title("MA: the low-count funnel", fontsize=10)
-ax_m.set_ylim(-6.5, 9.0)
+ax_m.set_ylim(-6.5, 10.0)
 ax_m.legend(loc="upper right", fontsize=8, frameon=True, facecolor="white", edgecolor=RULE)
 plt.tight_layout()
 plt.show()
@@ -430,9 +440,9 @@ act on. The vocabulary changes; the plane does not.
 ## When to plot the volcano
 
 The claim at the top was that neither axis is safe alone: effect size picks up noise,
-significance picks up trivia. The simulation put numbers on it — given 213 candidates to
-spend, the two one-dimensional rules found 114 and 104 of the 150 real responders, both
-gates together 148 — and the airway data showed the same rule recovering a drug programme
+significance picks up trivia. The simulation put numbers on it — given 154 candidates to
+spend, the two one-dimensional rules found 97 and 68 of the 150 real responders, both
+gates together 140 — and the airway data showed the same rule recovering a drug programme
 that took the field years to assemble gene by gene.
 
 What makes it work is that it is an explicit two-dimensional decision rule, written where

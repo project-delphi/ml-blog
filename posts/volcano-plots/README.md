@@ -62,6 +62,13 @@ shifts, genuine responders), runs a real two-sample $t$-test per feature and a
 Benjamini–Hochberg adjustment, and recomputes all of it as the reader moves a
 control. The scatter is a `<canvas>`; the controls are plain DOM.
 
+`draw` fixes the populations; `test` draws the replicates. That split matters:
+the replicate count has to buy a genuinely tighter estimate, so raising it lifts
+the micro-shift band without moving it sideways and pulls the low-count wings
+back in. Each feature draws from its own stream in order, so going from 4 to 6
+replicates keeps the first four measurements and adds two — the same experiment
+continued, not a fresh one.
+
 The simulation core (`VolcanoSim`) touches no DOM and exports itself under
 CommonJS, so `node` can drive it directly:
 
@@ -74,9 +81,11 @@ node -e '
 '
 ```
 
-That is how its two statistical pieces were checked: the two-sided Student-$t$
-tail agrees with `scipy.stats.t.sf` to 4e-13 relative, and the BH adjustment
-matches `statsmodels`' `multipletests(method="fdr_bh")` exactly.
+That is how its statistical pieces were checked: the two-sided Student-$t$ tail
+agrees with `scipy.stats.t.sf` to 1.5e-12 relative over a grid of $df$ and $t$;
+the BH adjustment matches `statsmodels`' `multipletests(method="fdr_bh")` to
+2e-16 over 3,000 tests; and the null features come out calibrated — 1.1% of the
+truly-unchanged background clears $p \le 0.01$ at four replicates.
 
 The static three-panel figure above the widget makes the same point from the
 same four populations, so a reader with scripts disabled loses the interaction

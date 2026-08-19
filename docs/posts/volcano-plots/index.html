@@ -253,7 +253,7 @@ window.Quarto = {
 <section id="one-dimensional-rankings-pick-the-wrong-features" class="level2">
 <h2 class="anchored" data-anchor-id="one-dimensional-rankings-pick-the-wrong-features">One-dimensional rankings pick the wrong features</h2>
 <p>The failure is easiest to see in a screen where you know the answer. So we simulate one with four kinds of feature in it, which between them cover what a real assay contains: 1,785 unchanged background features with moderate noise; 765 low-abundance features that are also unchanged, but so noisy that chance alone throws them a large apparent fold change; 300 deeply measured features whose shift is real but tiny — 6% to 32% — and whose standard errors are small enough to make it overwhelmingly significant; and 150 genuine responders, moving 3- to 16-fold, which are the only features we want back.</p>
-<p>Each feature gets four replicates per group and an ordinary two-sample <span class="math inline">\(t\)</span>-test. Then we hand each of three selection rules the same budget — the number of candidates the dual filter picks, so nobody wins by simply choosing more — and count how many of the 150 genuine responders each rule recovers.</p>
+<p>Each feature is measured in four replicates per group and gets an ordinary two-sample <span class="math inline">\(t\)</span>-test, with the variance estimated from those four rather than assumed — so a feature can clear the bar on a sample variance that came out small by luck, which is a failure mode the post comes back to. Then we hand each of three selection rules the same budget — the number of candidates the dual filter picks, so nobody wins by simply choosing more — and count how many of the 150 genuine responders each rule recovers.</p>
 <div id="cell-fig-rankings" class="cell" data-execution_count="2">
 <details open="" class="code-fold">
 <summary>Code</summary>
@@ -262,58 +262,66 @@ window.Quarto = {
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>n_noisy <span class="op">=</span> <span class="bu">round</span>(<span class="fl">0.30</span> <span class="op">*</span> (N <span class="op">-</span> N_TRUE <span class="op">-</span> N_MICRO))</span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>n_null <span class="op">=</span> N <span class="op">-</span> N_TRUE <span class="op">-</span> N_MICRO <span class="op">-</span> n_noisy</span>
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> block(size, lfc_lo, lfc_hi, se_lo, se_hi):</span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""Signed true log2 fold changes and standard errors for one population."""</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> block(size, lfc_lo, lfc_hi, sd_lo, sd_hi):</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""Signed true log2 fold changes and per-replicate noise SDs for one population."""</span></span>
 <span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>    lfc <span class="op">=</span> rng.choice([<span class="op">-</span><span class="fl">1.0</span>, <span class="fl">1.0</span>], size) <span class="op">*</span> rng.uniform(lfc_lo, lfc_hi, size)</span>
-<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> lfc, rng.uniform(se_lo, se_hi, size)</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> lfc, rng.uniform(sd_lo, sd_hi, size)</span>
 <span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>populations <span class="op">=</span> [                        <span class="co"># (label, true |log2FC| range, SE range)</span></span>
-<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>    (n_null,  <span class="fl">0.00</span>, <span class="fl">0.00</span>, <span class="fl">0.15</span>, <span class="fl">0.45</span>),  <span class="co"># unchanged background</span></span>
-<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>    (n_noisy, <span class="fl">0.00</span>, <span class="fl">0.00</span>, <span class="fl">0.80</span>, <span class="fl">1.80</span>),  <span class="co"># low-count, high-variance</span></span>
-<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>    (N_MICRO, <span class="fl">0.08</span>, <span class="fl">0.40</span>, <span class="fl">0.02</span>, <span class="fl">0.07</span>),  <span class="co"># real but negligible, measured precisely</span></span>
-<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>    (N_TRUE,  <span class="fl">1.50</span>, <span class="fl">4.00</span>, <span class="fl">0.20</span>, <span class="fl">0.50</span>),  <span class="co"># genuine responders</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>populations <span class="op">=</span> [                        <span class="co"># (count, true |log2FC| range, per-replicate SD)</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>    (n_null,  <span class="fl">0.00</span>, <span class="fl">0.00</span>, <span class="fl">0.21</span>, <span class="fl">0.64</span>),  <span class="co"># unchanged background</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>    (n_noisy, <span class="fl">0.00</span>, <span class="fl">0.00</span>, <span class="fl">1.13</span>, <span class="fl">2.55</span>),  <span class="co"># low-count, high-variance</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>    (N_MICRO, <span class="fl">0.08</span>, <span class="fl">0.40</span>, <span class="fl">0.03</span>, <span class="fl">0.10</span>),  <span class="co"># real but negligible, measured precisely</span></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>    (N_TRUE,  <span class="fl">1.50</span>, <span class="fl">4.00</span>, <span class="fl">0.28</span>, <span class="fl">0.71</span>),  <span class="co"># genuine responders</span></span>
 <span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>]</span>
 <span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>drawn <span class="op">=</span> [block(<span class="op">*</span>p) <span class="cf">for</span> p <span class="kw">in</span> populations]</span>
 <span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>true_lfc <span class="op">=</span> np.concatenate([d[<span class="dv">0</span>] <span class="cf">for</span> d <span class="kw">in</span> drawn])</span>
-<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>se <span class="op">=</span> np.concatenate([d[<span class="dv">1</span>] <span class="cf">for</span> d <span class="kw">in</span> drawn])</span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>sd <span class="op">=</span> np.concatenate([d[<span class="dv">1</span>] <span class="cf">for</span> d <span class="kw">in</span> drawn])</span>
 <span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>kind <span class="op">=</span> np.concatenate([np.full(p[<span class="dv">0</span>], i) <span class="cf">for</span> i, p <span class="kw">in</span> <span class="bu">enumerate</span>(populations)])</span>
 <span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>is_real <span class="op">=</span> kind <span class="op">==</span> <span class="dv">3</span></span>
 <span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>obs <span class="op">=</span> true_lfc <span class="op">+</span> rng.normal(<span class="dv">0</span>, se)                      <span class="co"># observed log2 fold change</span></span>
-<span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a>t_stat <span class="op">=</span> obs <span class="op">/</span> (se <span class="op">/</span> np.sqrt(N_REP))                    <span class="co"># two-sample t statistic</span></span>
-<span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a>p_vals <span class="op">=</span> np.clip(<span class="dv">2</span> <span class="op">*</span> stats.t.sf(np.<span class="bu">abs</span>(t_stat), df<span class="op">=</span><span class="dv">2</span> <span class="op">*</span> N_REP <span class="op">-</span> <span class="dv">2</span>), <span class="fl">1e-16</span>, <span class="fl">1.0</span>)</span>
-<span id="cb1-26"><a href="#cb1-26" aria-hidden="true" tabindex="-1"></a>neg_log_p <span class="op">=</span> <span class="op">-</span>np.log10(p_vals)</span>
-<span id="cb1-27"><a href="#cb1-27" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-28"><a href="#cb1-28" aria-hidden="true" tabindex="-1"></a>LFC_CUT, SIG_CUT <span class="op">=</span> <span class="fl">1.0</span>, <span class="fl">2.0</span>                             <span class="co"># |log2FC| &gt;= 1, p &lt;= 0.01</span></span>
-<span id="cb1-29"><a href="#cb1-29" aria-hidden="true" tabindex="-1"></a>dual <span class="op">=</span> (np.<span class="bu">abs</span>(obs) <span class="op">&gt;=</span> LFC_CUT) <span class="op">&amp;</span> (neg_log_p <span class="op">&gt;=</span> SIG_CUT)</span>
-<span id="cb1-30"><a href="#cb1-30" aria-hidden="true" tabindex="-1"></a>budget <span class="op">=</span> <span class="bu">int</span>(dual.<span class="bu">sum</span>())</span>
-<span id="cb1-31"><a href="#cb1-31" aria-hidden="true" tabindex="-1"></a>selections <span class="op">=</span> {</span>
-<span id="cb1-32"><a href="#cb1-32" aria-hidden="true" tabindex="-1"></a>    <span class="st">"Effect size alone"</span>: np.argsort(<span class="op">-</span>np.<span class="bu">abs</span>(obs))[:budget],</span>
-<span id="cb1-33"><a href="#cb1-33" aria-hidden="true" tabindex="-1"></a>    <span class="st">"Significance alone"</span>: np.argsort(p_vals)[:budget],</span>
-<span id="cb1-34"><a href="#cb1-34" aria-hidden="true" tabindex="-1"></a>    <span class="st">"Both gates"</span>: np.flatnonzero(dual),</span>
-<span id="cb1-35"><a href="#cb1-35" aria-hidden="true" tabindex="-1"></a>}</span>
-<span id="cb1-36"><a href="#cb1-36" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-37"><a href="#cb1-37" aria-hidden="true" tabindex="-1"></a>fig, axes <span class="op">=</span> plt.subplots(<span class="dv">1</span>, <span class="dv">3</span>, figsize<span class="op">=</span>(<span class="dv">10</span>, <span class="fl">3.6</span>), sharex<span class="op">=</span><span class="va">True</span>, sharey<span class="op">=</span><span class="va">True</span>)</span>
-<span id="cb1-38"><a href="#cb1-38" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> ax, (name, picked) <span class="kw">in</span> <span class="bu">zip</span>(axes, selections.items()):</span>
-<span id="cb1-39"><a href="#cb1-39" aria-hidden="true" tabindex="-1"></a>    ax.scatter(obs, neg_log_p, c<span class="op">=</span>NEUTRAL_COLOR, alpha<span class="op">=</span><span class="fl">0.25</span>, s<span class="op">=</span><span class="dv">10</span>, rasterized<span class="op">=</span><span class="va">True</span>)</span>
-<span id="cb1-40"><a href="#cb1-40" aria-hidden="true" tabindex="-1"></a>    ax.scatter(obs[picked], neg_log_p[picked], s<span class="op">=</span><span class="dv">18</span>, rasterized<span class="op">=</span><span class="va">True</span>,</span>
-<span id="cb1-41"><a href="#cb1-41" aria-hidden="true" tabindex="-1"></a>               c<span class="op">=</span>np.where(is_real[picked], PRIMARY, SECONDARY))</span>
-<span id="cb1-42"><a href="#cb1-42" aria-hidden="true" tabindex="-1"></a>    hits <span class="op">=</span> <span class="bu">int</span>(is_real[picked].<span class="bu">sum</span>())</span>
-<span id="cb1-43"><a href="#cb1-43" aria-hidden="true" tabindex="-1"></a>    ax.set_title(<span class="ss">f"</span><span class="sc">{</span>name<span class="sc">}</span><span class="ch">\n</span><span class="sc">{</span>hits<span class="sc">}</span><span class="ss"> of 150 genuine (</span><span class="sc">{</span>hits <span class="op">/</span> <span class="bu">len</span>(picked)<span class="sc">:.0%}</span><span class="ss"> precision)"</span>, fontsize<span class="op">=</span><span class="dv">10</span>)</span>
-<span id="cb1-44"><a href="#cb1-44" aria-hidden="true" tabindex="-1"></a>    ax.set_xlabel(<span class="st">"Observed $</span><span class="ch">\\</span><span class="st">log_2(</span><span class="ch">\\</span><span class="st">mathrm{Fold</span><span class="ch">\\</span><span class="st">,Change})$"</span>)</span>
-<span id="cb1-45"><a href="#cb1-45" aria-hidden="true" tabindex="-1"></a>axes[<span class="dv">0</span>].set_ylabel(<span class="st">"$-</span><span class="ch">\\</span><span class="st">log_</span><span class="sc">{10}</span><span class="st">(p)$"</span>)</span>
-<span id="cb1-46"><a href="#cb1-46" aria-hidden="true" tabindex="-1"></a>axes[<span class="dv">2</span>].axvline(LFC_CUT, color<span class="op">=</span>INK, ls<span class="op">=</span><span class="st">"--"</span>, lw<span class="op">=</span><span class="dv">1</span>)</span>
-<span id="cb1-47"><a href="#cb1-47" aria-hidden="true" tabindex="-1"></a>axes[<span class="dv">2</span>].axvline(<span class="op">-</span>LFC_CUT, color<span class="op">=</span>INK, ls<span class="op">=</span><span class="st">"--"</span>, lw<span class="op">=</span><span class="dv">1</span>)</span>
-<span id="cb1-48"><a href="#cb1-48" aria-hidden="true" tabindex="-1"></a>axes[<span class="dv">2</span>].axhline(SIG_CUT, color<span class="op">=</span>INK, ls<span class="op">=</span><span class="st">"--"</span>, lw<span class="op">=</span><span class="dv">1</span>)</span>
-<span id="cb1-49"><a href="#cb1-49" aria-hidden="true" tabindex="-1"></a>plt.tight_layout()</span>
-<span id="cb1-50"><a href="#cb1-50" aria-hidden="true" tabindex="-1"></a>plt.show()</span>
-<span id="cb1-51"><a href="#cb1-51" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-52"><a href="#cb1-52" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Every rule below selects the same </span><span class="sc">{</span>budget<span class="sc">}</span><span class="ss"> candidates.</span><span class="ch">\n</span><span class="ss">"</span>)</span>
-<span id="cb1-53"><a href="#cb1-53" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="st">''</span><span class="sc">:&lt;20}{</span><span class="st">'genuine'</span><span class="sc">:&gt;9}{</span><span class="st">'precision'</span><span class="sc">:&gt;11}{</span><span class="st">'noise'</span><span class="sc">:&gt;8}{</span><span class="st">'negligible'</span><span class="sc">:&gt;12}</span><span class="ss">"</span>)</span>
-<span id="cb1-54"><a href="#cb1-54" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> name, picked <span class="kw">in</span> selections.items():</span>
-<span id="cb1-55"><a href="#cb1-55" aria-hidden="true" tabindex="-1"></a>    counts <span class="op">=</span> np.bincount(kind[picked], minlength<span class="op">=</span><span class="dv">4</span>)</span>
-<span id="cb1-56"><a href="#cb1-56" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>name<span class="sc">:&lt;20}{</span>is_real[picked]<span class="sc">.</span><span class="bu">sum</span>()<span class="sc">:&gt;9}{</span>is_real[picked]<span class="sc">.</span>mean()<span class="sc">:&gt;10.0%}</span><span class="ss">"</span></span>
-<span id="cb1-57"><a href="#cb1-57" aria-hidden="true" tabindex="-1"></a>          <span class="ss">f"</span><span class="sc">{</span>counts[<span class="dv">1</span>]<span class="sc">:&gt;8}{</span>counts[<span class="dv">2</span>]<span class="sc">:&gt;12}</span><span class="ss">"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a><span class="co"># Measure every feature in N_REP replicates per group and run a real two-sample</span></span>
+<span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a><span class="co"># t-test on the draws. Simulating the replicates rather than assuming a known</span></span>
+<span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a><span class="co"># standard error is what makes the variance itself an estimate -- so a feature</span></span>
+<span id="cb1-26"><a href="#cb1-26" aria-hidden="true" tabindex="-1"></a><span class="co"># can clear the bar on a lucky small sample variance, which is the failure the</span></span>
+<span id="cb1-27"><a href="#cb1-27" aria-hidden="true" tabindex="-1"></a><span class="co"># post is about, and so adding replicates tightens the estimate instead of</span></span>
+<span id="cb1-28"><a href="#cb1-28" aria-hidden="true" tabindex="-1"></a><span class="co"># merely shrinking a denominator.</span></span>
+<span id="cb1-29"><a href="#cb1-29" aria-hidden="true" tabindex="-1"></a>ctrl <span class="op">=</span> rng.normal(<span class="fl">0.0</span>, sd[:, <span class="va">None</span>], (N, N_REP))</span>
+<span id="cb1-30"><a href="#cb1-30" aria-hidden="true" tabindex="-1"></a>treat <span class="op">=</span> rng.normal(true_lfc[:, <span class="va">None</span>], sd[:, <span class="va">None</span>], (N, N_REP))</span>
+<span id="cb1-31"><a href="#cb1-31" aria-hidden="true" tabindex="-1"></a>obs <span class="op">=</span> treat.mean(axis<span class="op">=</span><span class="dv">1</span>) <span class="op">-</span> ctrl.mean(axis<span class="op">=</span><span class="dv">1</span>)            <span class="co"># observed log2 fold change</span></span>
+<span id="cb1-32"><a href="#cb1-32" aria-hidden="true" tabindex="-1"></a>t_stat, p_raw <span class="op">=</span> stats.ttest_ind(treat, ctrl, axis<span class="op">=</span><span class="dv">1</span>)</span>
+<span id="cb1-33"><a href="#cb1-33" aria-hidden="true" tabindex="-1"></a>p_vals <span class="op">=</span> np.clip(p_raw, <span class="fl">1e-16</span>, <span class="fl">1.0</span>)</span>
+<span id="cb1-34"><a href="#cb1-34" aria-hidden="true" tabindex="-1"></a>neg_log_p <span class="op">=</span> <span class="op">-</span>np.log10(p_vals)</span>
+<span id="cb1-35"><a href="#cb1-35" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-36"><a href="#cb1-36" aria-hidden="true" tabindex="-1"></a>LFC_CUT, SIG_CUT <span class="op">=</span> <span class="fl">1.0</span>, <span class="fl">2.0</span>                             <span class="co"># |log2FC| &gt;= 1, p &lt;= 0.01</span></span>
+<span id="cb1-37"><a href="#cb1-37" aria-hidden="true" tabindex="-1"></a>dual <span class="op">=</span> (np.<span class="bu">abs</span>(obs) <span class="op">&gt;=</span> LFC_CUT) <span class="op">&amp;</span> (neg_log_p <span class="op">&gt;=</span> SIG_CUT)</span>
+<span id="cb1-38"><a href="#cb1-38" aria-hidden="true" tabindex="-1"></a>budget <span class="op">=</span> <span class="bu">int</span>(dual.<span class="bu">sum</span>())</span>
+<span id="cb1-39"><a href="#cb1-39" aria-hidden="true" tabindex="-1"></a>selections <span class="op">=</span> {</span>
+<span id="cb1-40"><a href="#cb1-40" aria-hidden="true" tabindex="-1"></a>    <span class="st">"Effect size alone"</span>: np.argsort(<span class="op">-</span>np.<span class="bu">abs</span>(obs))[:budget],</span>
+<span id="cb1-41"><a href="#cb1-41" aria-hidden="true" tabindex="-1"></a>    <span class="st">"Significance alone"</span>: np.argsort(p_vals)[:budget],</span>
+<span id="cb1-42"><a href="#cb1-42" aria-hidden="true" tabindex="-1"></a>    <span class="st">"Both gates"</span>: np.flatnonzero(dual),</span>
+<span id="cb1-43"><a href="#cb1-43" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb1-44"><a href="#cb1-44" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-45"><a href="#cb1-45" aria-hidden="true" tabindex="-1"></a>fig, axes <span class="op">=</span> plt.subplots(<span class="dv">1</span>, <span class="dv">3</span>, figsize<span class="op">=</span>(<span class="dv">10</span>, <span class="fl">3.6</span>), sharex<span class="op">=</span><span class="va">True</span>, sharey<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb1-46"><a href="#cb1-46" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> ax, (name, picked) <span class="kw">in</span> <span class="bu">zip</span>(axes, selections.items()):</span>
+<span id="cb1-47"><a href="#cb1-47" aria-hidden="true" tabindex="-1"></a>    ax.scatter(obs, neg_log_p, c<span class="op">=</span>NEUTRAL_COLOR, alpha<span class="op">=</span><span class="fl">0.25</span>, s<span class="op">=</span><span class="dv">10</span>, rasterized<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb1-48"><a href="#cb1-48" aria-hidden="true" tabindex="-1"></a>    ax.scatter(obs[picked], neg_log_p[picked], s<span class="op">=</span><span class="dv">18</span>, rasterized<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb1-49"><a href="#cb1-49" aria-hidden="true" tabindex="-1"></a>               c<span class="op">=</span>np.where(is_real[picked], PRIMARY, SECONDARY))</span>
+<span id="cb1-50"><a href="#cb1-50" aria-hidden="true" tabindex="-1"></a>    hits <span class="op">=</span> <span class="bu">int</span>(is_real[picked].<span class="bu">sum</span>())</span>
+<span id="cb1-51"><a href="#cb1-51" aria-hidden="true" tabindex="-1"></a>    ax.set_title(<span class="ss">f"</span><span class="sc">{</span>name<span class="sc">}</span><span class="ch">\n</span><span class="sc">{</span>hits<span class="sc">}</span><span class="ss"> of 150 genuine (</span><span class="sc">{</span>hits <span class="op">/</span> <span class="bu">len</span>(picked)<span class="sc">:.0%}</span><span class="ss"> precision)"</span>, fontsize<span class="op">=</span><span class="dv">10</span>)</span>
+<span id="cb1-52"><a href="#cb1-52" aria-hidden="true" tabindex="-1"></a>    ax.set_xlabel(<span class="st">"Observed $</span><span class="ch">\\</span><span class="st">log_2(</span><span class="ch">\\</span><span class="st">mathrm{Fold</span><span class="ch">\\</span><span class="st">,Change})$"</span>)</span>
+<span id="cb1-53"><a href="#cb1-53" aria-hidden="true" tabindex="-1"></a>axes[<span class="dv">0</span>].set_ylabel(<span class="st">"$-</span><span class="ch">\\</span><span class="st">log_</span><span class="sc">{10}</span><span class="st">(p)$"</span>)</span>
+<span id="cb1-54"><a href="#cb1-54" aria-hidden="true" tabindex="-1"></a>axes[<span class="dv">2</span>].axvline(LFC_CUT, color<span class="op">=</span>INK, ls<span class="op">=</span><span class="st">"--"</span>, lw<span class="op">=</span><span class="dv">1</span>)</span>
+<span id="cb1-55"><a href="#cb1-55" aria-hidden="true" tabindex="-1"></a>axes[<span class="dv">2</span>].axvline(<span class="op">-</span>LFC_CUT, color<span class="op">=</span>INK, ls<span class="op">=</span><span class="st">"--"</span>, lw<span class="op">=</span><span class="dv">1</span>)</span>
+<span id="cb1-56"><a href="#cb1-56" aria-hidden="true" tabindex="-1"></a>axes[<span class="dv">2</span>].axhline(SIG_CUT, color<span class="op">=</span>INK, ls<span class="op">=</span><span class="st">"--"</span>, lw<span class="op">=</span><span class="dv">1</span>)</span>
+<span id="cb1-57"><a href="#cb1-57" aria-hidden="true" tabindex="-1"></a>plt.tight_layout()</span>
+<span id="cb1-58"><a href="#cb1-58" aria-hidden="true" tabindex="-1"></a>plt.show()</span>
+<span id="cb1-59"><a href="#cb1-59" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-60"><a href="#cb1-60" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Every rule below selects the same </span><span class="sc">{</span>budget<span class="sc">}</span><span class="ss"> candidates.</span><span class="ch">\n</span><span class="ss">"</span>)</span>
+<span id="cb1-61"><a href="#cb1-61" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="st">''</span><span class="sc">:&lt;20}{</span><span class="st">'genuine'</span><span class="sc">:&gt;9}{</span><span class="st">'precision'</span><span class="sc">:&gt;11}{</span><span class="st">'noise'</span><span class="sc">:&gt;8}{</span><span class="st">'negligible'</span><span class="sc">:&gt;12}</span><span class="ss">"</span>)</span>
+<span id="cb1-62"><a href="#cb1-62" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> name, picked <span class="kw">in</span> selections.items():</span>
+<span id="cb1-63"><a href="#cb1-63" aria-hidden="true" tabindex="-1"></a>    counts <span class="op">=</span> np.bincount(kind[picked], minlength<span class="op">=</span><span class="dv">4</span>)</span>
+<span id="cb1-64"><a href="#cb1-64" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>name<span class="sc">:&lt;20}{</span>is_real[picked]<span class="sc">.</span><span class="bu">sum</span>()<span class="sc">:&gt;9}{</span>is_real[picked]<span class="sc">.</span>mean()<span class="sc">:&gt;10.0%}</span><span class="ss">"</span></span>
+<span id="cb1-65"><a href="#cb1-65" aria-hidden="true" tabindex="-1"></a>          <span class="ss">f"</span><span class="sc">{</span>counts[<span class="dv">1</span>]<span class="sc">:&gt;8}{</span>counts[<span class="dv">2</span>]<span class="sc">:&gt;12}</span><span class="ss">"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output cell-output-display">
 <div id="fig-rankings" class="quarto-float quarto-figure quarto-figure-center anchored">
@@ -328,16 +336,16 @@ Figure&nbsp;1: Three selection rules on the same 3,000-feature screen, each give
 </div>
 </div>
 <div class="cell-output cell-output-stdout">
-<pre><code>Every rule below selects the same 213 candidates.
+<pre><code>Every rule below selects the same 154 candidates.
 
                       genuine  precision   noise  negligible
-Effect size alone         114       54%      99           0
-Significance alone        104       49%       0         109
-Both gates                148       69%      56           0</code></pre>
+Effect size alone          97       63%      57           0
+Significance alone         68       44%       0          85
+Both gates                140       91%       9           0</code></pre>
 </div>
 </div>
-<p>Teal is a genuine responder, amber an impostor. All three rules spent the same budget of 213 candidates. Effect size alone returned 114 of the 150 responders, padded with 99 low-count artifacts. Significance alone did slightly worse — 104 responders, alongside 109 features whose shift is real, certain, and far too small to act on. Requiring both gates returned 148 of the 150, at 69% precision against 54% and 49%.</p>
-<p>The impostors each rule admits say why. Effect-size ranking took 99 noisy features and not one negligible-but-certain feature; significance ranking took 109 of the negligible ones and not a single noisy one. Each rule is blind along exactly the axis it does not use. Requiring both gates still leaves 65 impostors — 56 low-count features and nine unchanged background ones that cleared a <span class="math inline">\(p \le 0.01\)</span> bar by luck across 3,000 tests. That residue is what multiple-testing control is for, and it is the last thing this post fixes.</p>
+<p>Teal is a genuine responder, amber an impostor. All three rules spent the same budget of 154 candidates. Effect size alone returned 97 of the 150 responders, padded with 57 low-count artifacts. Significance alone did worse — 68 responders, alongside 85 features whose shift is real, certain, and far too small to act on. Requiring both gates returned 140 of the 150, at 91% precision against 63% and 44%.</p>
+<p>The impostors each rule admits say why. Effect-size ranking took 57 noisy features and not one negligible-but-certain feature; significance ranking took 85 of the negligible ones and not a single noisy one. Each rule is blind along exactly the axis it does not use. Requiring both gates still leaves 14 impostors — nine low-count features and five unchanged background ones that cleared a <span class="math inline">\(p \le 0.01\)</span> bar by luck across 3,000 tests. That residue is what multiple-testing control is for, and it is the last thing this post fixes.</p>
 </section>
 <section id="the-gates-are-yours-to-move" class="level2">
 <h2 class="anchored" data-anchor-id="the-gates-are-yours-to-move">The gates are yours to move</h2>
@@ -350,7 +358,7 @@ Both gates                148       69%      56           0</code></pre>
 
 </div>
 </div>
-<p>Four things are worth doing to it before reading on. Drag the significance gate to zero: the filter degenerates into effect-size ranking and the amber low-count wings flood in. Drag the effect-size gate to zero instead and the plum band of negligible-but-certain features climbs into the selection. Raise the replicate count to 12 and watch that band rise straight up the plot — more data does not shrink a small effect, it only measures it better. And switch the vertical axis from raw <span class="math inline">\(p\)</span> to a Benjamini–Hochberg <span class="math inline">\(q\)</span>, which is what turns a threshold picked by convention into one with a false-discovery guarantee behind it.</p>
+<p>Four things are worth doing to it before reading on. Drag the significance gate to zero: the filter degenerates into effect-size ranking and the amber low-count wings flood in. Drag the effect-size gate to zero instead and the plum band of negligible-but-certain features climbs into the selection. Raise the replicate count to 12 and watch two things happen at once: the plum band climbs straight up while staying exactly as far from the centre, because more data does not shrink a small effect, it only measures it better — and the amber wings pull inward, because more data <em>does</em> shrink an apparent effect that was only ever noise. And switch the vertical axis from raw <span class="math inline">\(p\)</span> to a Benjamini–Hochberg <span class="math inline">\(q\)</span>, which is what turns a threshold picked by convention into one with a false-discovery guarantee behind it.</p>
 </section>
 <section id="microarray-genomics-forced-dual-filtering-into-existence" class="level2">
 <h2 class="anchored" data-anchor-id="microarray-genomics-forced-dual-filtering-into-existence">Microarray genomics forced dual filtering into existence</h2>
@@ -421,7 +429,7 @@ Both gates                148       69%      56           0</code></pre>
 <span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>ax.set_xlabel(<span class="st">"Effect size: $</span><span class="ch">\\</span><span class="st">log_2(</span><span class="ch">\\</span><span class="st">mathrm{Fold</span><span class="ch">\\</span><span class="st">,Change})$ [dexamethasone / untreated]"</span>)</span>
 <span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>ax.set_ylabel(<span class="st">"Significance: $-</span><span class="ch">\\</span><span class="st">log_</span><span class="sc">{10}</span><span class="st">(q)$, Benjamini–Hochberg"</span>)</span>
 <span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>ax.set_title(<span class="st">"Airway smooth muscle response to dexamethasone (GSE52778)"</span>, fontsize<span class="op">=</span><span class="dv">11</span>)</span>
-<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>ax.set_xlim(<span class="op">-</span><span class="fl">6.5</span>, <span class="fl">9.0</span>)</span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>ax.set_xlim(<span class="op">-</span><span class="fl">6.5</span>, <span class="fl">10.0</span>)</span>
 <span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>ax.set_ylim(<span class="op">-</span><span class="dv">2</span>, <span class="dv">145</span>)</span>
 <span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>ax.legend(loc<span class="op">=</span><span class="st">"upper right"</span>, fontsize<span class="op">=</span><span class="fl">8.5</span>, frameon<span class="op">=</span><span class="va">True</span>, facecolor<span class="op">=</span><span class="st">"white"</span>, edgecolor<span class="op">=</span>RULE)</span>
 <span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a>plt.tight_layout()</span>
@@ -479,7 +487,7 @@ Figure&nbsp;2: 18,028 transcripts from human airway smooth muscle, treated with 
 <span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a>ax_m.set_xlabel(<span class="st">"$</span><span class="ch">\\</span><span class="st">log_</span><span class="sc">{10}</span><span class="st">(</span><span class="ch">\\</span><span class="st">mathrm{mean</span><span class="ch">\\</span><span class="st">,normalised</span><span class="ch">\\</span><span class="st">,expression})$"</span>)</span>
 <span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a>ax_m.set_ylabel(<span class="st">"$</span><span class="ch">\\</span><span class="st">log_2(</span><span class="ch">\\</span><span class="st">mathrm{Fold</span><span class="ch">\\</span><span class="st">,Change})$"</span>)</span>
 <span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a>ax_m.set_title(<span class="st">"MA: the low-count funnel"</span>, fontsize<span class="op">=</span><span class="dv">10</span>)</span>
-<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a>ax_m.set_ylim(<span class="op">-</span><span class="fl">6.5</span>, <span class="fl">9.0</span>)</span>
+<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a>ax_m.set_ylim(<span class="op">-</span><span class="fl">6.5</span>, <span class="fl">10.0</span>)</span>
 <span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a>ax_m.legend(loc<span class="op">=</span><span class="st">"upper right"</span>, fontsize<span class="op">=</span><span class="dv">8</span>, frameon<span class="op">=</span><span class="va">True</span>, facecolor<span class="op">=</span><span class="st">"white"</span>, edgecolor<span class="op">=</span>RULE)</span>
 <span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a>plt.tight_layout()</span>
 <span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a>plt.show()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
@@ -506,7 +514,7 @@ Figure&nbsp;3: The same genes, plotted against baseline abundance: the dispersio
 </section>
 <section id="when-to-plot-the-volcano" class="level2">
 <h2 class="anchored" data-anchor-id="when-to-plot-the-volcano">When to plot the volcano</h2>
-<p>The claim at the top was that neither axis is safe alone: effect size picks up noise, significance picks up trivia. The simulation put numbers on it — given 213 candidates to spend, the two one-dimensional rules found 114 and 104 of the 150 real responders, both gates together 148 — and the airway data showed the same rule recovering a drug programme that took the field years to assemble gene by gene.</p>
+<p>The claim at the top was that neither axis is safe alone: effect size picks up noise, significance picks up trivia. The simulation put numbers on it — given 154 candidates to spend, the two one-dimensional rules found 97 and 68 of the 150 real responders, both gates together 140 — and the airway data showed the same rule recovering a drug programme that took the field years to assemble gene by gene.</p>
 <p>What makes it work is that it is an explicit two-dimensional decision rule, written where you can see it. The <span class="math inline">\(\log_2\)</span> transform makes opposite-direction changes comparable; the <span class="math inline">\(-\log_{10}\)</span> transform makes tail probabilities legible and gives the cloud its shape; and the thresholds you draw across them are an argument you can defend, or change in front of someone who disagrees.</p>
 <table class="caption-top table">
 <colgroup>
@@ -689,12 +697,16 @@ const VolcanoSim = (function () {
   const N_TRUE = 150;
   const N_MICRO = 300;
 
-  /* Draw the effect sizes and standard errors. Four populations, because the
-   * post's argument needs all four: the inert background, low-count features
-   * whose noise fakes a large fold change, high-abundance features whose real
-   * shift is far too small to matter, and the genuine responders. Independent
-   * of the replicate count, so changing n re-tests the same experiment rather
-   * than drawing a new one. */
+  /* Draw the population each feature belongs to: its true effect and its
+   * per-replicate noise SD. Four populations, because the post's argument needs
+   * all four: the inert background, low-count features whose noise fakes a large
+   * fold change, high-abundance features whose real shift is far too small to
+   * matter, and the genuine responders.
+   *
+   * No measurement happens here -- that is `test`'s job, because what a feature
+   * looks like depends on how many replicates you spent on it. The SD ranges are
+   * quoted so that the standard error of the difference, sd*sqrt(2/n), lands in
+   * the same place at the default n = 4 that the post's static figure uses. */
   function draw(seed, noiseFrac) {
     const rng = mulberry32(seed);
     const pool = N_FEATURES - N_TRUE - N_MICRO;
@@ -702,48 +714,78 @@ const VolcanoSim = (function () {
     const nNull = pool - nNoisy;
 
     const trueLfc = new Float64Array(N_FEATURES);
-    const se = new Float64Array(N_FEATURES);
+    const sd = new Float64Array(N_FEATURES);
     // 0 background null, 1 low-count noise, 2 genuine responder, 3 micro-shift
     const kind = new Uint8Array(N_FEATURES);
-    const obs = new Float64Array(N_FEATURES);
 
     let i = 0;
     for (let k = 0; k < nNull; k++, i++) {
       kind[i] = 0;
       trueLfc[i] = 0;
-      se[i] = uniform(rng, 0.15, 0.45);
+      sd[i] = uniform(rng, 0.21, 0.64);
     }
     for (let k = 0; k < nNoisy; k++, i++) {
       kind[i] = 1;
       trueLfc[i] = 0;
-      se[i] = uniform(rng, 0.8, 1.8);
+      sd[i] = uniform(rng, 1.13, 2.55);
     }
     for (let k = 0; k < N_MICRO; k++, i++) {
       // Deeply sequenced, so the standard error collapses and a 7% shift
       // clears any significance bar you care to set.
       kind[i] = 3;
       trueLfc[i] = (rng() < 0.5 ? -1 : 1) * uniform(rng, 0.08, 0.4);
-      se[i] = uniform(rng, 0.02, 0.07);
+      sd[i] = uniform(rng, 0.03, 0.10);
     }
     for (let k = 0; k < N_TRUE; k++, i++) {
       kind[i] = 2;
       trueLfc[i] = (rng() < 0.5 ? -1 : 1) * uniform(rng, 1.5, 4.0);
-      se[i] = uniform(rng, 0.2, 0.5);
+      sd[i] = uniform(rng, 0.28, 0.71);
     }
-    for (let j = 0; j < N_FEATURES; j++) obs[j] = trueLfc[j] + se[j] * randn(rng);
 
-    return { lfc: obs, se: se, kind: kind, n: N_FEATURES, nTrue: N_TRUE };
+    return { trueLfc: trueLfc, sd: sd, kind: kind, seed: seed,
+             n: N_FEATURES, nTrue: N_TRUE };
   }
 
-  /* Test the drawn effects at n replicates per group. */
+  /* Measure every feature in nRep replicates per group and run a real
+   * two-sample t-test on the draws.
+   *
+   * The replicates are drawn here rather than in `draw` because the whole point
+   * of the replicate control is that spending more of them buys a tighter
+   * estimate. Testing one fixed observation against a shrinking denominator
+   * would instead inflate every t by sqrt(n) and flood the plot with noise --
+   * the opposite of what more data does.
+   *
+   * Each feature gets its own stream, seeded from the experiment's seed, and the
+   * replicates come off it in order. So raising the slider from 4 to 6 keeps the
+   * first four measurements and adds two: the same experiment continued, not a
+   * fresh one. Estimating the variance from those draws is also what puts the
+   * small-n variance lottery on screen -- a null feature can still clear the bar
+   * on a sample SD that came out small by luck. */
   function test(sample, nRep) {
     const df = 2 * nRep - 2;
     const m = sample.n;
     const p = new Float64Array(m);
+    const lfc = new Float64Array(m);
+
     for (let j = 0; j < m; j++) {
-      const t = sample.lfc[j] / (sample.se[j] / Math.sqrt(nRep));
+      const rngj = mulberry32((sample.seed * 0x9e3779b1) ^ ((j + 1) * 0x85ebca6b));
+      const sdj = sample.sd[j];
+      let mC = 0, mT = 0, sC = 0, sT = 0;
+      for (let k = 0; k < nRep; k++) {
+        // Welford, so a long replicate stream stays numerically honest.
+        const c = sdj * randn(rngj);
+        const t = sample.trueLfc[j] + sdj * randn(rngj);
+        let d = c - mC; mC += d / (k + 1); sC += d * (c - mC);
+        d = t - mT; mT += d / (k + 1); sT += d * (t - mT);
+      }
+      lfc[j] = mT - mC;
+      // Pooled two-sample t, equal group sizes.
+      const sPooled = Math.sqrt((sC + sT) / df);
+      const seDiff = sPooled * Math.sqrt(2 / nRep);
+      const t = seDiff > 0 ? lfc[j] / seDiff : 0;
       p[j] = Math.max(tTwoSided(t, df), 1e-16);
     }
+
     const q = bhAdjust(p);
     const negLogP = new Float64Array(m);
     const negLogQ = new Float64Array(m);
@@ -751,7 +793,7 @@ const VolcanoSim = (function () {
       negLogP[j] = -Math.log10(p[j]);
       negLogQ[j] = -Math.log10(Math.max(q[j], 1e-16));
     }
-    return { p: p, q: q, negLogP: negLogP, negLogQ: negLogQ, df: df };
+    return { lfc: lfc, p: p, q: q, negLogP: negLogP, negLogQ: negLogQ, df: df };
   }
 
   /* Cumulative genuine-hit curves for the two one-dimensional rankings.
@@ -762,7 +804,7 @@ const VolcanoSim = (function () {
   function rankCurves(sample, tested) {
     const m = sample.n;
     const idx = Array.from({ length: m }, (_, i) => i);
-    const byEffect = idx.slice().sort((i, j) => Math.abs(sample.lfc[j]) - Math.abs(sample.lfc[i]));
+    const byEffect = idx.slice().sort((i, j) => Math.abs(tested.lfc[j]) - Math.abs(tested.lfc[i]));
     const bySig = idx.slice().sort((i, j) => tested.p[i] - tested.p[j]);
     const cumEffect = new Int32Array(m + 1);
     const cumSig = new Int32Array(m + 1);
@@ -780,7 +822,7 @@ const VolcanoSim = (function () {
     let nSel = 0;
     let nHit = 0;
     for (let j = 0; j < sample.n; j++) {
-      if (Math.abs(sample.lfc[j]) >= lfcCut && y[j] >= sigCut) {
+      if (Math.abs(tested.lfc[j]) >= lfcCut && y[j] >= sigCut) {
         selected[j] = 1;
         nSel++;
         if (sample.kind[j] === 2) nHit++;
@@ -1090,7 +1132,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = VolcanoSim
         const size = k === 2 ? 4 : 3;
         for (let i = 0; i < sample.n; i++) {
           if (sample.kind[i] !== k) continue;
-          ctx.fillRect(px(xValue(sample.lfc[i])) - size / 2, py(y[i]) - size / 2, size, size);
+          ctx.fillRect(px(xValue(tested.lfc[i])) - size / 2, py(y[i]) - size / 2, size, size);
         }
       }
       ctx.globalAlpha = 1;
@@ -1101,7 +1143,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = VolcanoSim
       for (let i = 0; i < sample.n; i++) {
         if (!res.selected[i]) continue;
         ctx.beginPath();
-        ctx.arc(px(xValue(sample.lfc[i])), py(y[i]), 4.2, 0, 2 * Math.PI);
+        ctx.arc(px(xValue(tested.lfc[i])), py(y[i]), 4.2, 0, 2 * Math.PI);
         ctx.stroke();
       }
 

@@ -129,12 +129,16 @@ const VolcanoSim = (function () {
   const N_TRUE = 150;
   const N_MICRO = 300;
 
-  /* Draw the effect sizes and standard errors. Four populations, because the
-   * post's argument needs all four: the inert background, low-count features
-   * whose noise fakes a large fold change, high-abundance features whose real
-   * shift is far too small to matter, and the genuine responders. Independent
-   * of the replicate count, so changing n re-tests the same experiment rather
-   * than drawing a new one. */
+  /* Draw the population each feature belongs to: its true effect and its
+   * per-replicate noise SD. Four populations, because the post's argument needs
+   * all four: the inert background, low-count features whose noise fakes a large
+   * fold change, high-abundance features whose real shift is far too small to
+   * matter, and the genuine responders.
+   *
+   * No measurement happens here -- that is `test`'s job, because what a feature
+   * looks like depends on how many replicates you spent on it. The SD ranges are
+   * quoted so that the standard error of the difference, sd*sqrt(2/n), lands in
+   * the same place at the default n = 4 that the post's static figure uses. */
   function draw(seed, noiseFrac) {
     const rng = mulberry32(seed);
     const pool = N_FEATURES - N_TRUE - N_MICRO;
@@ -142,48 +146,78 @@ const VolcanoSim = (function () {
     const nNull = pool - nNoisy;
 
     const trueLfc = new Float64Array(N_FEATURES);
-    const se = new Float64Array(N_FEATURES);
+    const sd = new Float64Array(N_FEATURES);
     // 0 background null, 1 low-count noise, 2 genuine responder, 3 micro-shift
     const kind = new Uint8Array(N_FEATURES);
-    const obs = new Float64Array(N_FEATURES);
 
     let i = 0;
     for (let k = 0; k < nNull; k++, i++) {
       kind[i] = 0;
       trueLfc[i] = 0;
-      se[i] = uniform(rng, 0.15, 0.45);
+      sd[i] = uniform(rng, 0.21, 0.64);
     }
     for (let k = 0; k < nNoisy; k++, i++) {
       kind[i] = 1;
       trueLfc[i] = 0;
-      se[i] = uniform(rng, 0.8, 1.8);
+      sd[i] = uniform(rng, 1.13, 2.55);
     }
     for (let k = 0; k < N_MICRO; k++, i++) {
       // Deeply sequenced, so the standard error collapses and a 7% shift
       // clears any significance bar you care to set.
       kind[i] = 3;
       trueLfc[i] = (rng() < 0.5 ? -1 : 1) * uniform(rng, 0.08, 0.4);
-      se[i] = uniform(rng, 0.02, 0.07);
+      sd[i] = uniform(rng, 0.03, 0.10);
     }
     for (let k = 0; k < N_TRUE; k++, i++) {
       kind[i] = 2;
       trueLfc[i] = (rng() < 0.5 ? -1 : 1) * uniform(rng, 1.5, 4.0);
-      se[i] = uniform(rng, 0.2, 0.5);
+      sd[i] = uniform(rng, 0.28, 0.71);
     }
-    for (let j = 0; j < N_FEATURES; j++) obs[j] = trueLfc[j] + se[j] * randn(rng);
 
-    return { lfc: obs, se: se, kind: kind, n: N_FEATURES, nTrue: N_TRUE };
+    return { trueLfc: trueLfc, sd: sd, kind: kind, seed: seed,
+             n: N_FEATURES, nTrue: N_TRUE };
   }
 
-  /* Test the drawn effects at n replicates per group. */
+  /* Measure every feature in nRep replicates per group and run a real
+   * two-sample t-test on the draws.
+   *
+   * The replicates are drawn here rather than in `draw` because the whole point
+   * of the replicate control is that spending more of them buys a tighter
+   * estimate. Testing one fixed observation against a shrinking denominator
+   * would instead inflate every t by sqrt(n) and flood the plot with noise --
+   * the opposite of what more data does.
+   *
+   * Each feature gets its own stream, seeded from the experiment's seed, and the
+   * replicates come off it in order. So raising the slider from 4 to 6 keeps the
+   * first four measurements and adds two: the same experiment continued, not a
+   * fresh one. Estimating the variance from those draws is also what puts the
+   * small-n variance lottery on screen -- a null feature can still clear the bar
+   * on a sample SD that came out small by luck. */
   function test(sample, nRep) {
     const df = 2 * nRep - 2;
     const m = sample.n;
     const p = new Float64Array(m);
+    const lfc = new Float64Array(m);
+
     for (let j = 0; j < m; j++) {
-      const t = sample.lfc[j] / (sample.se[j] / Math.sqrt(nRep));
+      const rngj = mulberry32((sample.seed * 0x9e3779b1) ^ ((j + 1) * 0x85ebca6b));
+      const sdj = sample.sd[j];
+      let mC = 0, mT = 0, sC = 0, sT = 0;
+      for (let k = 0; k < nRep; k++) {
+        // Welford, so a long replicate stream stays numerically honest.
+        const c = sdj * randn(rngj);
+        const t = sample.trueLfc[j] + sdj * randn(rngj);
+        let d = c - mC; mC += d / (k + 1); sC += d * (c - mC);
+        d = t - mT; mT += d / (k + 1); sT += d * (t - mT);
+      }
+      lfc[j] = mT - mC;
+      // Pooled two-sample t, equal group sizes.
+      const sPooled = Math.sqrt((sC + sT) / df);
+      const seDiff = sPooled * Math.sqrt(2 / nRep);
+      const t = seDiff > 0 ? lfc[j] / seDiff : 0;
       p[j] = Math.max(tTwoSided(t, df), 1e-16);
     }
+
     const q = bhAdjust(p);
     const negLogP = new Float64Array(m);
     const negLogQ = new Float64Array(m);
@@ -191,7 +225,7 @@ const VolcanoSim = (function () {
       negLogP[j] = -Math.log10(p[j]);
       negLogQ[j] = -Math.log10(Math.max(q[j], 1e-16));
     }
-    return { p: p, q: q, negLogP: negLogP, negLogQ: negLogQ, df: df };
+    return { lfc: lfc, p: p, q: q, negLogP: negLogP, negLogQ: negLogQ, df: df };
   }
 
   /* Cumulative genuine-hit curves for the two one-dimensional rankings.
@@ -202,7 +236,7 @@ const VolcanoSim = (function () {
   function rankCurves(sample, tested) {
     const m = sample.n;
     const idx = Array.from({ length: m }, (_, i) => i);
-    const byEffect = idx.slice().sort((i, j) => Math.abs(sample.lfc[j]) - Math.abs(sample.lfc[i]));
+    const byEffect = idx.slice().sort((i, j) => Math.abs(tested.lfc[j]) - Math.abs(tested.lfc[i]));
     const bySig = idx.slice().sort((i, j) => tested.p[i] - tested.p[j]);
     const cumEffect = new Int32Array(m + 1);
     const cumSig = new Int32Array(m + 1);
@@ -220,7 +254,7 @@ const VolcanoSim = (function () {
     let nSel = 0;
     let nHit = 0;
     for (let j = 0; j < sample.n; j++) {
-      if (Math.abs(sample.lfc[j]) >= lfcCut && y[j] >= sigCut) {
+      if (Math.abs(tested.lfc[j]) >= lfcCut && y[j] >= sigCut) {
         selected[j] = 1;
         nSel++;
         if (sample.kind[j] === 2) nHit++;
@@ -530,7 +564,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = VolcanoSim
         const size = k === 2 ? 4 : 3;
         for (let i = 0; i < sample.n; i++) {
           if (sample.kind[i] !== k) continue;
-          ctx.fillRect(px(xValue(sample.lfc[i])) - size / 2, py(y[i]) - size / 2, size, size);
+          ctx.fillRect(px(xValue(tested.lfc[i])) - size / 2, py(y[i]) - size / 2, size, size);
         }
       }
       ctx.globalAlpha = 1;
@@ -541,7 +575,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = VolcanoSim
       for (let i = 0; i < sample.n; i++) {
         if (!res.selected[i]) continue;
         ctx.beginPath();
-        ctx.arc(px(xValue(sample.lfc[i])), py(y[i]), 4.2, 0, 2 * Math.PI);
+        ctx.arc(px(xValue(tested.lfc[i])), py(y[i]), 4.2, 0, 2 * Math.PI);
         ctx.stroke();
       }
 
