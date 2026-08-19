@@ -222,9 +222,9 @@ function initEllipseWidget(mountId) {
 
   const STAGES = [
     { label: "unit circle", note: "Start: every input vector of length 1." },
-    { label: "after Vᵀ", note: "A rotation. The circle is unmoved; the marked directions are not." },
+    { label: "after Vᵀ", note: "An orthogonal move — every length and angle survives it. The circle is unmoved; the marked directions are not." },
     { label: "after ΣVᵀ", note: "The stretch. Now it is an ellipse, aligned to the axes." },
-    { label: "after A = UΣVᵀ", note: "The second rotation turns the ellipse to its final pose." },
+    { label: "after A = UΣVᵀ", note: "The second orthogonal move turns the ellipse to its final pose." },
   ];
 
   const box = S.h("div", {});
@@ -383,6 +383,7 @@ function initEllipseWidget(mountId) {
 
   function draw() {
     const { u, sigma, v } = S.svd2(M);
+    const det = M[0][0] * M[1][1] - M[0][1] * M[1][0];
 
     // The three stages, as actual matrices. Nothing here is interpolated:
     // each button shows the exact image of the circle under a real product.
@@ -485,6 +486,10 @@ function initEllipseWidget(mountId) {
     let note = STAGES[stage].note;
     if (sigma[1] < 1e-9) {
       note += " σ₂ is zero here: this matrix flattens the plane onto a line, and nothing recovers what it lost.";
+    } else if (det < 0 && stage > 0) {
+      // U and V are orthogonal, which means rotation *or* reflection. A
+      // negative determinant guarantees exactly one of them flips the plane.
+      note += " det A is negative, so one of the two orthogonal moves is a reflection rather than a rotation — watch the marked dots change their going-round order.";
     }
     caption.textContent = note;
   }
@@ -633,14 +638,10 @@ function initRankWidget(mountId, payload) {
     captionRank.textContent = `rank ${k} — ${storedBytes.toLocaleString()} bytes`;
     rPsnr.set(payload.psnr[i].toFixed(2) + " dB");
     rStore.set((payload.fracI16[i] * 100).toFixed(1) + "% of raw");
-    rRatio.set(ratio >= 1 ? ratio.toFixed(2) + "×" : "none (" + ratio.toFixed(2) + "×)");
+    rRatio.set(ratio.toFixed(2) + "×");
     rEnergy.set((payload.energy[i] * 100).toFixed(2) + "%");
 
-    if (payload.fracI16[i] >= 1) {
-      note.textContent =
-        "Past this rank the factors take more space than the pixels they approximate. " +
-        "The dial has run out of road.";
-    } else if (k <= 5) {
+    if (k <= 5) {
       note.textContent =
         "At this rank the picture is a handful of horizontal and vertical bands — " +
         "the strongest shared structure in the photograph, and nothing else.";
