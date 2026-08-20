@@ -7,7 +7,12 @@ The post starts from what a matrix does to the unit circle, derives
 $A = U\Sigma V^\mathsf{T}$ from that picture, and then spends the singular
 values three ways: as a compression dial on a real photograph, as a
 conditioning diagnostic on a NIST certification dataset, and as a capacity knob
-on MovieLens ratings. Two widgets let the reader drive the maths directly.
+on MovieLens ratings. It then argues that the rest of the SVD's applications --
+PCA, latent semantic analysis, pseudoinverses, model reduction -- are those same
+three readings of the spectrum aimed at other matrices, and demonstrates the
+sharpest case on a voice signal, where a trajectory matrix has an exactly known
+rank and truncating to it lifts a synthetic vowel out of equal-parts noise. Two
+widgets let the reader drive the maths directly.
 
 ## Contents
 
@@ -24,6 +29,7 @@ src/
   data.py              fetch + cache Filip and MovieLens
   imagery.py           the photograph, its SVD, PSNR and storage accounting
   movielens.py         ratings matrix, held-out split, RMSE against rank
+  voice.py             synthetic vowel, trajectory matrix, subspace denoising
   export_widget_data.py  writes the committed widget-data/*.json
   make_cover.py        the social card
 data/raw/              MovieLens download, gitignored
@@ -59,6 +65,11 @@ make data       # ensures assets/Filip.dat and data/raw/ml-100k.zip exist
 make widgets    # rewrites widget-data/*.json from those two sources
 make cover      # rewrites cover.png
 ```
+
+`src/voice.py` is the exception to the pattern above: it needs no cached data
+and no `make` target, because the signal is generated inside the render from a
+seeded RNG. Changing `F0`, `N_HARM` or `SEED` changes the published numbers, and
+the post quotes them inline, so re-render after touching it.
 
 `make widgets` re-runs the MovieLens experiment (about 40 s, dominated by one
 943 × 1682 dense SVD) and re-derives the photograph's leading 100 singular
@@ -124,6 +135,7 @@ See the post's *Data and attribution* section for the full statement. In short:
 | `skimage.data.astronaut()` — NASA, Eileen Collins | public domain | ships inside scikit-image |
 | NIST StRD `Filip.dat` | public domain (US federal government) | yes, `assets/Filip.dat` |
 | MovieLens 100k, GroupLens / U. Minnesota | redistribution **not** permitted | no — downloaded on demand |
+| synthetic vowel, `src/voice.py` | n/a — generated at render, seeded | no data to commit |
 
 ## Related
 
