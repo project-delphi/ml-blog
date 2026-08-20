@@ -215,7 +215,9 @@ const VolcanoSim = (function () {
       const sPooled = Math.sqrt((sC + sT) / df);
       const seDiff = sPooled * Math.sqrt(2 / nRep);
       const t = seDiff > 0 ? lfc[j] / seDiff : 0;
-      p[j] = Math.max(tTwoSided(t, df), 1e-16);
+      // Floor only to keep -log10 finite; far below anything the screen
+      // reaches, so it never draws a ceiling the reader would misread.
+      p[j] = Math.max(tTwoSided(t, df), 1e-300);
     }
 
     const q = bhAdjust(p);
@@ -223,7 +225,7 @@ const VolcanoSim = (function () {
     const negLogQ = new Float64Array(m);
     for (let j = 0; j < m; j++) {
       negLogP[j] = -Math.log10(p[j]);
-      negLogQ[j] = -Math.log10(Math.max(q[j], 1e-16));
+      negLogQ[j] = -Math.log10(Math.max(q[j], 1e-300));
     }
     return { lfc: lfc, p: p, q: q, negLogP: negLogP, negLogQ: negLogQ, df: df };
   }
@@ -424,7 +426,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = VolcanoSim
 
     const reroll = h("button", { type: "button", class: "wv-button", text: "re-roll the experiment" });
     reroll.addEventListener("click", () => {
-      state.seed = (state.seed * 1103515245 + 12345) >>> 0;
+      state.seed = (Math.imul(state.seed, 1103515245) + 12345) >>> 0;
       redraw();
     });
 
