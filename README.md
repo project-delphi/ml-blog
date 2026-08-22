@@ -15,8 +15,10 @@ self-contained under `posts/<slug>/`. The recurring threads are machine learning
 statistics, NLP and LLMs, mathematics — linear algebra, shape analysis, topology —
 data engineering, and developer tooling.
 
-Most posts execute their own code at render time and carry a pinned environment, so
-the numbers and figures on the site are the ones the committed source produces.
+36 of them execute their own code at render time and carry a pinned environment, so
+for those the numbers and figures on the site are the ones the committed source
+produces. The rest display code without running it, ship stored notebook outputs, or
+predate the convention.
 
 ## A few to start with
 
@@ -43,7 +45,7 @@ _freeze/          Quarto's cached execution output — committed on purpose
 scripts/          check_posts.py, the repo's only check
 .claude/hooks/    block-main-commit.sh — refuses any commit while HEAD is on main
 _quarto.yml       site config; index.qmd is the post listing
-Makefile          install / kernel / kernels-stub / check-posts / render
+Makefile          install / kernel / kernels-stub / check-posts / quatro (render)
 ```
 
 ## Working on the blog
@@ -53,8 +55,15 @@ Makefile          install / kernel / kernels-stub / check-posts / render
 ```bash
 make install       # base dev/lint toolchain into .venv, from uv.lock
 make kernels-stub  # register every kernel name the posts pin
-quarto preview posts/<slug>/index.qmd
+QUARTO_PYTHON="$(pwd)/.venv/bin/python" quarto render .   # rebuild docs/ from _freeze/
+python -m http.server 8000 --directory docs               # read it at localhost:8000
 ```
+
+That builds the whole site from the committed frozen output with no ML dependencies
+installed. Previewing a *single* post is a different thing: `quarto preview
+posts/<slug>/index.qmd` always executes that post's code, so it needs the post's own
+`.venv-<slug>` built first (see [Rendering](#rendering)). Out of the box it works only
+for the four `blog-base` posts, which run nothing.
 
 `make kernels-stub` is not optional on a fresh clone. Quarto resolves kernelspecs
 while it indexes the project — *before* it consults `_freeze/` — so one missing kernel
