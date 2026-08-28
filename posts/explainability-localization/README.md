@@ -18,7 +18,7 @@ method, so the page cannot drift from the code that ran.
 
 ```
 index.qmd              the post (Quarto, jupyter engine, Python)
-cover.png              social card, house style
+cover.png              social card, the Grad-CAM figure
 requirements.txt       pinned direct dependencies
 Makefile               venv | model | figures | cover | render | all
 figures/               committed PNGs, one per figure in the post
@@ -29,7 +29,6 @@ src/
   iris_stats.py        logistic fit + Wald inference, ANOVA, PCA, permutation
   figures.py           every figure, as a function returning a Figure
   make_figures.py      writes figures/*.png and runs every build gate
-  make_cover.py        redraws cover.png
 data/raw/              MNIST download, gitignored
 data/cache/            model checkpoint, gitignored
 ```

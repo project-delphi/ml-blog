@@ -13,10 +13,9 @@ widget lets the reader move the thresholds themselves.
 index.qmd                    the post (Quarto, jupyter engine, Python)
 widgets.js                   the screening widget, dependency-free
 theme.scss                   post-scoped theme layered over the site's `zephyr`
-cover.png                    social card, house style
+cover.png                    social card, the GSE52778 volcano
 requirements.txt             pinned dependencies
 data/airway_de_results.csv   DESeq2 results for GSE52778, committed (2.4 MB)
-src/make_cover.py            the social card
 ```
 
 ## Rendering

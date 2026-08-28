@@ -20,7 +20,7 @@ widgets let the reader drive the maths directly.
 index.qmd              the post (Quarto, jupyter engine, Python)
 widgets.js             both widgets, dependency-free
 theme.scss             post-scoped theme layered over the site's `zephyr`
-cover.png              social card, house style
+cover.png              social card, the rotate-stretch-rotate figure
 requirements.txt       pinned dependencies
 Makefile               data | widgets | cover | render | all
 assets/Filip.dat       the NIST StRD Filip file, committed verbatim (4 KB)
@@ -31,7 +31,6 @@ src/
   movielens.py         ratings matrix, held-out split, RMSE against rank
   voice.py             synthetic vowel, trajectory matrix, subspace denoising
   export_widget_data.py  writes the committed widget-data/*.json
-  make_cover.py        the social card
 data/raw/              MovieLens download, gitignored
 ```
 

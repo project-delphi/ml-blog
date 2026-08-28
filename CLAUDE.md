@@ -118,7 +118,7 @@ The trade: for these thirteen, `requirements.txt` is a copy of a shared freeze, 
 
 ### `posts/<slug>/src/` — assets built outside the render
 
-Twenty-seven posts carry a `src/` directory of scripts that run *ahead of* the render, with their output committed. Nearly all hold a `make_cover.py`; some go further — `metagenomics/src/make_figs.py` and `voice-ai-architectures-2026/src/make_figs.py` (figures), `open-source-tts-history/src/make_audio.py` and `llm-agent-memory/src/make_audio.py` (which write the committed `audio/*.mp3`), `kite-shape-analysis/src/` (`prepare_photos.py`, `digitize_landmarks.py`), and full module sets under `bayesian-bootstrap/src/`, `svd-rotate-stretch-rotate/src/` and `explainability-localization/src/`. A `src/export_widget_data.py` writes the JSON behind a post's interactive widget (`bayesian-bootstrap`, `svd-rotate-stretch-rotate`, `correlation-concordance-discordance`).
+Some posts carry a `src/` directory of scripts that run *ahead of* the render, with their output committed — `metagenomics/src/make_figs.py` and `voice-ai-architectures-2026/src/make_figs.py` (figures), `open-source-tts-history/src/make_audio.py` and `llm-agent-memory/src/make_audio.py` (which write the committed `audio/*.mp3`), `kite-shape-analysis/src/` (`prepare_photos.py`, `digitize_landmarks.py`), and full module sets under `bayesian-bootstrap/src/`, `svd-rotate-stretch-rotate/src/` and `explainability-localization/src/`. A `src/export_widget_data.py` writes the JSON behind a post's interactive widget (`bayesian-bootstrap`, `svd-rotate-stretch-rotate`, `correlation-concordance-discordance`). Covers are not drawn here: `scripts/make_cover.py` writes `cover.png` from the map in `scripts/cover_sources.yml`.
 
 These scripts are **not** executed by Quarto and are not covered by `_freeze/` or `make check-posts`. Regenerating an asset means running the script yourself and committing the result. They may also carry their own dependency pin (`open-source-tts-history/src/requirements-audio.txt`) and their own venv with no kernel and no post pinning it — `.venv-kokoro` exists solely to run `make_audio.py`, which is why it looks orphaned next to the kernel-backed venvs.
 
@@ -159,6 +159,29 @@ format:
 
 The body conventionally opens with `![Title](./cover.png)` echoing the frontmatter `image`. `.ipynb` posts embed this same YAML in a raw first cell.
 
-**Cover images**: every *new* post gets a `./cover.png` (older posts predate the convention and many have none — not a defect to go fix). Without a natural content-derived cover, the house style is a solid `#4A3AA7` purple card with a translucent rounded category-badge pill top-left (e.g. "ML THEORY & MATH"), a white triple-ring logomark, and bold centered title text — see `posts/topological-data-analysis-clustering/cover.png`, and the `make_cover.py` scripts under `posts/*/src/`. The site favicon (`favicon.png`, declared via `_quarto.yml`'s `website.favicon`) reuses the triple-ring mark.
+**Cover images**: every post gets a `./cover.png`. Decide the source with these conditionals, in order:
+
+1. **IF** the post already writes `cover.png` during render (today: `poor-persons-bayesian`, which `ggsave`s figure 2) **THEN** leave that file alone. Do not overwrite it with the shared script.
+2. **ELSE IF** the post contains an in-post raster visual that is not `cover.png` itself — a committed plot or photo, or a freeze figure under `_freeze/posts/<slug>/index/figure-html/` — **THEN** copy the figure that carries the post's main claim into `./cover.png`. Prefer that claim-bearing figure over "the first image in the folder".
+   - Example: `brian-ripley-rousseeuw-prize` → `ripley-oxford-announcement.png` (the Oxford press photo already in the post).
+   - Example: `volcano-plots` → `_freeze/posts/volcano-plots/index/figure-html/fig-airway-output-1.png` (the GSE52778 volcano, `fig-airway`).
+3. **ELSE IF** the post has no internal raster (mermaid inlined into HTML does not count) **THEN** search [Wikimedia Commons](https://commons.wikimedia.org/) for a relevant image whose `LicenseShortName` is public domain, CC0, CC BY, or CC BY-SA — never CC BY-NC, and never a hotlinked Google result. Commit it as `./cover.png` and record the Commons title, page URL, and licence in `./cover-source.txt` (same shape as `posts/poor-persons-bayesian/images/attribution.txt`).
+4. **ELSE** stop. Do **not** draw a solid `#4A3AA7` purple title card, category pill, triple-ring logomark, or centred title text.
+
+Fit the chosen raster to 1200×630 with the shared generator; do not paste a title overlay on top:
+
+```bash
+uv run --with pillow --with pyyaml python scripts/make_cover.py \
+  posts/<slug> --source <repo-relative-path>
+# or, for a Commons file:
+uv run --with pillow --with pyyaml python scripts/make_cover.py \
+  posts/<slug> --commons "File:Some_image.jpg"
+# or rebuild everything the map already knows:
+uv run --with pillow --with pyyaml python scripts/make_cover.py --all
+```
+
+Record the choice in `scripts/cover_sources.yml` (`source:`, `commons:`, or `skip: true`) so a later `--all` can reproduce it. Do not add a per-post `src/make_cover.py`. Do not edit a freeze-backed `index.qmd` merely to point `image:` at a new file — that invalidates `_freeze/` (see `scripts/check_posts.py`).
+
+The site favicon (`favicon.png`, declared via `_quarto.yml`'s `website.favicon`) still uses the triple-ring mark; that is independent of post covers.
 
 **`posts/_metadata.yml`** applies `freeze: auto` and `title-block-banner: true` to every post. **`_quarto.yml`** sets `output-dir: docs` and excludes `notes/` from rendering — that's a scratch area, not published content.

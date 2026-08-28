@@ -1,7 +1,7 @@
 """Synthesise the post's two demo clips with Kokoro-82M.
 
-A build tool, not part of the post's execution environment — the same
-arrangement as ``make_cover.py``. The post's own kernel is stdlib-only, so
+A build tool, not part of the post's execution environment. The post's own
+kernel is stdlib-only, so
 Kokoro (and its ~327MB of weights) lives in a borrowed venv instead of the
 post's ``requirements.txt``. Versions are frozen in
 ``src/requirements-audio.txt``. Build the venv and run from the post directory:

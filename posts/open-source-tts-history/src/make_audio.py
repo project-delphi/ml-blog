@@ -1,9 +1,8 @@
 """Synthesise one sentence with four engines spanning thirty years of TTS.
 
 A build tool, not part of the post's execution environment — the same
-arrangement as ``make_cover.py``, and as ``llm-agent-memory``'s script of the
-same name. The post itself has no executable cells; it just embeds the MP3s
-this writes.
+arrangement as ``llm-agent-memory``'s script of the same name. The post itself
+has no executable cells; it just embeds the MP3s this writes.
 
 Four of the five clips are generated here, on this machine. The techniques the
 post describes are not museum pieces: eSpeak NG still does formant synthesis by
