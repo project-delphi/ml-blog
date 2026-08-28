@@ -40,6 +40,9 @@ ALLOWED_LICENSE_PREFIXES = (
     "cc-by",
     "creative commons attribution",
     "gfdl",
+    "apache",
+    "mit",
+    "bsd",
 )
 
 
@@ -343,10 +346,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.all:
         mapping = load_yaml(SOURCES)
+        failures = 0
         for slug, entry in mapping.items():
             if not isinstance(entry, dict):
                 raise SystemExit(f"{slug}: expected a mapping")
-            process_entry(slug, entry, only=args.only)
+            try:
+                process_entry(slug, entry, only=args.only)
+            except SystemExit as exc:
+                failures += 1
+                print(f"FAIL {slug}: {exc}", file=sys.stderr)
+        if failures:
+            print(f"{failures} cover(s) failed", file=sys.stderr)
+            return 1
         return 0
 
     if not args.post:
