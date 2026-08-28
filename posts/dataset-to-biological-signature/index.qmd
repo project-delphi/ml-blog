@@ -1,0 +1,638 @@
+---
+title: "From Dataset to Biological Signature"
+subtitle: "The same pipeline, told twice — once for a machine learning scientist, once for a statistician. The disagreement is only in vocabulary, and both vocabularies are describing a selection event."
+author: "Ravi Kalia"
+date: "2026-08-27"
+categories: [Genomics, Statistics, Machine Learning, Bioinformatics, Python]
+tags: [gene-expression, feature-selection, elastic-net, stability-selection, leakage, golub, leukemia]
+image: "./cover.png"
+description: "Golub's 1999 ALL/AML data, run end to end: recovering the original designed train/test split from an unlabelled CSV, fitting a signature with nested cross-validation, and showing why the honest error rate is the hard one to get."
+jupyter: signature-blog
+resources:
+  - cover.png
+  - data
+execute:
+  warning: false
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: show
+    theme: [zephyr, theme.scss]
+    fig-width: 8
+    fig-height: 4.5
+    fig-dpi: 150
+---
+
+![](./cover.png){fig-alt="Cover card reading From Dataset to a Biological Signature, over a solid purple background."}
+
+Two acute leukemias arrive at the clinic looking much the same. Both fill the marrow
+with immature white cells, both make the patient acutely ill within weeks, and under
+a microscope the blasts of one can pass for the blasts of the other. They need
+opposite treatments. Get it wrong and you give a toxic regimen that will not work to
+someone who has a few weeks to spare.
+
+Before 1999 that call was made by an experienced haematologist reading morphology,
+chemical stains and surface markers. It was good, and it was not reproducible between
+hospitals. Golub and colleagues asked whether gene expression could make the call on
+its own — and whether you could have discovered the two diseases without being told
+they existed.
+
+This post runs that question end to end, twice. The argument underneath it is one
+sentence: **a signature is a supervised object, and every number you attach to one is
+conditioned on the selection event that produced it.** A machine learning scientist
+and a statistician describe that fact in different words. Both descriptions are here,
+and they are the same pipeline. For the concept on its own, without the code,
+[What is a Biological Signature?](../what-is-a-biological-signature/) is the primer.
+
+### Two assembly lines, and a glitch on one of them
+
+The biology is worth two minutes, because it turns out to be what the model recovers.
+Think of bone marrow as a factory with two assembly lines running from a single stem
+cell. The **lymphoid** line builds B-cells and T-cells — the targeted, specific arm of
+the immune system, the sharpshooters. The **myeloid** line builds everything else: red
+cells that carry oxygen, platelets that clot, granulocytes that do the frontline
+brawling.
+
+An acute leukemia is a glitch that jams one line, flooding the marrow with immature
+cells — blasts — that will neither mature into anything useful nor stop dividing.
+
+```{mermaid}
+flowchart TD
+  S["Bone marrow stem cell"] --> L["Lymphoid line<br/>B-cells, T-cells"]
+  S --> M["Myeloid line<br/>red cells, platelets, granulocytes"]
+  L -->|glitch| ALL["<b>ALL</b><br/>lymphoblasts"]
+  M -->|glitch| AML["<b>AML</b><br/>myeloblasts"]
+```
+
+Jam the lymphoid line and you get acute lymphoblastic leukemia, ALL — the commonest
+cancer of childhood. Jam the myeloid line and you get acute myeloid leukemia, AML,
+mostly an adult disease diagnosed at a median age near 68, and faster to strip out
+oxygen transport and clotting because the myeloid line covers more jobs.
+
+So the diagnostic question has a clean biological shape: *which line is stuck?* Hold
+on to that. It is what the classifier ends up measuring.
+
+### The data, and who went to the trouble of collecting it
+
+The measurements come from Golub et al. (1999) at the Whitehead Institute and
+Dana-Farber, who ran marrow and blood from 72 acute leukemia patients on Affymetrix
+HU6800 arrays — 7,129 probes, one fluorescence intensity each. They were not building
+a product; they assembled samples from existing clinical archives to argue that
+tumour class is legible in expression at all.
+
+A decision made from this analysis is a treatment assignment: vincristine and
+steroids for ALL, cytarabine and an anthracycline for AML, for a patient seriously
+ill either way. So the interesting quantity is not peak accuracy. It is how much of
+the accuracy survives contact with a different hospital.
+
+I use the copy on Efron and Hastie's *Computer Age Statistical Inference* data page,
+cached in this post's `data/` directory so the render never touches the network.
+
+```{python}
+#| label: setup
+#| code-fold: true
+#| code-summary: "Imports, plot style, and loading the cached matrices"
+
+import warnings
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.stats import beta
+
+warnings.filterwarnings("ignore")
+rng_seed = 0
+
+plt.rcParams.update({
+    "figure.dpi": 150, "savefig.bbox": "tight", "font.size": 9,
+    "axes.spines.top": False, "axes.spines.right": False,
+    "axes.grid": True, "grid.alpha": 0.25, "axes.axisbelow": True,
+})
+ALL_C, AML_C = "#1D5C6E", "#C98A12"
+
+# The CASI matrix: 7,128 genes x 72 samples, column names carry the labels.
+casi = pd.read_csv("data/leukemia_big.csv.gz")
+X = casi.to_numpy().T                                    # samples x genes
+y = np.array([int(c.split(".")[0].startswith("AML")) for c in casi.columns])
+
+# The original Whitehead files, used only as a key: they carry the Affymetrix
+# probe accessions and the per-patient sample IDs that the CASI copy dropped.
+def read_golub(path):
+    d = pd.read_csv(path)
+    ids = [c for c in d.columns[2:] if not c.startswith("call")]
+    return d["Gene Accession Number"].to_numpy(), d["Gene Description"].to_numpy(), \
+           d[ids].to_numpy(dtype=float), ids
+
+acc, desc, G_train, id_train = read_golub("data/golub_train.csv.gz")
+_, _, G_test, id_test = read_golub("data/golub_independent.csv.gz")
+truth = pd.read_csv("data/golub_labels.csv").set_index("patient")["cancer"].to_dict()
+
+print(f"expression matrix : {X.shape[0]} samples x {X.shape[1]} genes")
+print(f"class balance     : {(y==0).sum()} ALL, {y.sum()} AML")
+```
+
+Seventy-two samples, 7,128 genes: a hundred times more things measured than people
+to measure them on. Every difficulty below follows from that ratio.
+
+```{python}
+#| label: slice
+#| code-fold: true
+#| code-summary: "A corner of the matrix"
+
+pd.DataFrame(
+    X[:5, :6].round(3),
+    index=[f"sample {i} ({'AML' if y[i] else 'ALL'})" for i in range(5)],
+    columns=[f"gene {j}" for j in range(6)],
+)
+```
+
+The values are not raw intensities. Each *column* has been standardised to mean zero
+and unit standard deviation across genes, and beyond that the file's own
+documentation says the gene-level transformation is "lost in time".
+
+## The file on Hastie's server is Golub's two cohorts, stored backwards
+
+Golub's design had a feature that matters more than anything else here. The 72
+samples are not one pool. Thirty-eight came from a single institution, all bone
+marrow, and built the predictor. The other 34 were collected later from different
+reference laboratories, on different preparation protocols, and included peripheral
+blood as well as marrow — a genuine external cohort with a real distribution shift,
+which is the only kind of test set worth quoting.
+
+The CASI file has no sample identifiers, so that split looks lost. It is recoverable,
+and worth recovering properly rather than guessing from label counts. Per-sample
+standardisation is monotone within a column, so it preserves the *ranking* of genes
+inside a sample. Rank each column of both files and correlate.
+
+```{python}
+#| label: recover-split
+#| code-fold: show
+
+G = np.hstack([G_train, G_test])[:X.shape[1]]   # CASI drops Golub's last probe
+ids = id_train + id_test
+golub_y = np.array([int(truth[int(i)] == "AML") for i in ids])
+
+rank = lambda A: np.argsort(np.argsort(A, axis=0), axis=0).astype(float)
+Rc, Rg = rank(casi.to_numpy()), rank(G)
+Rc = (Rc - Rc.mean(0)) / Rc.std(0)
+Rg = (Rg - Rg.mean(0)) / Rg.std(0)
+S = (Rc.T @ Rg) / G.shape[0]                    # 72 x 72 Spearman matrix
+match, best = S.argmax(1), np.sort(S, axis=1)
+
+print(f"unique matches      : {len(set(match.tolist()))}/72")
+print(f"labels agree        : {(golub_y[match] == y).sum()}/72")
+print(f"worst true match    : {best[:, -1].min():.3f}")
+print(f"best runner-up      : {best[:, -2].max():.3f}")
+print(f"CASI column 0 -> patient {ids[match[0]]};  column 34 -> patient {ids[match[34]]}")
+```
+
+Every column matches one patient, uniquely, and every label agrees. The weakest true
+match scores 0.945 against a best runner-up of 0.884, so the assignment is not close
+to ambiguous. It also settles the ordering: column 0 is patient 39 and column 34 is
+patient 1, so the file stores the **independent test cohort first** — the reverse of
+the conventional layout. Splitting this file at the front hands you Golub's held-out
+samples as training data.
+
+One caveat that no amount of downstream care removes: the per-gene transformation
+the CASI page cannot document may well have been fitted across all 72 samples.
+Per-sample standardisation is leak-free, since a column only ever sees itself. That
+other step is not. Everything below is conditional on it.
+
+```{python}
+#| label: fig-data
+#| fig-cap: "Left: two genes named later in the post, one myeloid and one lymphoid, separate the classes almost on their own. Right: the component that carries diagnosis plotted against the one that carries cohort. Class separates left-to-right and the laboratory separates bottom-to-top, on different axes — the nuisance variable has structure of its own."
+#| code-fold: true
+#| code-summary: "Figure 1"
+
+test_ix, train_ix = np.arange(34), np.arange(34, 72)
+probe = {a: i for i, a in enumerate(acc[:X.shape[1]])}
+mpo, ccnd3 = probe["M19507_at"], probe["M92287_at"]
+
+Z = (X - X.mean(0)) / (X.std(0) + 1e-9)
+U, sv, _ = np.linalg.svd(Z - Z.mean(0), full_matrices=False)
+pcs = U[:, :5] * sv[:5]
+
+# Pick the axes by what they actually carry, rather than assuming PC1/PC2:
+# correlate each component with class and with cohort membership.
+cohort = np.r_[np.zeros(34), np.ones(38)]
+corr = lambda v: np.array([abs(np.corrcoef(v, pcs[:, k])[0, 1]) for k in range(5)])
+k_cls, k_coh = corr(y).argmax(), corr(cohort).argmax()
+
+fig, (a1, a2) = plt.subplots(1, 2, figsize=(8, 3.6))
+for cls, name, col in [(0, "ALL", ALL_C), (1, "AML", AML_C)]:
+    m = y == cls
+    a1.scatter(X[m, ccnd3], X[m, mpo], c=col, s=28, alpha=0.85, label=name,
+               edgecolor="white", linewidth=0.5)
+a1.set(xlabel="CCND3 (cyclin D3), lymphoid", ylabel="MPO (myeloperoxidase), myeloid",
+       title="Two genes")
+a1.legend(frameon=False, fontsize=8)
+
+for cls, col in [(0, ALL_C), (1, AML_C)]:
+    for ix, mark, lab in [(train_ix, "o", "training"), (test_ix, "^", "external")]:
+        m = np.intersect1d(np.flatnonzero(y == cls), ix)
+        a2.scatter(pcs[m, k_cls], pcs[m, k_coh], c=col, marker=mark, s=28, alpha=0.85,
+                   edgecolor="white", linewidth=0.5,
+                   label=f"{'AML' if cls else 'ALL'}, {lab}")
+a2.set(xlabel=f"PC{k_cls + 1}  (carries class, |r| = {corr(y)[k_cls]:.2f})",
+       ylabel=f"PC{k_coh + 1}  (carries cohort, |r| = {corr(cohort)[k_coh]:.2f})",
+       title="Colour = class, shape = cohort")
+a2.legend(frameon=False, fontsize=7, loc="best")
+fig.tight_layout()
+plt.show()
+```
+
+The classes are nearly separable in two hand-picked genes, which tells you the signal
+here is unusually strong — remember that when the error rates arrive. The right panel
+is the warning attached to it. Diagnosis and laboratory load on *different* principal
+components, so the batch effect is not noise smeared over the class signal; it is its
+own coherent direction in the data. A ridge classifier trained to predict which
+laboratory a sample came from, ignoring diagnosis entirely, reaches 78% under
+cross-validation. Batch is a learnable feature, and a model will use it if you let it.
+
+## For the ML scientist: the signature is supervised, the plumbing is not
+
+**What is the design matrix, and where does the domain knowledge sit?** Rows are
+patients, columns are genes, entries are normalised expression. All the biology lives
+upstream of that matrix — which probes map to which transcript, how intensities are
+floored and logged, how arrays are normalised against each other. That featurisation
+is assay-specific and does not transfer; rebuild this study on RNA-seq and the whole
+preprocessing stack changes. What happens after the matrix exists is ordinary
+supervised learning. The asymmetry is why genomics pipelines break when they are
+ported rather than when they are fit.
+
+**Is finding a signature supervised or unsupervised?** Supervised, and worth saying
+flatly because the field's vocabulary blurs it. A signature is defined *relative to a
+phenotype*. Strip the labels and you still have structure, but structure is not a
+signature; it is a pattern that might be disease, sex, batch, or the day the samples
+were run. Unsupervised methods do the plumbing: normalisation, dimensionality
+reduction, and checking that the dominant variation tracks biology rather than the
+laboratory — which is what the right panel above was for.
+
+The exception is real, and Golub's paper is why it is famous. Cluster first, discover
+a grouping nobody had a label for, then treat the cluster assignments as labels. That
+is class *discovery*, and their paper did both halves. Discovery proposes the
+phenotype; the signature is still supervised once you have one.
+
+**What actually ships?** A fixed gene list, fixed coefficients, and a threshold
+locked before anyone opens the test set. Not a model you keep tuning. Which is why
+the penalty is chosen inside cross-validation rather than by looking at the answer:
+
+$$
+\hat\beta \;=\; \arg\min_{\beta}\; -\frac{1}{n}\sum_{i=1}^{n}\Big[y_i\,x_i^{\top}\beta - \log\big(1 + e^{x_i^{\top}\beta}\big)\Big] \;+\; \lambda\Big(\alpha\lVert\beta\rVert_1 + \tfrac{1-\alpha}{2}\lVert\beta\rVert_2^2\Big)
+$$
+
+The $\ell_1$ term forces most coefficients to zero, which is what makes the result a
+short gene list; the $\ell_2$ term stops correlated genes being picked arbitrarily
+one-from-each-group. With $\alpha = 0.5$ the only free parameter is $\lambda$,
+chosen in an inner loop while an outer loop estimates performance — so the number
+below never saw the data that produced it.
+
+```{python}
+#| label: fig-path
+#| fig-cap: "Inner-fold accuracy along the regularisation path, on the 38 training samples only. Accuracy peaks at a single interior value. To the left the penalty is strong enough to zero out genes the model needs; to the right it is weak enough to admit genes that only help on the training fold. Error bars are one standard deviation across five folds, and they are wide — 38 samples do not locate this optimum precisely."
+#| code-fold: true
+#| code-summary: "Nested cross-validation, and Figure 2"
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.metrics import accuracy_score, roc_auc_score, brier_score_loss
+
+Xtr, ytr, Xte, yte = X[train_ix], y[train_ix], X[test_ix], y[test_ix]
+Cs = np.logspace(-2, 1, 7)
+
+def enet(C):
+    return LogisticRegression(penalty="elasticnet", solver="saga", l1_ratio=0.5,
+                              C=C, max_iter=3000, tol=1e-3, random_state=rng_seed)
+
+def screen(A, k=2000):
+    """Unsupervised variance screen. Never sees y, so it is safe inside a fold."""
+    return np.argsort(-A.var(0))[:k]
+
+outer, scores = StratifiedKFold(5, shuffle=True, random_state=0), []
+for a, b in outer.split(Xtr, ytr):
+    g = screen(Xtr[a])
+    mu, sd = Xtr[a][:, g].mean(0), Xtr[a][:, g].std(0) + 1e-9
+    Za, Zb = (Xtr[a][:, g] - mu) / sd, (Xtr[b][:, g] - mu) / sd
+    inner = StratifiedKFold(4, shuffle=True, random_state=1)
+    C = max(Cs, key=lambda c: cross_val_score(enet(c), Za, ytr[a], cv=inner).mean())
+    scores.append(accuracy_score(ytr[b], enet(C).fit(Za, ytr[a]).predict(Zb)))
+
+# Full-training-set path, for the figure and for the final penalty.
+g = screen(Xtr)
+mu, sd = Xtr[:, g].mean(0), Xtr[:, g].std(0) + 1e-9
+Ztr, Zte = (Xtr[:, g] - mu) / sd, (Xte[:, g] - mu) / sd
+cv5 = StratifiedKFold(5, shuffle=True, random_state=1)
+path = np.array([cross_val_score(enet(c), Ztr, ytr, cv=cv5) for c in Cs])
+C_star = Cs[path.mean(1).argmax()]
+
+print(f"nested CV accuracy : {np.mean(scores):.3f}  (outer folds "
+      f"{[round(s, 2) for s in scores]})")
+
+fig, ax = plt.subplots(figsize=(6.2, 3.2))
+ax.errorbar(Cs, path.mean(1), yerr=path.std(1), marker="o", color=ALL_C,
+            capsize=3, linewidth=1.5, markersize=5)
+ax.axvline(C_star, color=AML_C, linestyle="--", linewidth=1.3,
+           label=f"chosen C = {C_star:.2f}")
+ax.set(xscale="log", xlabel="C  (inverse penalty strength)",
+       ylabel="inner-fold accuracy", title="Regularisation path")
+ax.legend(frameon=False, fontsize=8)
+plt.show()
+```
+
+Nested cross-validation puts the predictor at 0.921 on the training cohort. Now
+lock it and open the external samples once.
+
+```{python}
+#| label: external
+#| code-fold: show
+
+final = enet(C_star).fit(Ztr, ytr)
+selected = g[np.flatnonzero(final.coef_[0])]
+p_test = final.predict_proba(Zte)[:, 1]
+
+print(f"genes with non-zero coefficient : {len(selected)}")
+print(f"external accuracy : {accuracy_score(yte, p_test > 0.5):.3f} "
+      f"({int((( p_test > 0.5) == yte).sum())}/34)")
+print(f"external AUC      : {roc_auc_score(yte, p_test):.3f}")
+print(f"external Brier    : {brier_score_loss(yte, p_test):.3f}")
+wrong = np.flatnonzero((p_test > 0.5).astype(int) != yte)
+print(f"the one error     : predicted p(AML) = {p_test[wrong][0]:.3f}")
+```
+
+**What did it find?** Thirty-three of 34 external samples correct, AUC 1.000, and the
+single mistake sits at $p = 0.468$ — on the wrong side of the threshold by three
+hundredths, not a confident error. Note the direction of the gap: nested
+cross-validation said 0.921 and the external cohort delivered 0.971. The internal
+estimate was *pessimistic*, which is worth flagging because the failure mode everyone
+is trained to expect runs the other way.
+
+The gene list is what closes the loop back to the marrow.
+
+```{python}
+#| label: lineage
+#| code-fold: true
+#| code-summary: "Naming the selected genes"
+
+lineage = {
+    "M19507_at": "MPO, myeloperoxidase — the granulocyte enzyme",
+    "M23197_at": "CD33 — myeloid surface antigen",
+    "X52056_at": "SPI1 / PU.1 — myeloid master transcription factor",
+    "M84526_at": "DF, adipsin — Golub's AML-high list",
+    "M27891_at": "CST3, cystatin C — Golub's AML-high list",
+    "M92287_at": "CCND3, cyclin D3 — Golub's ALL-high list",
+    "U05259_rna1_at": "MB-1 / CD79a — B-cell receptor component",
+    "M31523_at": "TCF3 / E2A — required for B-cell development",
+}
+hits = [(acc[i], lineage[acc[i]]) for i in selected if acc[i] in lineage]
+for a, note in hits:
+    print(f"  {a:16s} {note}")
+print(f"\n{len(hits)} of these annotated markers survived selection.")
+```
+
+Myeloid markers on one side, lymphoid markers on the other. The classifier is reading
+out which assembly line is stuck — it has recovered the lineage question, not
+memorised 72 patients. And among the genes it keeps is myeloperoxidase, precisely the
+enzyme the pre-1999 cytochemical stain tested for. The expression profile arrives at
+the haematologist's own marker from the other direction.
+
+That is the optimistic reading. The next section runs the same pipeline and asks what
+those numbers are estimates *of*.
+
+## For the statistician: every coefficient is conditioned on a selection event
+
+Recast the problem and the difficulty changes shape. This is sparse variable
+selection with $p \gg n$: 7,128 candidate predictors, 38 training observations, and
+an assumption that only a handful matter. The estimator picks that handful and
+reports coefficients for it. Those two steps are not separable, and the second
+inherits the first.
+
+So a naive confidence interval on a selected coefficient is meaningless. It is
+computed as though the gene had been named in advance, when the gene is there
+*because* it looked good in this sample. The interval is too narrow and the p-value
+too small, by an amount that depends on the selection rule. The repairs are known and
+none of them is "use the same-data p-values": split the sample and do inference on
+the untouched half; condition on the selection event explicitly, as selective
+inference does; or construct knockoff variables that mimic the correlation structure
+with no real association, and calibrate against them.
+
+Multiplicity is the second problem, and a Bonferroni reflex does not solve it. The
+relevant guarantee at this scale is the false discovery rate,
+
+$$
+\mathrm{FDR} \;=\; \mathbb{E}\!\left[\frac{V}{\max(R, 1)}\right],
+$$
+
+with $R$ the number of rejections and $V$ the number of them that are false. The
+practical difficulty is that genes are not independent. They sit in co-regulated
+modules, so one upstream event moves fifty together and the effective number of
+independent tests is far below 7,128. Benjamini–Hochberg holds under positive
+dependence, but correlation makes the realised false discovery proportion highly
+variable around its mean — you can control the average and still draw a badly wrong
+list this time.
+
+Stated as stages, the pipeline the section above ran informally is:
+
+1. Lock the estimand and the operating point before looking at anything.
+2. Split, before any transformation touches the data.
+3. Fit normalisation and any filter on training folds only.
+4. Choose the penalty in an inner loop, estimate performance in an outer loop.
+5. Check the selected set is stable, not merely optimal once.
+6. Lock coefficients and threshold, evaluate externally once, and report calibration
+   and intervals rather than a bare discrimination number.
+
+Step 3 is the one usually violated, and the violation is almost never deliberate.
+
+### Leakage is the default because the filter sees the whole dataset
+
+The natural way to handle 7,128 genes is to rank them by a two-sample t-statistic,
+keep the top 50, and cross-validate on those. It feels safe: inside the loop the model
+only ever trains on the training fold. But the *filter* ran once, on everything, so
+the held-out fold helped choose the genes it is later used to score. Ambroise and
+McLachlan named this in 2002, and it reproduces in a few lines.
+
+```{python}
+#| label: leakage
+#| code-fold: show
+
+def top_genes(A, lab, k=50):
+    m0, m1 = A[lab == 0].mean(0), A[lab == 1].mean(0)
+    se = np.sqrt(A[lab == 0].var(0) / (lab == 0).sum()
+                 + A[lab == 1].var(0) / lab.sum()) + 1e-9
+    return np.argsort(-np.abs((m1 - m0) / se))[:k]
+
+def two_ways(lab, cv=StratifiedKFold(10, shuffle=True, random_state=7)):
+    once = cross_val_score(enet(1.0), Z[:, top_genes(Z, lab)], lab, cv=cv).mean()
+    fold = [accuracy_score(lab[b], enet(1.0)
+            .fit(Z[a][:, (gi := top_genes(Z[a], lab[a]))], lab[a])
+            .predict(Z[b][:, gi])) for a, b in cv.split(Z, lab)]
+    return 1 - once, 1 - np.mean(fold)
+
+opt, honest = two_ways(y)
+print(f"real labels     : filter once {opt:.1%} error | filter in fold {honest:.1%}")
+
+shuffled = np.random.default_rng(3).permutation(y)
+opt_n, honest_n = two_ways(shuffled)
+print(f"labels shuffled : filter once {opt_n:.1%} error | filter in fold {honest_n:.1%}")
+print(f"chance for this class balance : {(y == 0).mean():.1%} correct by always saying ALL")
+```
+
+On the real labels the gap is small — 2.9% against 4.3% — and that is the honest
+result, not a failed demonstration. The ALL/AML signal is so strong that leakage has
+almost nothing left to add.
+
+The second line is the demonstration. Shuffle the labels so no signal exists at all,
+and selecting genes once on the full dataset reports 7.0% error: 93% accuracy on pure
+noise. Do the same selection inside each fold and the error goes to 33.2%, against
+the 34.7% you get by always guessing ALL. The optimism is not a small bias that
+scales with the signal; it is nearly the whole number when there is nothing there.
+Leakage is almost invisible in the regime where you do not need the estimate, and
+catastrophic in the regime where you do.
+
+### A signature is a draw from a distribution of signatures
+
+Optimality on one sample is not reproducibility. Refit on random halves of the
+training set and record how often each gene survives: genes chosen for real structure
+keep appearing, genes chosen for noise do not.
+
+```{python}
+#| label: fig-stability
+#| fig-cap: "Selection frequency across 100 half-samples of the training cohort, sorted. The dashed line is a 0.6 cutoff. Genes above it are labelled by Affymetrix probe."
+#| code-fold: true
+#| code-summary: "Stability selection, and Figure 3"
+
+rng = np.random.default_rng(rng_seed)
+freq, B = np.zeros(X.shape[1]), 100
+pool = screen(Xtr)
+for _ in range(B):
+    take = rng.choice(len(ytr), len(ytr) // 2, replace=False)
+    if len(np.unique(ytr[take])) < 2:
+        continue
+    A = Xtr[take][:, pool]
+    A = (A - A.mean(0)) / (A.std(0) + 1e-9)
+    freq[pool[np.flatnonzero(enet(0.5).fit(A, ytr[take]).coef_[0])]] += 1
+freq /= B
+
+order = np.argsort(-freq)
+for t in (0.5, 0.6, 0.7, 0.9):
+    print(f"selection frequency >= {t}: {(freq >= t).sum()} genes")
+
+fig, ax = plt.subplots(figsize=(7.6, 3.4))
+top = order[:60]
+ax.bar(range(len(top)), freq[top], color=ALL_C, width=0.8)
+ax.axhline(0.6, color=AML_C, linestyle="--", linewidth=1.3, label="cutoff = 0.6")
+above = int((freq[top] >= 0.6).sum())
+ax.set_xticks(range(above))
+ax.set_xticklabels([acc[i] for i in top[:above]], rotation=90, fontsize=5)
+ax.set(xlim=(-1, len(top)), ylabel="selection frequency",
+       xlabel="genes, ranked", title=f"{B} half-samples of the 38 training patients")
+ax.legend(frameon=False, fontsize=8)
+plt.show()
+```
+
+Forty-five genes clear a 0.5 cutoff and only 12 clear 0.9. The 88-gene list is
+therefore not one thing: most of its members are interchangeable with a correlated
+neighbour, and a different 38 patients would have returned a visibly different list
+with much the same accuracy.
+
+That instability is not an artefact of the elastic net. Reconstruct Golub's own
+50-gene predictor with the signal-to-noise statistic from his paper,
+$P(g,c) = (\mu_1 - \mu_0)/(\sigma_1 + \sigma_0)$, and compare it against the same
+statistic computed after the preprocessing his methods section describes — clip
+intensities to $[100, 16000]$, then take logs.
+
+```{python}
+#| label: golub50
+#| code-fold: true
+#| code-summary: "Reconstructing the 1999 predictor"
+
+def snr(A, lab):
+    d = A[lab == 1].mean(0) - A[lab == 0].mean(0)
+    return d / (A[lab == 1].std(0, ddof=1) + A[lab == 0].std(0, ddof=1) + 1e-12)
+
+raw = G_train.T
+P_raw = snr(raw, golub_y[:38])
+P_log = snr(np.log10(np.clip(raw, 100, 16000)), golub_y[:38])
+fifty = lambda P: set(np.argsort(-P)[:25]) | set(np.argsort(P)[:25])
+g50_raw, g50_log = fifty(P_raw), fifty(P_log)
+
+print(f"Golub-50, raw vs his own log10 preprocessing : {len(g50_raw & g50_log)}/50 shared")
+print(f"elastic net set vs Golub-50 (log10)         : "
+      f"{len(set(selected) & g50_log)} of 50 genes in common")
+print("top AML-high probes:",
+      ", ".join(acc[i] for i in np.argsort(-P_log)[:4]))
+```
+
+Golub's own top 50 moves by 18 genes on a preprocessing choice his paper mentions in
+passing. Against that backdrop the elastic net's overlap of 26 out of 50 is neither a
+failure to replicate nor a confirmation. It is what two reasonable selection rules
+agree on when the underlying object is this unstable. The gene list is an estimate,
+and estimates have sampling distributions.
+
+## Closing: 34 samples cannot pin down an operating characteristic
+
+The external cohort did what it was supposed to do. Collected elsewhere, prepared
+differently, including a tissue the training set did not, and the locked model still
+got 33 of 34 right. That is a real result, and Golub's designed split is why it means
+anything at all.
+
+But 34 is 34.
+
+```{python}
+#| label: closing
+#| code-fold: true
+#| code-summary: "Intervals, and what happens at a different prevalence"
+
+def wilson(k, n, z=1.96):
+    c = (k / n + z * z / (2 * n)) / (1 + z * z / n)
+    h = z * np.sqrt(k / n * (1 - k / n) / n + z * z / (4 * n * n)) / (1 + z * z / n)
+    return c - h, c + h
+
+print(f"external accuracy 33/34   : 95% CI [{wilson(33, 34)[0]:.3f}, {wilson(33, 34)[1]:.3f}]")
+print(f"nested CV, 35/38          : 95% CI [{wilson(35, 38)[0]:.3f}, {wilson(35, 38)[1]:.3f}]")
+
+sens, fpr_hi = 13 / 14, beta.ppf(0.975, 1, 20)
+print(f"\nspecificity 20/20, but 95% upper bound on the false-positive rate: {fpr_hi:.3f}")
+for prev, where in [(0.35, "suspected leukemia at referral"), (0.02, "a broader haematology clinic")]:
+    ppv = sens * prev / (sens * prev + fpr_hi * (1 - prev))
+    print(f"  prevalence {prev:>5.0%} ({where}): PPV could be as low as {ppv:.2f}")
+```
+
+The point estimate of 0.971 carries a 95% interval from 0.851 to 0.995. A model that
+got 30 of 34 right is not distinguishable from this one on this evidence.
+Specificity looks perfect at 20 out of 20, but zero errors in twenty observations
+only bounds the false-positive rate below about 17% — and carrying that bound through
+Bayes' rule is where the number stops travelling: predictive value falls from 0.75 at
+the prevalence of a suspected-leukemia referral to 0.10 at 2%.
+
+Which returns to the sentence at the top. A signature is supervised, so it is defined
+relative to a phenotype *and* to the population you drew it from. Accuracy is not a
+property of the model; it is a property of the model applied to a population at a
+particular prevalence. Golub's predictor answers "which of these two leukemias does
+this patient have" for a patient who already has one. Point it at a screening
+population and the arithmetic above, not the classifier, decides what it is worth.
+
+## References
+
+**Biology and genomics**
+
+- Golub, T. R. et al. (1999). Molecular classification of cancer: class discovery and class prediction by gene expression monitoring. *Science* 286:531–537.
+- Alizadeh, A. A. et al. (2000). Distinct types of diffuse large B-cell lymphoma identified by gene expression profiling. *Nature* 403:503–511.
+- van 't Veer, L. J. et al. (2002). Gene expression profiling predicts clinical outcome of breast cancer. *Nature* 415:530–536.
+- Subramanian, A. et al. (2005). Gene set enrichment analysis: a knowledge-based approach for interpreting genome-wide expression profiles. *PNAS* 102:15545–15550.
+- Leek, J. T. et al. (2010). Tackling the widespread and critical impact of batch effects in high-throughput data. *Nature Reviews Genetics* 11:733–739.
+- Whalen, S. et al. (2022). Navigating the pitfalls of applying machine learning in genomics. *Nature Reviews Genetics* 23:169–181.
+
+**Statistics and machine learning**
+
+- Tibshirani, R. (1996). Regression shrinkage and selection via the lasso. *JRSS-B* 58:267–288.
+- Benjamini, Y. & Hochberg, Y. (1995). Controlling the false discovery rate: a practical and powerful approach to multiple testing. *JRSS-B* 57:289–300.
+- Zou, H. & Hastie, T. (2005). Regularization and variable selection via the elastic net. *JRSS-B* 67:301–320.
+- Guyon, I., Weston, J., Barnhill, S. & Vapnik, V. (2002). Gene selection for cancer classification using support vector machines. *Machine Learning* 46:389–422.
+- Dudoit, S., Fridlyand, J. & Speed, T. P. (2002). Comparison of discrimination methods for the classification of tumors using gene expression data. *JASA* 97:77–87.
+- Ambroise, C. & McLachlan, G. J. (2002). Selection bias in gene extraction on the basis of microarray gene-expression data. *PNAS* 99:6562–6566.
+- Meinshausen, N. & Bühlmann, P. (2010). Stability selection. *JRSS-B* 72:417–473.
+- Barber, R. F. & Candès, E. J. (2015). Controlling the false discovery rate via knockoffs. *Annals of Statistics* 43:2055–2085.
+- Candès, E., Fan, Y., Janson, L. & Lv, J. (2018). Panning for gold: 'model-X' knockoffs for high-dimensional controlled variable selection. *JRSS-B* 80:551–577.
+- Efron, B. & Hastie, T. (2016). *Computer Age Statistical Inference: Algorithms, Evidence, and Data Science.* Cambridge University Press.
+
+**Data.** The expression matrix is `leukemia_big.csv` from the [CASI data page](https://hastie.su.domains/CASI_files/DATA/leukemia.html). Probe accessions and sample identifiers come from the original Whitehead files, `data_set_ALL_AML_train.csv` and `data_set_ALL_AML_independent.csv`; the URL cited in the 1999 paper is long dead, so this post uses a [mirror](https://github.com/dharsandip/Classification_of_Cancer_by_Gene_Expression_Dataset) of them. Both are cached under `data/` by `src/fetch_data.py`.
