@@ -126,7 +126,7 @@ These scripts are **not** executed by Quarto and are not covered by `_freeze/` o
 
 Two rules bite when adding a post:
 
-- **`data/` is ignored everywhere.** A post that reads a data file at render time needs that path un-ignored, or a clone cannot rebuild it. `posts/volcano-plots/data/` is the one exception already carved out — copy its two-line pattern (un-ignore the directory *and* `/**`; git will not descend into an excluded directory to find a negated file inside it).
+- **`data/` is ignored everywhere.** A post that reads a data file at render time needs that path un-ignored, or a clone cannot rebuild it. Two directories are carved out already — `posts/volcano-plots/data/` and `posts/dataset-to-biological-signature/data/` — so copy their two-line pattern (un-ignore the directory *and* `/**`; git will not descend into an excluded directory to find a negated file inside it). Both are also exempted from the whitespace and large-file pre-commit hooks, since they cache upstream bytes verbatim.
 - **Training artefacts are ignored on purpose**: `checkpoints/`, `posts/**/checkpoints/`, `posts/**/results/`, and Quarto's `posts/**/index_files/` and `index_cache/`. A fine-tuning post drops hundreds of MB there relative to the render's cwd. The published copies live in `docs/` and `_freeze/`.
 
 ### Why `_freeze/` is committed
