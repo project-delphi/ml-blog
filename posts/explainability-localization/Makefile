@@ -27,9 +27,9 @@ model:
 figures:
 	$(PY) src/make_figures.py
 
-## cover: redraw cover.png in the house style
+## cover: rewrite cover.png from the Grad-CAM figure
 cover:
-	$(PY) src/make_cover.py
+	cd $(REPO) && uv run --with pillow --with pyyaml python scripts/make_cover.py posts/explainability-localization
 
 ## render: build the post (all gates run inside and fail the render on mismatch)
 render:

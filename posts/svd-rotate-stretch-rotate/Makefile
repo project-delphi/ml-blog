@@ -27,9 +27,9 @@ data:
 widgets:
 	cd $(CURDIR) && $(PY) src/export_widget_data.py
 
-## cover: rewrite the social card
+## cover: rewrite the social card from the in-post SVD figure
 cover:
-	$(PY) src/make_cover.py
+	cd $(REPO) && uv run --with pillow --with pyyaml python scripts/make_cover.py posts/svd-rotate-stretch-rotate
 
 ## render: build the post
 render:

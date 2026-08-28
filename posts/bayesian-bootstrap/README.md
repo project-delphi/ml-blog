@@ -15,7 +15,7 @@ the algebra and the arithmetic disagree.
 index.qmd              the post (Quarto, jupyter engine, Python)
 theme.scss             post-scoped theme layered over the site's `zephyr`
 widgets.js             the seven interactive widgets, dependency-free
-cover.png              social card, house style
+cover.png              social card, the Dirichlet simplex figure
 requirements.txt       pinned dependencies
 Makefile               data | mnist | widgets | render | all
 src/
