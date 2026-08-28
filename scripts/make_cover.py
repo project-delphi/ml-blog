@@ -30,19 +30,30 @@ WIDTH, HEIGHT = 1200, 630
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 USER_AGENT = "ml-blog-cover-bot/1.0 (https://github.com/project-delphi/ml-blog)"
 
-# LicenseShortName values Wikimedia returns. NC is rejected; ND is accepted
-# because we only resize, we do not crop out the work or add a derivative scene.
+# LicenseShortName values Wikimedia returns. NC is rejected even when it only
+# appears on a second prong (Commons reports one short name for multi-licensed
+# files). ND is rejected because fit_cover center-crops. GFDL is not in the
+# CLAUDE.md allowlist.
 ALLOWED_LICENSE_PREFIXES = (
     "public domain",
-    "pd",
     "cc0",
     "cc by",
     "cc-by",
     "creative commons attribution",
-    "gfdl",
+    "creative commons zero",
     "apache",
     "mit",
     "bsd",
+)
+DISALLOWED_MARKERS = (
+    "-nc",
+    "noncommercial",
+    "non-commercial",
+    "cc-by-nc",
+    "-nd",
+    "noderiv",
+    "no deriv",
+    "cc-by-nd",
 )
 
 
@@ -124,19 +135,39 @@ def write_cover(slug: str, source: Path) -> Path:
     return out
 
 
-def license_allowed(short_name: str) -> bool:
-    """Return True if a Commons LicenseShortName is PD or CC-BY (not NC).
+def _metadata_blob(meta: dict[str, object]) -> str:
+    """Join Commons extmetadata values that can hide a second licence.
 
     Args:
-        short_name: The LicenseShortName Wikimedia reports.
+        meta: The imageinfo extmetadata object from the Commons API.
+
+    Returns:
+        Lowercased concatenation of short name, usage terms, permission, and categories.
+    """
+    parts = []
+    for key in ("LicenseShortName", "UsageTerms", "License", "Permission", "Categories"):
+        value = (meta.get(key) or {}).get("value") if isinstance(meta.get(key), dict) else ""
+        if value:
+            parts.append(str(value))
+    return " ".join(parts).lower()
+
+
+def license_allowed(meta: dict[str, object]) -> bool:
+    """Return True if Commons metadata is PD, CC BY/SA, or Apache — never NC/ND/GFDL.
+
+    Args:
+        meta: The imageinfo extmetadata object from the Commons API.
 
     Returns:
         Whether we will commit the file as a cover.
     """
-    lowered = short_name.strip().lower()
-    if "-nc" in lowered or "noncommercial" in lowered or "non-commercial" in lowered:
+    blob = _metadata_blob(meta)
+    if any(marker in blob for marker in DISALLOWED_MARKERS):
         return False
-    return any(lowered.startswith(prefix) or prefix in lowered for prefix in ALLOWED_LICENSE_PREFIXES)
+    short_name = ((meta.get("LicenseShortName") or {}).get("value") or "").strip().lower()
+    if "gfdl" in short_name:
+        return False
+    return any(short_name.startswith(prefix) or prefix in short_name for prefix in ALLOWED_LICENSE_PREFIXES)
 
 
 def commons_info(filename: str) -> dict[str, str]:
@@ -171,7 +202,7 @@ def commons_info(filename: str) -> dict[str, str]:
         raise SystemExit(f"Commons file has no imageinfo: {title}")
     meta = info.get("extmetadata") or {}
     license_name = (meta.get("LicenseShortName") or {}).get("value") or ""
-    if not license_allowed(license_name):
+    if not license_allowed(meta):
         raise SystemExit(f"Commons license not allowed for {title}: {license_name!r}")
     url = info.get("thumburl") or info.get("url")
     if not url:
