@@ -1,6 +1,6 @@
 ---
 title: "Why the Bayesian Bootstrap?"
-subtitle: "Both bootstraps put a random distribution on your data. They differ only in where the weights are allowed to live — and everything else, including where each one breaks, follows from that."
+subtitle: "Efron and Rubin bootstraps as weight schemes on the simplex: derivation, comparison, and failure modes on returns and MNIST."
 author: "Ravi Kalia"
 date: "2026-07-26"
 categories: [Statistics, Bootstrap, Bayes, Python]
@@ -16,6 +16,7 @@ execute:
 format:
   html:
     toc: true
+    number-sections: true
     toc-depth: 3
     code-fold: show
     theme: [zephyr, theme.scss]
@@ -91,27 +92,28 @@ def triangle_axes(ax, labels=("$w_1$", "$w_2$", "$w_3$")):
     ax.axis("off")
 ```
 
-Suppose you have fifty-nine monthly returns and you want to know the average. Not the average of *those* returns — you can compute that exactly, it is a fact about the spreadsheet. You want the average of the process that generated them, and you want to know how far your fifty-nine numbers might have led you astray.
+Both bootstraps place a random probability distribution on the observed data and evaluate a statistic on it.
 
-The bootstrap's answer is to perturb the data and watch the answer move. Efron's version perturbs it by resampling: draw fifty-nine months with replacement, recompute, repeat. Rubin's version perturbs it by reweighting: leave the months alone and randomise how much each one counts.
+- **Efron:** resample with replacement; weights lie on a discrete lattice.
+- **Bayesian bootstrap (Rubin):** draw Dirichlet weights on the simplex; weights are continuous.
 
-Those sound like different ideas. They are the same idea, and the entire content of this post is the sense in which that is true:
+Core claim:
 
-> A statistic is a function of a distribution. Both bootstraps put a random probability distribution on the observed data and push it through the statistic. They differ only in the distribution they place on the weights — <span class="efron">Efron</span> on a lattice, <span class="bayes">Bayes</span> on the whole simplex — and everything else, including where each one breaks, follows from that.
+> A statistic is $T(F)$. Both methods randomise the empirical distribution $\hat F_n$ via weights $w$. They differ only in the law of $w$.
 
-Everything below is derived rather than cited. Exactly one derivation is too long for a blog post, and it is flagged where it comes up. Every closed form stated in the prose is also computed in a code cell and `assert`ed against simulation, so this page does not build if the algebra and the arithmetic disagree.
+Derivations below are from first principles unless noted. Every closed form in prose is checked against simulation at build time.
 
 ::: {.callout-warning appearance="default"}
-## Caveat: what this post is not
+## Constraints
 
-Nothing here is investment advice. The returns are a convenient two-series dataset with a genuine rare-event problem in it, nothing more. Monthly equity returns are also **not** independent and identically distributed — they cluster in volatility — and both bootstraps assume they are. That assumption is a larger source of error than anything else discussed in this post; §[the honest limits](#estimators-that-resist-a-weight-parameter) says what to do about it.
+- Not investment advice.
+- Return series are illustrative; monthly equity returns are not i.i.d. (volatility clusters). Both bootstraps assume i.i.d. sampling anyway.
+- See [Non-weightable estimators](#non-weightable-estimators) for dependent-data fixes.
 :::
 
-## Every statistic you care about is a question about a distribution
+## Statistics as functionals
 
-**What are you actually trying to estimate?**
-
-Not a number computed from a dataset. A property of the unknown distribution $F$ that produced the dataset. So think of a statistic as a machine that takes a whole distribution in and hands one number back — a **functional**, written $T(F)$. Every statistic worth the name is one of these.
+A **statistic** is a **functional** $T(F)$ of the unknown data-generating distribution $F$, not a property of one sample alone.
 
 | you say | you mean |
 |---|---|
@@ -124,17 +126,15 @@ Not a number computed from a dataset. A property of the unknown distribution $F$
 
 : Six familiar statistics, each written as a functional of the distribution rather than of the data. {tbl-colwidths="[30,70]"}
 
-You do not have $F$. You have $n$ observations, and the distribution that puts mass $1/n$ on each of them:
+Empirical cdf with equal weights:
 
 $$\hat F_n = \frac{1}{n}\sum_{i=1}^{n} \delta_{x_i}$$
 
-where $\delta_{x}$ is a point mass at $x$, and $n$ is the sample size throughout this post. The **plug-in estimate** is $T(\hat F_n)$: pretend $\hat F_n$ is $F$ and evaluate. The sample mean is the plug-in mean, the sample median is the plug-in median.
+Plug-in estimate: $T(\hat F_n)$. Bootstrap question: how does $T$ vary over plausible perturbations of $\hat F_n$?
 
-That reframes the uncertainty question precisely. It is no longer "how much does my number wobble?" but: **how much does $T$ move as $F$ ranges over the distributions the data find plausible?** Answer that and you are done — you need a way to generate plausible distributions.
+### Datasets
 
-### The data in this post, and what each answer is for
-
-Four datasets recur below. Two are deliberately tiny, because they are small enough to enumerate *exactly* — which is how the closed forms get checked rather than asserted. Two are real, and carry a decision behind them.
+Four datasets recur below. Toy samples support exact enumeration; real series support reporting decisions.
 
 | dataset | $n$ | the functional $T(F)$ | what the answer is for |
 |---|---|---|---|
@@ -146,21 +146,17 @@ Four datasets recur below. Two are deliberately tiny, because they are small eno
 
 : The running examples. The small ones are for proof, the real ones are for consequence. {tbl-colwidths="[26,8,30,36]"}
 
-**The toy sample** $x = (1,2,3,4,10)$ is chosen so that $\bar x = 4$ and $\tilde s^2 = 10$ come out round, and so that one clear outlier makes the bootstrap distribution of the mean visibly skewed. At $n = 5$ there are only 126 possible resamples, so every law quoted for it below is computed by *enumerating all of them*, not by simulating.
+**Toy sample** $x=(1,2,3,4,10)$: $\bar x=4$, $\tilde s^2=10$; $n=5$ gives 126 resamples — all enumerated.
 
-**The three-point sample** $x = (1,3,10)$ exists because $n = 3$ is the largest sample whose space of weight vectors can be drawn on a page. Every triangle in this post is that sample.
+**Three-point sample** $x=(1,3,10)$: simplex plots use $n=3$.
 
-Both small samples are invented numbers, typed out by hand, and they stand in for no real measurement at all. That is deliberate: they are small enough that the exact answer can be enumerated, so they check the algebra rather than illustrate it. Simulating or borrowing real data would defeat the purpose, since the point is to leave nothing unenumerated.
+Both toy sets are hand-picked for exact checks, not realism.
 
-**The two return series and the MNIST test set** are introduced properly where they are used — the returns [here](#on-real-returns-only-the-rare-event-number-changes) and MNIST [here](#mnist-where-cheap-stops-being-cheap) — because in both cases the interesting part is not the data but the decision resting on it.
+**Returns and MNIST** are introduced in [Real return data](#real-return-data) and [MNIST example](#mnist-example).
 
-Generating plausible distributions is easier than it sounds, if you only let the masses move.
+## Efron's bootstrap
 
-## Efron's bootstrap is a weighted bootstrap in disguise
-
-**What is a resample, viewed as a distribution?**
-
-Draw $n$ observations from your sample with replacement. Let $N_i$ be the number of times $x_i$ was drawn. Then $\sum_i N_i = n$, and by the definition of independent draws from a uniform choice over $n$ items,
+Resampling with replacement yields counts $N \sim \text{Multinomial}(n; 1/n,\ldots,1/n)$.
 
 $$N = (N_1, \dots, N_n) \sim \text{Multinomial}(n;\ 1/n, \dots, 1/n).$$
 
@@ -168,7 +164,7 @@ Now write down the empirical distribution *of the resample*. The value $x_i$ app
 
 $$F^*_n = \sum_{i=1}^n \frac{N_i}{n}\,\delta_{x_i} = \sum_{i=1}^n w_i\,\delta_{x_i}, \qquad w = N/n.$$
 
-This is not a modelling assumption or an approximation. It is bookkeeping: a resample and its weight vector are the same object written two ways. Efron's bootstrap **is** a weighted bootstrap, with $w$ confined to multiples of $1/n$.
+The resample empirical cdf equals $\sum_i (N_i/n)\,\delta_{x_i}$. Weights $w=N/n$ lie on a lattice.
 
 The moments follow from the multinomial. With $p_i = 1/n$:
 
@@ -203,11 +199,9 @@ At $n = 5$ that is $\binom{9}{4} = `{python} f"{len(patterns)}"`$ patterns, and 
 
 So Efron's bootstrap draws from an astronomically large but strictly **finite** set of weight vectors. The weights are confined to a lattice inside some space. Naming that space is the next step, and it turns out to be the whole story.
 
-## The weights live on a triangle, and every point of it is a distribution
+## The weight simplex
 
-**What space do the weights live in?**
-
-Two conditions define it. Each weight is non-negative, $w_i \ge 0$, which confines you to the corner of $\mathbb{R}^n$ where every coordinate is positive — the positive orthant. The weights also sum to one, $\sum_i w_i = 1$, and that single linear equation slices the orthant with a flat surface. The slice is the **standard simplex**:
+Weights satisfy $w_i\ge 0$ and $\sum_i w_i=1$. The feasible set is the **standard simplex**:
 
 $$\Delta^{n-1} = \Big\{ w \in \mathbb{R}^n : w_i \ge 0,\ \sum_{i=1}^n w_i = 1 \Big\}.$$
 
@@ -332,11 +326,9 @@ The level sets are straight because the mean $\sum_i w_i x_i$ is a linear functi
 
 Now that the space is named, put a distribution on it.
 
-## The Dirichlet is not chosen, it falls out
+## Dirichlet posterior
 
-**If the parameter is a point of the simplex, what is its posterior?**
-
-Do this as an ordinary Bayesian calculation, with no appeal to anything called a Dirichlet until it appears on its own.
+Bayesian update on the simplex, with Dirichlet appearing from conjugacy.
 
 ::: {.callout-important appearance="default"}
 ## Assumption
@@ -369,9 +361,11 @@ $$p \mid \text{data} \;\sim\; \text{Dirichlet}(1, 1, \dots, 1),$$
 whose density $\propto \prod_i p_i^{0} = 1$ is **constant**: the uniform distribution on the simplex. That is the Bayesian bootstrap.
 
 ::: {.callout-warning appearance="default"}
-## Caveat: the uniform is the posterior, not the prior
+## Posterior versus prior
 
-This is the single most commonly garbled point in the topic. The Bayesian bootstrap's prior is the improper $\prod_i p_i^{-1}$, which is emphatically not flat — it piles all its mass on the edges. The *posterior*, after the data have incremented every exponent to 1, is flat. Anyone who tells you the method "assumes a uniform prior on the simplex" has it exactly backwards.
+- Prior (Haldane): $\pi(p)\propto\prod_i p_i^{-1}$ — improper, edge-heavy.
+- Posterior after one observation per category: $\text{Dirichlet}(1,\ldots,1)$ — uniform on the simplex.
+- "Uniform prior on the simplex" misstates the method.
 :::
 
 Two sanity checks make the construction believable.
@@ -435,11 +429,9 @@ plt.show()
 <div class="widget-note">No value of α ever puts mass <em>on</em> the petrol dots. The cloud has a density; the lattice has none.</div>
 :::
 
-## Why exponentials, and why the weights must sum to one
+## Exponential weight construction
 
-**Where do the three lines of sampling code come from?**
-
-Everyone writes the Bayesian bootstrap as: draw $n$ exponentials, divide by their sum. That looks like a trick. It is not — it is the $\alpha = 1$ case of a general construction, and the derivation also explains why the normalisation is free.
+Normalized independent $\text{Gamma}(1,1)=\text{Exp}(1)$ draws give $\text{Dirichlet}(1,\ldots,1)$ weights.
 
 Let $G_1, \dots, G_n$ be independent with $G_i \sim \text{Gamma}(\alpha_i, 1)$, so the joint density is
 
@@ -565,11 +557,9 @@ for name, gen, var_t, cov_t in [
 
 Every one of those closed forms is checked against `{python} f"{B_m:,}"` simulated replicates in the cell above; the build fails if any disagrees.
 
-## The duality: two arrows through one conjugate pair
+## Conjugate-pair duality
 
-**Are these two methods related, or do they merely resemble each other?**
-
-They are the two directions of conditioning through a single conjugate pair.
+Efron and Bayes are opposite conditionings of one multinomial–Dirichlet pair.
 
 $$\underbrace{\text{counts} \mid p = \hat F_n \;\sim\; \text{Multinomial}(n;\ 1/n, \dots, 1/n)}_{\textbf{Efron: fix the probabilities, randomise the counts}}$$
 
@@ -707,11 +697,9 @@ Rubin's 1981 paper is less an endorsement than a diagnosis. He built the Bayesia
 
 If the two live on the same space with the same centre, what does the difference actually look like?
 
-## Efron lands on a grid, the Bayesian bootstrap lands anywhere
+## Lattice versus continuous weights
 
-**How different can two distributions on the same triangle be?**
-
-The disagreement is easiest to see at $n = 3$, where the whole simplex fits on a page. An Efron weight vector is three counts divided by three, so it has only ten possible values: a coarse grid of points inside the triangle, each carrying its own multinomial probability. A Dirichlet draw has a density instead, so it can land anywhere in the triangle and never lands twice in the same place.
+At $n=3$, Efron has ten lattice points; Dirichlet$(1,1,1)$ has a density on the full triangle.
 
 ```{python}
 #| echo: false
@@ -818,11 +806,9 @@ This is the one result in the post I am not deriving — the proof is a function
 
 Differences appear only at small $n$, or for functionals the asymptotic theory does not cover. Which is the next question.
 
-## No Dirichlet contains Efron, and the obstruction is structural
+## Mutual singularity
 
-**Could some choice of $\alpha$ turn one method into the other?**
-
-It could not, and the reason is not a missing calculation. Every Dirichlet with $\alpha > 0$ has a density with respect to Lebesgue measure on the simplex. A density assigns probability zero to any finite set of points — in particular, to the lattice. Efron's distribution assigns the lattice probability one. The two measures are **mutually singular**: each lives entirely where the other says nothing happens. No choice of $\alpha$ closes that gap, and no limit of Dirichlets is Efron.
+No $\text{Dirichlet}(\alpha)$ with $\alpha>0$ can equal Efron's lattice law: continuous vs atomic measures are mutually singular.
 
 ### But the first two moments match exactly
 
@@ -955,11 +941,9 @@ At $n = `{python} f"{n_u}"`$ with a resample of size `{python} f"{m_u:,}"`, the 
 
 One line for the whole section: **ordinary resampling forgets what it has drawn; the Bayesian bootstrap reinforces it.**
 
-## The statistic matters more than the bootstrap
+## Statistic choice
 
-**Why does the choice of statistic matter more than the choice of bootstrap?**
-
-Because every statistic carves the simplex into regions, and its bootstrap law is just the measure of the pieces. Under the Bayesian bootstrap the measure is uniform, so **probability is literally proportional to area**.
+Bootstrap uncertainty is area on the simplex under Dirichlet$(1,\ldots,1)$ weights.
 
 ```{python}
 #| echo: false
@@ -1034,9 +1018,9 @@ At $n = 5$ the exact law is $(1,4,6,4,1)/16$ = `{python} f"{np.round(law_1,4).to
 Here is the payoff. At $n = `{python} f"{N_HEAD}"`$, the central 95% of a $\text{Binomial}(`{python} f"{N_HEAD-1}"`, \tfrac12)$ runs from rank `{python} f"{lo_rank}"` to rank `{python} f"{hi_rank}"`. So the Bayesian bootstrap's 95% interval for the median is *order statistics `{python} f"{lo_rank}"` and `{python} f"{hi_rank}"`* — which is **exactly** the classical distribution-free sign-test interval for a median. A century-old nonparametric procedure drops out of the Dirichlet posterior with no approximation anywhere.
 
 ::: {.callout-warning appearance="default"}
-## Caveat: the Bayesian bootstrap does not smooth quantiles
+## Quantile lumpiness
 
-A common belief is that continuous weights cure the notorious lumpiness of bootstrapped quantiles. They do not. Both median laws are **atomic**, supported on the order statistics, as the exact binomial law above makes plain. The lumpiness comes from the assumption that $F$ lives on the observed points — which both methods make — not from the discreteness of the weights.
+Continuous weights do not smooth quantiles. Both methods assume support on observed points only.
 :::
 
 ### Max and min — mirror images, both useless
@@ -1163,13 +1147,11 @@ plt.show()
 <div class="widget-note">At t = −5% on the S&amp;P, k = 1 and Efron returns exactly zero in more than a third of its replicates.</div>
 :::
 
-## On real returns, only the rare-event number changes
+## Real return data
 
-**Does any of this change a number you would report?**
+Headline mean/median differences are tiny at $n=59$; tail probabilities on sparse events differ materially.
 
-Every result so far was derived on samples picked to make the algebra checkable by hand. The question that decides whether any of it matters is what happens on data somebody would actually put in a report.
-
-### Where these fifty-nine months came from
+### Data provenance
 
 The **S&P 500** is a broad US equity index — roughly "the market" — and **IBM** is one large-cap stock, so the pair is the smallest interesting contrast: everything, against one thing.
 
@@ -1179,7 +1161,7 @@ Both series are converted to *monthly percentage changes*, and both are cut to t
 
 One row of these datasets is one month. That matters: the resampling unit is a month, so everything here is a statement about month-to-month variation, and every interval below answers "if the next five years of months were drawn from the same process, how differently might this number have come out?"
 
-### Four questions, each one a functional
+### Functionals reported
 
 Four questions are asked of both series, and each is a functional of the return distribution $F$:
 
@@ -1194,7 +1176,7 @@ Four questions are asked of both series, and each is a functional of the return 
 
 Plus one two-sample question: **is the mean of one series different from the mean of the other?**
 
-### What a wrong interval would cost
+### Decision stakes
 
 Concretely, these are the numbers behind three decisions. *How much of a portfolio to hold in equities* rests on the mean and its uncertainty. *How much loss to plan for* rests on $F(-5\%)$ — a risk limit, a capital buffer, a margin calculation. *Whether a stock has beaten the market* rests on the two-sample difference, and is the question behind every performance-attribution argument.
 
@@ -1203,7 +1185,7 @@ Getting any of those wrong is expensive in a specific direction: an interval tha
 That is also why a bootstrap rather than a formula. With 59 months there is no reliable normal approximation for a tail probability, the tail here rests on a single observed month, and the question is precisely what an interval does when the count underneath it is one. All three decisions are made from an *interval* rather than a point estimate, and the interval is exactly what the two methods disagree about — by nothing at all for the mean, and enormously for the tail.
 
 ::: {.callout-warning appearance="default"}
-## Caveat: 59 months is not enough to decide anything
+## Sample-size constraint
 
 These series are here because they are small, public, and contain a genuine rare-event problem — not because five years of monthly data can settle an investment question. It cannot. The intervals below are wide, the tail estimate rests on a single month, and the i.i.d. assumption both methods make is false for returns. Read them as a worked example of *how the uncertainty behaves*, not as a finding about markets.
 :::
@@ -1226,7 +1208,7 @@ Markdown(desc.to_markdown(index=False, floatfmt=".3f"))
 ```
 
 ::: {.callout-warning appearance="default"}
-## Caveat: what these two series are
+## Series definitions
 
 The S&P figures come from the Shiller monthly series, in which each monthly level is the **average of that month's daily closes**, not a month-end close. Averaging smooths, so this slightly *understates* monthly volatility. As a check on the download, the annualised volatility from `{python} f"{LABELS['long']}"` comes out at `{python} f"{vol_long:.1f}"`%.
 
@@ -1289,7 +1271,7 @@ Markdown(mean_tbl.to_markdown(index=False, floatfmt=".5f"))
 **Lead with this: at $n = `{python} f"{N_HEAD}"`$ the choice between the two methods changes your standard error in the third decimal place.** The theoretical ratio is $\sqrt{`{python} f"{N_HEAD}"`/`{python} f"{N_HEAD+1}"`}$ = `{python} f"{ratio_theory:.4f}"`, and the simulated ratios are `{python} f"{mean_tbl['ratio'][0]:.4f}"` and `{python} f"{mean_tbl['ratio'][1]:.4f}"`.
 
 ::: {.callout-note appearance="default"}
-## Result: read the third decimal with care
+## Monte Carlo precision
 
 At $B = `{python} f"{B_BIG:,}"`$, the relative Monte-Carlo standard error of a simulated standard deviation is about $1/\sqrt{2B}$ = `{python} f"{1/np.sqrt(2*B_BIG):.5f}"`, so a *ratio* of two simulated sds carries roughly ±`{python} f"{2*mc_se_ratio:.4f}"`. Several Efron-versus-Bayes comparisons in this post differ by less than that. Where they do, they are ties, and this post reports them as ties.
 :::
@@ -1439,11 +1421,9 @@ Markdown(size_tbl.to_markdown(index=False, floatfmt=".4f"))
 <div class="widget-note">Choose “max” to watch the Bayesian posterior collapse to a spike. Choose P(R ≤ t) with t = −5% on the S&amp;P to see Efron’s atom at zero.</div>
 :::
 
-## The bootstrap is cheap until the estimator is not
+## Computational cost
 
-**Why does the bootstrap feel free, and what is the bill?**
-
-*Cheap in assumptions.* No parametric family, no variance formula to derive, no delta method, no analytic derivatives. For Efron, no prior either — although the duality section established that "no prior" is not quite free: the support assumption is a strong prior belief either way, and only the Bayesian version makes you look at it.
+Cost is $O(B\times T_\text{estimator})$; weight generation is $O(Bn)$.
 
 *Cheap to implement.* The two methods differ by one line.
 
@@ -1525,9 +1505,9 @@ Both methods are embarrassingly parallel. And for streaming settings there is th
 
 *Not cheap, and this is the honest part:* the total cost is $B$ times the cost of the estimator. For a mean that is nothing. For a neural network it is everything.
 
-## MNIST: where cheap stops being cheap
+## MNIST example
 
-So take an estimator that is not a mean: a trained neural network. The bill turns entirely on which population you resample, and a machine learning model offers two — the examples it is scored on and the examples it was fitted on. One is free and one costs a full refit per replicate, and they answer different questions. It is worth being deliberate about which one you are asking.
+Two resampling targets: test-set metrics (cheap) vs training-set refits (expensive).
 
 ```{python}
 #| echo: false
@@ -1787,11 +1767,9 @@ Both paths measure one thing well and several things not at all, and it is worth
 - Retraining-based intervals inherit every pathology of the training procedure, **including non-convexity**: two fits with different weights may land in different basins, and the resulting spread mixes parameter uncertainty with optimisation noise. The `{python} f"{acc_wlb.std():.5f}"` above contains both, inseparably.
 - Both bootstraps still assume **i.i.d. sampling**. Grouped, temporal or hierarchical data need the resampling to happen at the level of the independent unit.
 
-## Estimators that resist a weight parameter
+## Non-weightable estimators
 
-**When can you not do this at all?**
-
-The weighted likelihood bootstrap needs the weights to enter the objective *linearly*, as $\sum_i w_i \ell(x_i, \theta)$. Four distinct reasons that fails, ordered by *why* — the ordering is the point.
+Weights must enter linearly as $\sum_i w_i \ell(x_i,\theta)$. Failures fall into four classes.
 
 ### (a) The weighting is ambiguous
 
@@ -1878,7 +1856,7 @@ Markdown(bridge_tbl.to_markdown(index=False, floatfmt=".3f"))
 
 So $m = n$ **doubles** the variance — that is exactly the $(m = n, \alpha = 1)$ corner warned about earlier — while $m \approx 100n$ costs about 1%. This is the Pólya-urn bridge turned into a recipe, and it is the single most useful practical takeaway in the section.
 
-## When to use which, and what the choice is really about
+## Method selection
 
 Reach for the <span class="bayes">Bayesian bootstrap</span> when you want a posterior rather than a sampling distribution; when degenerate resamples would break the estimator — a missing class, a zero-variance feature, an empty stratum; when the statistic leans on few observations, which is the rare-cell case that recurs everywhere in machine learning; when you want to differentiate through the weights or drop them into a loss; and when you want an exact answer instead of a simulated one.
 
@@ -1886,11 +1864,11 @@ Reach for <span class="efron">Efron</span> when your estimator needs a *sample* 
 
 And note that both fail identically on dependent data, extrema, heavy tails, and very small $n$. Those failures matter far more than the choice between the two.
 
-Which brings it back to the fifty-nine returns at the top. Both methods answer that question the same way — put a random distribution on the months you have, push it through the statistic, look at the spread — and everything separating them is where the weights are allowed to live. Efron's are confined to a lattice, so a weight can be exactly zero and a month can drop out of the world entirely. That is invisible for a mean, fatal for a probability resting on one month, and the reason his replicates can never be anyone's posterior. Dirichlet weights fill the triangle, are never zero, slide into any loss that accepts a weight, and collapse to a closed form whenever the statistic is a proportion.
+**Bayesian bootstrap:** posterior interpretation; no zero weights; exact Beta laws for proportions; weighted likelihood.
 
-That single difference generates every other one in this post, down to the third decimal place they disagree in — which is, in the end, the least interesting consequence of it.
+**Efron:** sampling distribution; BCa/block bootstrap tooling; estimators needing actual resamples.
 
-## Reference card and reproducibility
+## Reference card
 
 Everything derived above, on one page: each row a quantity you might actually need, with the Efron answer and the Bayesian answer side by side.
 
@@ -1968,7 +1946,7 @@ Every figure above is reproducible from the single seed `{python} f"{bs.SEED}"`;
 
 Data provenance and its caveats are given where the two series are introduced: the S&P series is Shiller's monthly *averages* of daily closes, and the IBM series is unadjusted closes and therefore price-only. Both were retrieved on `{python} f"{returns.retrieved}"`. The MNIST test set is fixed and public, so the intervals here describe test-set sampling variability and nothing else.
 
-### References
+## References
 
 - Efron, B. (1979). Bootstrap methods: another look at the jackknife. *Annals of Statistics* **7**(1), 1–26.
 - Rubin, D. B. (1981). The Bayesian bootstrap. *Annals of Statistics* **9**(1), 130–134.
@@ -1980,7 +1958,7 @@ Data provenance and its caveats are given where the two series are introduced: t
 - Sethuraman, J. (1994). A constructive definition of Dirichlet priors. *Statistica Sinica* **4**, 639–650.
 - Efron, B. (2012). Bayesian inference and the parametric bootstrap. *Annals of Applied Statistics* **6**(4), 1971–1997.
 
-A companion post, [The Poor Person's Bayesian](../poor-persons-bayesian/), takes the survey-level view of the same territory: what the bootstrap-as-cheap-Bayes analogy buys you, and the point at which it stops being true.
+- [The Poor Person's Bayesian](../poor-persons-bayesian/) — survey-level view of bootstrap-as-cheap-Bayes.
 
 ```{python}
 #| echo: false

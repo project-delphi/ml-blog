@@ -11,21 +11,12 @@ format:
     toc: true
     toc-depth: 3
     code-fold: true
+    number-sections: true
 ---
 
 ![What TDA Actually Builds: A Filtered Simplicial Complex, Not a Fancy Graph](./cover.png)
 
-Most people come away from a first encounter with topological data analysis (TDA) holding a picture like this: you have some points, you join any two that are close enough, you slowly relax what "close enough" means, and you watch the graph fill in. Whatever survives a wide range of thresholds is real structure. That picture is easy to hold and mostly true, which is what makes it so durable.
-
-It is also missing the thing the whole field is for. A graph can tell you that six points are joined in a ring. It cannot tell you whether that ring has anything inside it — whether you are looking at a loop with an empty middle or at a filled-in disk. Those two are indistinguishable as graphs and completely different as shapes, and that difference is the reason to reach for topology at all rather than for a clustering algorithm.
-
-So the object TDA actually builds is not a graph. It is one sentence worth pinning down before anything else:
-
-> **TDA builds a filtered simplicial complex — a structured, hypergraph-like object — over a fixed set of original data points.**
-
-Every word there is doing work, and most of the confusion I've seen about TDA comes from quietly swapping one of them for a friendlier graph-theoretic word. "It's a graph where edges appear as you raise a threshold" is *almost* right, and the *almost* is exactly where loops, voids, and persistence live.
-
-Eight points in the plane, named A through H, are enough to show every part of it — from raw coordinates all the way to a persistence diagram. Every number, matrix, and figure below is computed from that one point cloud at render time.
+TDA builds a **filtered simplicial complex** over a fixed vertex set — not a threshold graph alone. Graphs cannot distinguish a hollow cycle from a filled triangle; simplicial complexes can.
 
 ::: {.callout-note collapse="true"}
 ## Reproducibility: environment setup
@@ -141,13 +132,15 @@ def draw_complex(ax, eps, show_triangles=True, node_size=210, font_size=8.5):
     return n_edges, n_tri
 ```
 
-## 1. Eight points, chosen so every phenomenon fits on one screen
+## Toy point cloud
 
-The data here is synthetic, and deliberately so. A real dataset would give us one arrangement, whatever it happened to be, with no way to tell an interesting feature from a coincidence of sampling. Building the cloud by hand means the answers are known before the software runs: I know how many components there should be, where the loop is, and that anything else the algorithm reports is an artifact I can name.
+**Data provenance** (synthetic, hand-built):
 
-The generating process is two lines. Six points are placed at equal angles around the unit circle and then pushed off it by Gaussian noise with standard deviation 0.08 — that is the loop, blurred the way a real instrument would blur it. Two more points are placed by hand at $(2.6, 1.10)$ and $(2.9, 1.45)$, close to each other and far from everything else — that is a cluster that stays stubbornly separate as the threshold rises. The seed is fixed, so these are *the* coordinates for the rest of the post.
-
-What it stands in for is any measurement of a system that both cycles and has an outlying regime: a rotating part sampled at random phases plus a handful of readings from a different operating mode, a periodic signal with a burst of something else in it. Between them, the ring and the pair produce all three phenomena the rest of the post depends on — **disconnected pieces at small scales, a loop at intermediate scales, and triangles that eventually fill that loop in.**
+- Six points: unit circle at equal angles + Gaussian noise ($\sigma = 0.08$).
+- Two points at $(2.6, 1.10)$ and $(2.9, 1.45)$: separate pair far from the ring.
+- Fixed seed (`rng = 42`); all later figures use these coordinates.
+- Stands in for cyclic dynamics plus an outlying regime (e.g. periodic signal + burst).
+- Expected phenomena: disconnected pieces at small $\varepsilon$, a loop at intermediate $\varepsilon$, triangles that eventually fill the loop.
 
 ```{python}
 #| label: fig-cloud
@@ -169,11 +162,15 @@ ax.set_title("The toy point cloud", fontsize=12, fontweight="bold")
 plt.show()
 ```
 
-Keep the letters in mind: **A–F** are the would-be loop, **G–H** are the satellite pair. Every later figure uses these same positions. And notice that nothing topological has happened yet — coordinates alone are not a shape.
+Vertices **A–F**: would-be loop. **G–H**: satellite pair. Coordinates alone carry no topology.
 
-## 2. The distance matrix records pairwise facts and no shape at all
+## Distance matrix
 
-Shape has to be built, and there is only one ingredient to build it from. TDA never looks at the coordinates again; it consumes the **pairwise distance matrix** $D$, whose entry $D_{ij}$ is the Euclidean distance $\lVert x_i - x_j \rVert$ between point $i$ and point $j$. Reading one entry: $D_{GH} \approx 0.46$ says G and H are 0.46 apart, the closest pair in the data.
+TDA consumes the **pairwise distance matrix** $D$ with $D_{ij} = \|x_i - x_j\|$.
+
+- Input only; not a topological summary.
+- Example: $D_{GH} \approx 0.46$ (closest pair).
+- Powers of $D$ do not count graph walks; shape requires an explicit scale parameter.
 
 ```{python}
 #| label: fig-distmat
@@ -202,25 +199,21 @@ ax.set_title("Pairwise distance matrix", fontsize=12, fontweight="bold")
 plt.show()
 ```
 
-One caution is worth stating outright, because the matrix looks so much like something you could analyse directly. It is **not a topological summary**. It is the *input* from which topological structure gets built, and no amount of staring at its entries reveals a loop.
+## Threshold graphs
 
-Nor does the usual matrix trick help. Raising an *adjacency* matrix to the $k$-th power counts walks of length $k$ in a graph, which is a genuinely useful thing to do — but a distance matrix is not an adjacency matrix, and its powers count nothing. Shape appears only once we make an explicit choice about scale, which is the next move.
+At scale $\varepsilon \geq 0$, graph $G_\varepsilon$:
 
-## 3. Thresholding gives you not one graph but a nested tower of them
+- **Vertices**: fixed set A–H at every scale.
+- **Edges**: $(i,j)$ whenever $D_{ij} \leq \varepsilon$.
 
-Making that choice is the first structural move. Pick a scale $\varepsilon \geq 0$ and define a graph $G_\varepsilon$:
-
-- **the vertex set is fixed**: it is always exactly our eight points A–H, at every scale;
-- **the edge set grows**: connect $x_i$ and $x_j$ whenever $D_{ij} \leq \varepsilon$.
-
-Because the vertex set never changes and edges only accumulate as $\varepsilon$ grows, these graphs are **nested**:
+Nested family:
 
 $$
 G_{\varepsilon_1} \subseteq G_{\varepsilon_2} \subseteq G_{\varepsilon_3} \subseteq \cdots
 \qquad \text{whenever } \varepsilon_1 \leq \varepsilon_2 \leq \varepsilon_3 \leq \cdots
 $$
 
-Each graph contains all the edges of every earlier one, plus possibly more. Nothing is ever removed. Watch the toy cloud pass through four scales:
+Edges only accumulate; vertices never change.
 
 ```{python}
 #| label: fig-threshold
@@ -249,13 +242,14 @@ fig.suptitle(
 plt.show()
 ```
 
-Two things to notice. First, **the points never move and are never added or removed** — only our willingness to call a pair "close" changes. Second, connectivity questions like "how many components?" are already answerable here with ordinary graph theory; if components were all we wanted we could stop, and in fact stopping here is essentially what single-linkage clustering does. But we want loops and voids too, and for those the graph is about to run out of vocabulary.
+Component counts at this stage match single-linkage clustering. Loops and voids require higher-dimensional simplices.
 
-## 4. No amount of decorating a graph can say whether a cycle is filled
+## Filled vs hollow cycles
 
-The tempting shortcut at this point is: *"Fine, so it's a graph per scale. If I need more structure I'll decorate it — edge weights, edge colors, labels. A sufficiently annotated graph should carry all the information."*
+At $\varepsilon = 1.75$, points C, D, E are pairwise within range. Two distinct objects:
 
-That intuition fails, and it fails in a precise and instructive way. Take points C, D and E, which by $\varepsilon = 1.75$ are all pairwise within range ($D_{CD} \approx 0.86$, $D_{DE} \approx 1.03$, $D_{CE} \approx 1.70$). Drawn as a graph they are a triangle of three edges. Drawn as the thing TDA builds, there are two genuinely different objects to consider — the triangle's outline, and the triangle with its inside filled in.
+- **Boundary**: three edges C–D–E–C → 1-cycle that may enclose a hole.
+- **Filled 2-simplex** $\{C,D,E\}$ → certifies the cycle bounds a patch; hole killed.
 
 ```{python}
 #| label: fig-triangle
@@ -285,39 +279,26 @@ axes[1].set_title("Filled 2-simplex {C, D, E}\n(one 3-way object; hole destroyed
 plt.show()
 ```
 
-The core issue is arity. **An edge, no matter how you weight, color, or label it, is a relationship between exactly two endpoints.** A filled triangle is a *single* relationship among *three* points at once. It is not "three edges plus a style"; it is a genuinely different kind of object, the same way a 3-way interaction term in a regression is not a decorated pair of 2-way terms.
+An edge is a two-way relation. A 2-simplex is one three-way relation. Graph decorations cannot express fill status.
 
-The distinction matters because of what each object does topologically:
+## Simplicial complexes
 
-- The **triangular cycle** C–D–E–C (three edges) is a candidate 1-dimensional loop: a closed path that may enclose a hole.
-- The **filled 2-simplex** $\{C, D, E\}$ *fills* that cycle: it certifies that the loop bounds a membrane and therefore does not count as a hole.
+**Simplex**: finite vertex set; dimension = $|S| - 1$.
 
-Ordinary graph structure can express connectivity and can even enumerate cycles. What it cannot express is **whether a cycle is filled** — and "is this loop a real hole or has something plugged it?" is the question TDA exists to answer. Asking it needs a structure whose vocabulary includes higher-dimensional pieces natively.
+- $\{v\}$: 0-simplex (vertex).
+- $\{u,v\}$: 1-simplex (edge).
+- $\{u,v,w\}$: 2-simplex (filled triangle).
+- $(k{+}1)$ vertices: $k$-simplex.
 
-## 5. A simplicial complex is a hypergraph obeying one extra law
+**Abstract simplicial complex**: collection of simplices **closed under faces** — every face of an included simplex is included.
 
-That structure is less exotic than its name. Work up to it from what we need it to hold — relationships between our fixed points, of every size, not just the two-point ones a graph is limited to. A graph offers exactly one rung of the following ladder; we want all of them.
+Closure example: if $\{C,D,E\}$ is present, then $\{C,D\}, \{D,E\}, \{C,E\}, \{C\}, \{D\}, \{E\}$ must be present. A generic hypergraph need not satisfy this.
 
-- a relationship involving **one** point — the point itself being present;
-- a relationship involving **two** points — an edge;
-- a relationship involving **three** points — a filled triangle;
-- a relationship involving **four** points — a filled tetrahedron; and so on.
+Left panel above: complex without $\{C,D,E\}$. Right panel: same skeleton plus $\{C,D,E\}$.
 
-If you know hypergraphs, this smells like one: a set system over a vertex set, with "hyperedges" of any size. That intuition is a fine on-ramp. Now the exact vocabulary:
+## Vietoris-Rips construction
 
-- A **simplex** is a finite set of vertices, interpreted geometrically by its size: a 1-element set is a **0-simplex** (vertex), a 2-element set a **1-simplex** (edge), a 3-element set a **2-simplex** (filled triangle), a 4-element set a **3-simplex** (solid tetrahedron), and in general a $(k{+}1)$-element set is a $k$-simplex. The subsets of a simplex are its **faces**: the faces of $\{C, D, E\}$ are its three edges, its three vertices (and itself).
-
-- An **abstract simplicial complex** is a collection of simplices that is **closed under taking faces**: if a simplex is in the complex, every face of it must be in the complex too.
-
-That closure property is the law that separates a simplicial complex from a generic hypergraph, and it is worth spelling out concretely. If the filled triangle $\{C, D, E\}$ is present, then the edges $\{C,D\}, \{D,E\}, \{C,E\}$ **must** be present, and so must the vertices $\{C\}, \{D\}, \{E\}$. A hypergraph is under no such obligation — it may happily contain a 3-way hyperedge $\{C, D, E\}$ without containing $\{C, D\}$. So "hypergraph-like" is honest intuition, but a simplicial complex is *not* merely a hypergraph: the closure property is the extra structure, and it is precisely what makes it meaningful to talk about a triangle *filling* the cycle formed by its own edges. Boundaries are guaranteed to exist inside the complex; filled things always have their skeletons present.
-
-With this vocabulary, the earlier figure reads cleanly: the left panel is the complex $\{\{C\},\{D\},\{E\},\{C,D\},\{D,E\},\{C,E\}\}$; the right panel is that same complex **plus the single extra simplex** $\{C,D,E\}$. One added set — that's the entire difference between "hole" and "no hole".
-
-## 6. Every clique of the threshold graph becomes a simplex
-
-We now hold two things that have not yet been introduced to each other: the target structure, a simplicial complex, and a scale-indexed family of graphs. The bridge between them is one rule, and it is the construction this post uses throughout — the **Vietoris–Rips complex** $\mathrm{VR}_\varepsilon$:
-
-> Start from the threshold graph $G_\varepsilon$. Add a simplex for **every clique** in that graph. Equivalently: a set of points forms a simplex whenever **every pair** in the set is within distance $\varepsilon$.
+**Vietoris–Rips complex** $\mathrm{VR}_\varepsilon$: one simplex per **clique** of the threshold graph — equivalently, every subset whose pairwise distances are $\leq \varepsilon$.
 
 $$
 \{x_{i_0}, \ldots, x_{i_k}\} \in \mathrm{VR}_\varepsilon
@@ -325,7 +306,7 @@ $$
 D_{i_p i_q} \leq \varepsilon \ \text{ for every pair } p, q .
 $$
 
-Closure under faces is automatic: every subset of a clique is a clique. Here is the toy cloud's Rips complex at four scales:
+Face closure is automatic (every subset of a clique is a clique).
 
 ```{python}
 #| label: fig-rips
@@ -347,7 +328,7 @@ fig.tight_layout()
 plt.show()
 ```
 
-One subtlety the drawings can't show: simplices above dimension 2 exist in this construction but can't be rendered as flat pictures. A count by dimension makes them visible:
+Simplex counts by dimension (including 3-simplices not drawable in 2D):
 
 ```{python}
 #| code-summary: "Count simplices by dimension at each scale (cliques of the threshold graph)"
@@ -369,38 +350,40 @@ for eps in [0.9, 1.25, 1.75, 1.9, 2.0]:
 Markdown("\n".join(rows))
 ```
 
-The last column is where the drawings gave out. By $\varepsilon = 2.0$ the table reports four 3-simplices — four solid tetrahedra — where the panels showed none, because a tetrahedron cannot be drawn flat. They all arrive at once, and for one reason: C–F is the last edge among the circle points, at $\approx 1.99$, and its appearance completes four different four-point sets at the same instant.
+At $\varepsilon = 2.0$, four 3-simplices appear when edge C–F ($\approx 1.99$) completes four tetrahedra. The Rips complex is **abstract** — built from $D$ only, with no embedding dimension.
 
-Something conceptually pleasing is hiding in that. Our points live in 2D, but the Rips complex is an **abstract** simplicial complex — built from the distance matrix and nothing else, with no idea that a plane was ever involved. It is free to contain 3-simplices, and, as the persistence computation will show, even a 2-dimensional void.
+**Čech complex** (alternative): simplex when $\varepsilon/2$-balls share a common point; stricter, better guarantees, higher cost. This post uses Rips (standard in fast libraries).
 
-One aside before we compute anything, because Rips is a choice and not the only one. The **Čech complex** admits a set of points as a simplex only when their $\varepsilon/2$-balls all share a common intersection point, which is strictly stronger than every pair being close, and it comes with better theoretical guarantees at a higher computational price. Everything below applies to either. We use Rips because it is what the fast libraries compute.
+## Filtration and persistence
 
-## 7. The filtration is bookkeeping; persistence is a computation on top of it
-
-Because $\mathrm{VR}_\varepsilon$ is built from cliques of a graph whose edges only accumulate, the Rips complexes are nested exactly as the graphs were:
+Nested Rips complexes:
 
 $$
 \mathrm{VR}_{\varepsilon_1} \subseteq \mathrm{VR}_{\varepsilon_2} \subseteq \cdots
 $$
 
-This nested, scale-indexed family is called a **filtration**. Each simplex has a well-defined arrival time: it enters at the scale equal to its longest pairwise distance (its *diameter*).
+Each simplex enters at its **diameter** (longest pairwise edge length).
 
-Now, a distinction that is easy to blur and important to keep sharp:
+Distinction:
 
-- **The filtration is bookkeeping.** Knowing *which simplices are present at each scale* is a purely combinatorial fact — we just computed it in the table above.
-- **Persistence is a computation on top of it.** Knowing *which components, loops, and voids exist* at each scale — and when each is born and dies — requires algebraic topology, specifically **homology**, applied across the whole filtration.
+- **Filtration**: which simplices exist at each $\varepsilon$ (combinatorial bookkeeping).
+- **Persistent homology**: which components, loops, voids exist at each scale, and their birth/death scales (requires homology across the filtration).
 
-Why isn't the bookkeeping enough? Because "is there a loop?" is not a local question you can answer by inspecting one simplex at a time. The answer comes from comparing two collections. In each dimension $k$, list the **$k$-cycles** — the closed configurations, like the ring of edges around A–F. Then list the **boundaries** — the cycles that some $(k{+}1)$-simplex has filled in, like the edge-cycle C–D–E once the triangle $\{C,D,E\}$ has arrived. A hole is a cycle in the first list that is missing from the second: closed, and not filled by anything. Counting the independent holes in dimension $k$ gives the **Betti number** $\beta_k$, so $\beta_0$ counts connected components, $\beta_1$ independent loops, and $\beta_2$ independent enclosed voids.
+In dimension $k$: **$k$-cycles** minus **boundaries** of $(k{+}1)$-simplices → **Betti number** $\beta_k$.
 
-Mechanically all of this is linear algebra. You build **boundary maps** $\partial_k$, which send each $k$-simplex to the alternating sum of its faces, and the Betti numbers drop out of their ranks: $\beta_k = \dim\ker\partial_k - \operatorname{rank}\partial_{k+1}$.
+$$
+\beta_k = \dim\ker\partial_k - \operatorname{rank}\partial_{k+1}.
+$$
 
-**Persistent** homology runs that computation not at one scale but coherently across the whole filtration, following each individual hole from the scale where it is **born** to the scale where it **dies** — filled in, or merged into something older. The matrix reduction algorithm that does this is not derived here. What matters is the output: persistence pairs a birth *scale* with a death *scale* for every feature, which is strictly more than Betti numbers at any single scale you could have guessed in advance.
+Persistent homology tracks each feature from birth scale to death scale across the full filtration.
 
-## 8. The library agrees with the pictures, to three decimal places
+## Ripser output
 
-Enough theory to make the output legible; now hand the eight points to a real library. `ripser` computes Rips persistence straight from the point cloud, internally from the same distance matrix we built by hand.
+`ripser` computes Rips persistence from the point cloud. Conventions:
 
-Two conventions are worth stating before the numbers, so nothing below is ambiguous. `ripser` admits a simplex as soon as its diameter is $\leq \varepsilon$, the same weak inequality we used for the threshold graphs, and its filtration values are in the *same units as our distances* — a birth of 1.23 means born at $\varepsilon = 1.23$, directly comparable to every $\varepsilon$ in the figures above. And in $H_0$ one component never dies, because the whole dataset is connected once $\varepsilon$ is large enough, so one bar runs to infinity.
+- Simplex enters when diameter $\leq \varepsilon$.
+- Filtration values match Euclidean distances in the figures.
+- One $H_0$ component has death $= \infty$ once everything connects.
 
 ```{python}
 #| code-summary: "Compute persistent homology with ripser (dimensions 0, 1, 2)"
@@ -412,9 +395,9 @@ for k, dgm in enumerate(dgms):
         print(f"  ({b:.3f}, {'∞' if np.isinf(d) else f'{d:.3f}'})")
 ```
 
-### The persistence diagram
+### Persistence diagram
 
-Ten intervals is already more than the eye wants to sort, and the standard picture fixes that. Plot each hole once, as a point whose horizontal position is the scale it was born at and whose vertical position is the scale it died at. Everything necessarily lands above the diagonal, since nothing dies before it is born, and the distance above the diagonal *is* the feature's lifetime. Features far from the line survived a wide range of scales; features hugging it barely existed at all. That plot is the **persistence diagram**.
+Each feature → point (birth $\varepsilon$, death $\varepsilon$). Distance above the diagonal = lifetime.
 
 ```{python}
 #| label: fig-diagram
@@ -458,9 +441,9 @@ ax.set_title("Persistence diagram", fontsize=12, fontweight="bold")
 plt.show()
 ```
 
-### The same information as a barcode
+### Persistence barcode
 
-The diagram is compact but it hides one thing: which features overlap in scale, and for how long. Redrawing each point $(b, d)$ as a horizontal bar running from $b$ to $d$ over the $\varepsilon$-axis puts the lifetimes side by side, so a long bar is a persistent feature and you can see at a glance which features coexist. That is a **barcode** — the same intervals, rotated into a different picture.
+Same intervals as horizontal bars over $\varepsilon$.
 
 ```{python}
 #| label: fig-barcode
@@ -496,17 +479,15 @@ ax.set_title("Persistence barcode", fontsize=12, fontweight="bold")
 plt.show()
 ```
 
-### Reading actual features out of these figures
+### Feature reading
 
-Both pictures carry the same three stories, and all three can be checked against the distances we printed at the start.
+- **$H_1$ ring**: interval $[1.23, 1.83]$; persistence $0.60$; loop born when B–C closes A–F, dies when interior fills.
+- **$H_0$ merges**: seven finite bars; death scales match edge lengths (0.46 G–H, 0.85, 0.85, 1.03, 1.08, 1.12, 1.97 A–G).
+- **$H_2$ void**: $[1.88, 1.99]$; abstract enclosed void filled by tetrahedra at C–F arrival; short lifetime ≈ noise.
 
-- **The ring is the story.** The single $H_1$ interval $[1.23, 1.83]$ says: at $\varepsilon = 1.23$ the edge B–C closes the circle A–B–C–D–E–F into a cycle no triangle yet fills; at $\varepsilon = 1.83$ the edge B–D creates the last triangles needed to fill its interior. Its persistence, $1.83 - 1.23 = 0.60$, is large relative to the diagram's scale: a robust loop, not noise.
-- **$H_0$ tells the merge history.** Seven finite bars record seven mergers, and their death scales are exactly the edge lengths that performed each merge — compare them with the sorted distance matrix entries: 0.46 (G–H), 0.85, 0.85, 1.03, 1.08, 1.12 (the circle assembling), and finally 1.97 when edge A–G bridges the pair to everything else. The gap between 1.12 and 1.97 is the barcode's way of saying "for a wide range of scales, this data is *two* clusters."
-- **The $H_2$ sliver is a bonus lesson.** Between $\varepsilon = 1.88$ and $1.99$ the complex holds a closed surface of triangles wrapped around an empty interior — an abstract void, despite the points lying flat in 2D. It dies at 1.99, when edge C–F arrives and four tetrahedra fill it in at once. Short bar, close to the diagonal: real, correctly computed, and correctly ignored as noise.
+### Betti numbers at fixed scales
 
-### Betti numbers at chosen scales
-
-Persistence tracks features across scales, but sometimes the question really is about one scale. Fixing $\varepsilon$ and asking how many holes of each kind exist *right now* gives the Betti numbers $\beta_k(\varepsilon)$, and they read straight off the intervals: count the bars alive at $\varepsilon$, meaning those with $b \leq \varepsilon < d$, which keeps the same $\leq$ inclusion convention we have used throughout. The table below does that, and cross-checks $\beta_0$ against an independent `networkx` count of the threshold graph's components at every scale.
+$\beta_k(\varepsilon)$ = count of bars with $b \leq \varepsilon < d$.
 
 ```{python}
 #| code-summary: "Betti numbers at selected scales, from the intervals, cross-checked against networkx"
@@ -528,39 +509,34 @@ for eps in [0.6, 0.9, 1.25, 1.75, 1.9, 2.0]:
 Markdown("\n".join(rows))
 ```
 
-Read one row against the earlier pictures. At $\varepsilon = 1.25$ the complex has $\beta_0 = 2$ — ring group plus pair — and $\beta_1 = 1$, the ring itself, which is exactly what the second Rips panel showed.
+At $\varepsilon = 1.25$: $(\beta_0, \beta_1, \beta_2) = (2, 1, 0)$. Betti counts at two scales do not identify whether the same loop persists; the single $H_1$ bar $[1.23, 1.83]$ does.
 
-Now notice what no single row can tell you: whether the loop counted at 1.25 and the loop counted at 1.75 are the same loop. The table says "one loop" twice and says nothing about whether it is the same one. Persistence answers that, and the answer is why it is worth the extra machinery — the single $H_1$ bar spanning $[1.23, 1.83]$ *is* that identification, made once and carried across every scale in between.
+## Glossary
 
-## 9. Every term in this post, tied to a point in the cloud
+Terms tied to the eight-point example:
 
-The vocabulary is the part that makes TDA papers hard to read, mostly because the words get defined abstractly and then used about data. Here is each one attached to something concrete in the eight points we have been carrying, so it can be checked rather than taken on trust.
+- **Point cloud**: finite coordinates or distance matrix (A–H).
+- **Distance matrix**: $D_{GH} \approx 0.46$; topology-free input.
+- **Simplex**: $\{G\}$, $\{G,H\}$, $\{C,D,E\}$, $\{C,D,E,F\}$, etc.
+- **Simplicial complex**: simplices closed under faces.
+- **Closure property**: triangle implies its edges and vertices.
+- **Vietoris–Rips complex**: cliques of threshold graph = simplices.
+- **Filtration**: $\mathrm{VR}_{\varepsilon_1} \subseteq \mathrm{VR}_{\varepsilon_2} \subseteq \cdots$.
+- **Betti numbers**: $\beta_0$ components, $\beta_1$ loops, $\beta_2$ voids.
+- **Persistence diagram**: (birth, death) per feature; ring at $(1.23, 1.83)$.
+- **Persistence barcode**: same intervals as bars over $\varepsilon$.
+- **Persistence landscape**: diagram → real-valued functions for ML pipelines.
+- **Bottleneck distance**: max single-point matching distance between diagrams.
+- **Wasserstein distance**: sum of matching distances between diagrams.
 
-- **Point cloud** — a finite set of points with coordinates (or just pairwise distances). Ours: A–H in the plane.
-- **Distance matrix** — the symmetric matrix of pairwise distances; entry $D_{GH} \approx 0.46$. Input to everything, itself topology-free.
-- **Simplex** — a finite vertex set read as a geometric piece: $\{G\}$ a vertex, $\{G,H\}$ an edge, $\{C,D,E\}$ a filled triangle, $\{C,D,E,F\}$ a solid tetrahedron.
-- **Simplicial complex** — a collection of simplices closed under taking faces.
-- **Closure property** — if $\{C,D,E\}$ is in the complex, so are $\{C,D\}, \{D,E\}, \{C,E\}, \{C\}, \{D\}, \{E\}$. The law a generic hypergraph doesn't have to obey.
-- **Vietoris–Rips complex** — the complex at scale $\varepsilon$ whose simplices are exactly the sets of points that are *pairwise* within $\varepsilon$; equivalently, the cliques of the threshold graph.
-- **Filtration** — the nested family $\mathrm{VR}_{\varepsilon_1} \subseteq \mathrm{VR}_{\varepsilon_2} \subseteq \cdots$; each simplex enters at its diameter and never leaves.
-- **Betti numbers** — hole counts of a single complex: $\beta_0$ connected components, $\beta_1$ independent loops, $\beta_2$ independent enclosed voids. At $\varepsilon = 1.25$ our complex has $(\beta_0, \beta_1, \beta_2) = (2, 1, 0)$.
-- **Persistence diagram** — each hole plotted once as (birth scale, death scale); our ring is the point $(1.23, 1.83)$.
-- **Persistence barcode** — the same intervals drawn as bars over the $\varepsilon$-axis; long bars persist.
-- **Persistence landscape** — a transformation of the diagram into a sequence of real-valued functions (equivalently, vectors after sampling), giving a representation that can be averaged and fed to statistical or machine-learning pipelines — things you cannot straightforwardly do with raw diagrams. A pointer, not a topic, here.
-- **Bottleneck distance** — a metric between two persistence diagrams: over all ways of matching the points of one diagram to the points of the other (allowing any point to instead match to its nearest spot on the diagonal, treating it as a feature that never existed), the smallest achievable *largest* single matching distance.
-- **Wasserstein distance** — same matching setup, but summing (a power of) *all* matching distances rather than taking the maximum, so many small discrepancies count, not just the worst one.
+## Common misconceptions
 
-## 10. Four wrong sentences, and why each is wrong
+- **"TDA is a weighted multigraph."** Edges have two endpoints; cannot encode filled $\{C,D,E\}$ or fill status of cycles.
+- **"Powers of $D$ reveal topology."** Only a filtration + homology over nested complexes does.
+- **"Persistence diagram has a time axis."** Both axes are scale $\varepsilon$.
+- **"Long graph cycle ⇒ persistent loop."** $\beta_1 = 0$ at $\varepsilon = 1.9$ despite many graph cycles — higher simplices fill them.
 
-Each of these is a graph-theoretic word standing in for a topological one — the exact substitution flagged at the top of the post. Having the whole construction on the table makes the corrections short.
+## References
 
-- **"TDA is just a multigraph with colored or weighted edges."** Edges have exactly two endpoints, so no edge decoration can express the filled triangle $\{C,D,E\}$ — a single three-way simplex — nor whether a cycle is filled, which is the very question homology answers.
-- **"Powers of the raw distance matrix directly reveal topological shape."** Powers of an adjacency matrix count walks, the distance matrix isn't one, and shape only emerges from the *filtration* — the nested family of simplicial complexes indexed by the scale threshold, plus a homology computation over it.
-- **"A persistence diagram has a time axis."** Both axes are values of the scale parameter $\varepsilon$: each point is (birth *scale*, death *scale*), and nothing in the construction is chronological.
-- **"A long cycle in the threshold graph means TDA will report a loop."** A cycle only counts if it isn't filled by higher simplices — β₁ of the *complex* at $\varepsilon = 1.9$ is 0 even though the threshold *graph* at 1.9 is full of cycles.
-
----
-
-Which brings us back to the picture we started with. "Points, join the close ones, raise the threshold" was not wrong; it was one dimension short. The points really are fixed, the joining really does only accumulate, and the threshold really is the whole story — but what accumulates is not edges. It is simplices of every size, faces included by law, and the reason that matters is the one thing a graph could never say: whether the ring A–F has anything inside it. For $\varepsilon$ between 1.23 and 1.83 it does not, and the single orange bar is the software telling you so.
-
-To go further: [Topological Data Analysis: Finding Clusters, Loops, and Voids Across Scales](../topological-data-analysis-clustering/index.qmd) works a homology computation by hand and uses persistence as an ML feature extractor, and [TDA vs SVM](../tda-vs-svm-expanding-the-space/index.qmd) contrasts this machinery with kernel methods.
+- [Topological Data Analysis: Finding Clusters, Loops, and Voids Across Scales](../topological-data-analysis-clustering/index.qmd) — hand homology computation and persistence as ML features.
+- [Two Ways to Expand the Space: Persistent Homology and Kernel SVMs](../tda-vs-svm-expanding-the-space/index.qmd) — contrast with kernel methods.

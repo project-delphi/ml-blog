@@ -242,13 +242,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul class="collapse">
-  <li><a href="#the-diff-that-made-no-sense" id="toc-the-diff-that-made-no-sense" class="nav-link active" data-scroll-target="#the-diff-that-made-no-sense">The diff that made no sense</a></li>
-  <li><a href="#a-repository-can-have-several-working-directories-at-once" id="toc-a-repository-can-have-several-working-directories-at-once" class="nav-link" data-scroll-target="#a-repository-can-have-several-working-directories-at-once">A repository can have several working directories at once</a></li>
-  <li><a href="#agents-collide-because-read-think-write-is-not-atomic" id="toc-agents-collide-because-read-think-write-is-not-atomic" class="nav-link" data-scroll-target="#agents-collide-because-read-think-write-is-not-atomic">Agents collide because read-think-write is not atomic</a></li>
-  <li><a href="#claude-code-sets-the-worktrees-up-so-you-never-type-the-command" id="toc-claude-code-sets-the-worktrees-up-so-you-never-type-the-command" class="nav-link" data-scroll-target="#claude-code-sets-the-worktrees-up-so-you-never-type-the-command">Claude Code sets the worktrees up so you never type the command</a></li>
-  <li><a href="#three-theories-three-worktrees-one-merge" id="toc-three-theories-three-worktrees-one-merge" class="nav-link" data-scroll-target="#three-theories-three-worktrees-one-merge">Three theories, three worktrees, one merge</a></li>
-  <li><a href="#isolation-pays-when-the-work-is-genuinely-parallel" id="toc-isolation-pays-when-the-work-is-genuinely-parallel" class="nav-link" data-scroll-target="#isolation-pays-when-the-work-is-genuinely-parallel">Isolation pays when the work is genuinely parallel</a></li>
-  <li><a href="#the-gap-worktrees-dont-cover" id="toc-the-gap-worktrees-dont-cover" class="nav-link" data-scroll-target="#the-gap-worktrees-dont-cover">The gap worktrees don’t cover</a></li>
+  <li><a href="#shared-checkout-failure-mode" id="toc-shared-checkout-failure-mode" class="nav-link active" data-scroll-target="#shared-checkout-failure-mode"><span class="header-section-number">1</span> Shared-checkout failure mode</a></li>
+  <li><a href="#worktrees" id="toc-worktrees" class="nav-link" data-scroll-target="#worktrees"><span class="header-section-number">2</span> Worktrees</a></li>
+  <li><a href="#claude-code-isolation" id="toc-claude-code-isolation" class="nav-link" data-scroll-target="#claude-code-isolation"><span class="header-section-number">3</span> Claude Code isolation</a></li>
+  <li><a href="#parallel-hypothesis-testing" id="toc-parallel-hypothesis-testing" class="nav-link" data-scroll-target="#parallel-hypothesis-testing"><span class="header-section-number">4</span> Parallel hypothesis testing</a></li>
+  <li><a href="#when-to-isolate" id="toc-when-to-isolate" class="nav-link" data-scroll-target="#when-to-isolate"><span class="header-section-number">5</span> When to isolate</a></li>
+  <li><a href="#limits" id="toc-limits" class="nav-link" data-scroll-target="#limits"><span class="header-section-number">6</span> Limits</a></li>
   </ul>
 <div class="toc-actions"><ul class="collapse"><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/swarms-in-worktrees/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></nav>
     </div>
@@ -265,23 +264,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <figcaption>Swarms in Worktrees</figcaption>
 </figure>
 </div>
-<p>Running one coding agent is now ordinary. Running several at once is the obvious next thing to try, and it goes wrong in a way that is hard to diagnose because nothing announces the failure — no error, no conflict, no complaint from either agent. The fix has been sitting in git since 2015 and almost nobody uses it.</p>
-<section id="the-diff-that-made-no-sense" class="level2">
-<h2 class="anchored" data-anchor-id="the-diff-that-made-no-sense">The diff that made no sense</h2>
-<p>You dispatch two agents at once. One is refactoring the auth middleware; the other is adding tests for the same module. Ten minutes later you open the diff and it is incoherent — half a refactor, a test importing a symbol that no longer exists, and a function body that plainly belongs to neither task. Nothing errored. Neither agent reported a problem. Both told you they were done.</p>
-<p>What happened is mundane. Both agents were writing into the same checkout. The first read <code>middleware.ts</code>, thought for a while, and wrote back its edited version — a version derived from the file as it stood <em>before</em> the second agent’s change landed. That change is now gone. Not merged, not conflicted, just overwritten, and the commit you are looking at is a genuine chimera of two incompatible intentions.</p>
-<p>The instinct is to reach for locks, or a queue, or to give up and run one agent at a time. None of that is necessary. Git shipped the fix in 2015, it is installed on your machine right now, and hardly anyone uses it: worktrees.</p>
-</section>
-<section id="a-repository-can-have-several-working-directories-at-once" class="level2">
-<h2 class="anchored" data-anchor-id="a-repository-can-have-several-working-directories-at-once">A repository can have several working directories at once</h2>
-<p>A git repository is two things bolted together. There is the object database — every commit, tree and blob you have ever made, sitting in <code>.git</code>. And there is the working directory: the files you actually open and edit. The default layout stacks exactly one working directory on top of exactly one object database, so most people never think of them as separable.</p>
-<p>They are separable, though, and git has a command for separating them. One repository, one object database, but <em>several</em> working directories — each in its own folder on disk, each with a different branch checked out, all live simultaneously. Git calls each of those extra directories a <strong>worktree</strong>. Commits made in any of them land in the same shared object store, so history stays unified and every branch remains visible from everywhere. This is not a clone: your history is not duplicated, and there is no remote to sync between the copies.</p>
-<p>The consequence is the whole point. Editing a file in one worktree has no effect whatsoever on the same file in another. Separate working directories over shared history — which happens to be the exact shape a group of parallel agents needs.</p>
-</section>
-<section id="agents-collide-because-read-think-write-is-not-atomic" class="level2">
-<h2 class="anchored" data-anchor-id="agents-collide-because-read-think-write-is-not-atomic">Agents collide because read-think-write is not atomic</h2>
-<p>The failure at the top of this post was not a git bug or a model mistake. It is structural. An agent reads a file, reasons about it for some seconds, and writes it back. That read-think-write cycle is not atomic, and crucially, agents have no shared model of one another: nothing in agent A’s context says “agent B is halfway through editing this exact function.” There is no lock to acquire and no notification to receive, so the second write simply wins and the first disappears without a trace.</p>
-<p>That silence is what makes it expensive. A merge conflict is loud and stops you; a lost write is quiet and ships. You find it later, in review, in a diff that reads like two people talking over each other — because that is precisely what happened.</p>
+<p>Parallel coding agents sharing one checkout overwrite each other’s edits. <strong>Git worktrees</strong> give each agent a separate working directory over shared history, eliminating file-level collisions.</p>
+<section id="shared-checkout-failure-mode" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="shared-checkout-failure-mode"><span class="header-section-number">1</span> Shared-checkout failure mode</h2>
+<p>Two agents editing the same files produce a chimera diff: partial refactors, broken imports, merged incompatible changes. No error is raised; the last write wins silently.</p>
+<p>Cause: read-think-write is not atomic, and agents have no shared awareness of concurrent editors.</p>
 <div class="wt wt-a">
 <svg viewbox="0 0 440 195" role="img" aria-label="Three agents writing into one shared working directory, where their changes collide and overwrite each other.">
   <line class="wt-lane" x1="55" y1="35" x2="225" y2="105"></line>
@@ -292,7 +279,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <text class="wt-hit" x="225" y="140" text-anchor="middle">write overwritten</text>
   <line class="wt-lane" x1="300" y1="105" x2="372" y2="105"></line>
   <line x1="380" y1="20" x2="380" y2="170" stroke="#6b7280" stroke-width="1.5"></line>
-  <circle cx="380" cy="105" r="6" fill="#6b7280"></circle>
+  <circle cx="380" cy="95" r="6" fill="#6b7280"></circle>
   <text class="wt-tag" x="380" y="188" text-anchor="middle">main</text>
   <text class="wt-tag" x="55" y="16" text-anchor="middle">agent 1</text>
   <text class="wt-tag" x="55" y="76" text-anchor="middle">agent 2</text>
@@ -303,18 +290,31 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </svg>
 <div class="wt-cap">One directory, three writers. The last write wins and the others vanish.</div>
 </div>
-<p>You could of course run <code>git worktree add</code> yourself for each agent, remember which one belongs in which folder, and clean up afterwards. You do not have to. Claude Code — Anthropic’s command-line coding agent, and the thing dispatching the agents in this post — treats isolation as infrastructure and sets it up on your behalf.</p>
 </section>
-<section id="claude-code-sets-the-worktrees-up-so-you-never-type-the-command" class="level2">
-<h2 class="anchored" data-anchor-id="claude-code-sets-the-worktrees-up-so-you-never-type-the-command">Claude Code sets the worktrees up so you never type the command</h2>
-<p>Isolation here is not one feature but a spectrum, running from “you type one flag” to “you never think about it at all.”</p>
-<p>At the manual end is the <code>--worktree</code> flag. Launch a session with it and Claude Code creates a fresh worktree and works there instead of in your checkout, leaving your files and your current branch untouched:</p>
+<section id="worktrees" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="worktrees"><span class="header-section-number">2</span> Worktrees</h2>
+<p>A git repository has an object database (<code>.git</code>) and a working directory (editable files). Default layout: one working directory per repository.</p>
+<p><code>git worktree add</code> attaches <strong>multiple working directories</strong> to one object database:</p>
+<ul>
+<li>Each directory can have a different branch checked out.</li>
+<li>Commits from any worktree land in the shared object store.</li>
+<li>Not a clone — no duplicated history, no remote sync between copies.</li>
+<li>Editing a file in one worktree does not affect the same path in another.</li>
+</ul>
+</section>
+<section id="claude-code-isolation" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="claude-code-isolation"><span class="header-section-number">3</span> Claude Code isolation</h2>
+<p>Claude Code sets up worktree isolation automatically. Manual option:</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">claude</span> <span class="at">--worktree</span>   <span class="co"># or: claude -w</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<p>One step up, the Agent view creates a worktree automatically for each session you dispatch. Fan out four pieces of work and you get four working directories without asking for any of them; each session edits real files on a real branch, and none of them can see the others’ edits.</p>
-<p>The same guarantee is available to subagents, the helper agents a session spawns to work on a piece of a task. Spawning one with <code>isolation: "worktree"</code> gives it its own working directory to edit in — a worktree, not a copy. If it finishes without having changed anything, that directory is removed automatically, so speculative work leaves no debris behind.</p>
-<p>At the fully automatic end is <code>/batch</code>, which takes one large task, splits it into many subagents, isolates each in its own worktree, and has each open its own pull request:</p>
+<p>Isolation levels:</p>
+<ul>
+<li><strong><code>--worktree</code> flag</strong> — creates a fresh worktree; leaves your checkout and branch untouched.</li>
+<li><strong>Agent view</strong> — one worktree per dispatched session automatically.</li>
+<li><strong>Subagents with <code>isolation: "worktree"</code></strong> — helper agent gets its own directory; removed if unchanged.</li>
+<li><strong><code>/batch</code></strong> — splits one task into subagents, each isolated in its own worktree, each opening a PR:</li>
+</ul>
 <pre><code>/batch add structured logging to every handler in src/api</code></pre>
-<p>Outside of <code>/batch</code>, what actually triggers a fan-out is the shape of the request rather than any special syntax. Three prompts that reliably end up as several agents in several worktrees:</p>
+<p>Fan-out requires enumerable units of work in the prompt:</p>
 <pre><code>Try three different fixes for the flaky test in tests/pool_test.go — one per
 worktree, each on its own branch. Tell me which one actually holds. Don't
 merge anything yet.</code></pre>
@@ -324,14 +324,16 @@ separate PR for each.</code></pre>
 <pre><code>Port the four adapters in src/adapters to the new client interface. One
 subagent per adapter, isolated, and stop each one as soon as its adapter's
 tests pass.</code></pre>
-<p>What those share is enumerable units of work, an explicit request to run them separately, and a stopping condition for each. Compare them with “clean up the codebase,” which cannot fan out usefully because nothing in it marks where one agent’s job ends and the next one’s begins — the units have to exist in the prompt before they can exist in worktrees.</p>
-<p>The first of those three is worth watching play out, because it is where the isolation stops being bookkeeping and starts being leverage.</p>
+<p>Requirements for useful fan-out: separable units, explicit parallel request, stopping condition per unit. Vague prompts (“clean up the codebase”) do not decompose.</p>
 </section>
-<section id="three-theories-three-worktrees-one-merge" class="level2">
-<h2 class="anchored" data-anchor-id="three-theories-three-worktrees-one-merge">Three theories, three worktrees, one merge</h2>
-<p>Say a test fails intermittently and you have three plausible theories: a race in the connection pool, a bad fixture teardown, or a timeout that is simply too tight. Ordinarily you would try them in sequence, reverting between attempts and hoping you reverted cleanly.</p>
-<p>Instead you dispatch three subagents, one theory each, every one of them in its own worktree on its own branch. All three edit the same test file and the same helper at the same time, and none of them interferes with the others — because from each agent’s perspective it is the only thing touching the repo. Twenty minutes later you have three branches, three diffs, and three honest reports. Two agents found their theory did not hold. One nailed it.</p>
-<p>You merge the winner. The other two worktrees are discarded, and because their work never touched your checkout, discarding them costs nothing and leaves nothing behind. You did not compare three approaches by imagining them; you compared three approaches by running all of them.</p>
+<section id="parallel-hypothesis-testing" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="parallel-hypothesis-testing"><span class="header-section-number">4</span> Parallel hypothesis testing</h2>
+<p>Example: intermittent test failure with three theories (race, fixture teardown, timeout).</p>
+<ul>
+<li>Dispatch three subagents, one theory each, each in its own worktree on its own branch.</li>
+<li>All edit the same files concurrently without collision.</li>
+<li>Compare three branches and diffs; merge the winner; discard other worktrees.</li>
+</ul>
 <div class="wt wt-b">
 <svg viewbox="0 0 440 195" role="img" aria-label="Three agents each working in an isolated worktree on its own branch, in parallel without collisions, after which one branch merges into main and the others are discarded.">
   <g class="lose">
@@ -358,19 +360,33 @@ tests pass.</code></pre>
 </svg>
 <div class="wt-cap">Three lanes, three branches, no contention — then one merges and the rest are dropped.</div>
 </div>
-<p>Three branches for one bug is obviously not the right move every time, so it is worth being deliberate about when the overhead earns its keep.</p>
 </section>
-<section id="isolation-pays-when-the-work-is-genuinely-parallel" class="level2">
-<h2 class="anchored" data-anchor-id="isolation-pays-when-the-work-is-genuinely-parallel">Isolation pays when the work is genuinely parallel</h2>
-<p>Reach for worktree isolation when agents will touch overlapping files, when you have several genuinely independent tasks to run at once, when a large change decomposes cleanly into parts, or when you want to compare competing approaches rather than commit to one up front. In all four cases isolation is buying you something specific: the ability to run things concurrently that would otherwise have to be serialised.</p>
-<p>Skip it when you are running a single agent — there is nothing to collide with, and a second directory is pure overhead. Skip it for small, quick edits, where setup costs more than the work. And weigh it carefully in projects with heavy per-directory dependency installs: if each worktree needs a fresh <code>node_modules</code> or a rebuilt virtualenv, that install cost can swamp the benefit for anything short of a long-running task.</p>
-<p>Even when the answer is a clear yes, though, isolation only covers what lives inside the git tree — and plenty of what your agents touch does not.</p>
+<section id="when-to-isolate" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="when-to-isolate"><span class="header-section-number">5</span> When to isolate</h2>
+<p>Use worktree isolation when:</p>
+<ul>
+<li>Agents will touch overlapping files</li>
+<li>Several independent tasks run concurrently</li>
+<li>A large change decomposes cleanly</li>
+<li>Competing approaches should be compared in parallel</li>
+</ul>
+<p>Skip when:</p>
+<ul>
+<li>Single agent (nothing to collide with)</li>
+<li>Small, quick edits (setup cost exceeds work)</li>
+<li>Heavy per-directory dependency installs (<code>node_modules</code>, virtualenv per worktree)</li>
+</ul>
 </section>
-<section id="the-gap-worktrees-dont-cover" class="level2">
-<h2 class="anchored" data-anchor-id="the-gap-worktrees-dont-cover">The gap worktrees don’t cover</h2>
-<p>Separate working directories protect files. They do nothing for shared state outside them. Point three isolated agents at one development database and they will happily trample each other’s migrations. Give them a stateful MCP server — Model Context Protocol, the standard by which an agent reaches tools and data outside itself — and all three share its session. Have them tick off items in one shared checklist file that sits outside the worktrees and you have rebuilt the original collision, one level up. Perfect file isolation with a single shared Redis instance is not isolation.</p>
-<p>Cost is the other thing isolation does not touch. Three agents on one bug is three times the tokens for one merged fix, and no amount of worktree hygiene changes that. What controls spend is scoping: narrow, well-specified tasks that stop when they are done. Isolation decides whether parallel agents can work; scoping decides whether you should have run them in parallel at all.</p>
-<p>Worktrees make the swarm safe. The chimera diff at the top of this post simply cannot happen once every agent owns its own directory, because there is no longer a single file for two of them to write — and that failure was never worth solving with locks or queues when git already had the answer installed. What no amount of isolation tells you is whether three agents should have been pointed at that module at all. Knowing what to send the swarm after is still your job.</p>
+<section id="limits" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="limits"><span class="header-section-number">6</span> Limits</h2>
+<p>Worktrees isolate files inside the git tree only. Shared state outside remains a collision surface:</p>
+<ul>
+<li>One development database across agents (migration conflicts)</li>
+<li>Stateful MCP (Model Context Protocol) server sessions shared across agents</li>
+<li>Checklist files outside worktrees</li>
+<li>Shared Redis or other external state</li>
+</ul>
+<p>Cost is unchanged: three agents on one bug is three times the tokens. Scoping — narrow tasks with clear stop conditions — controls spend; isolation controls safety.</p>
 
 
 </section>

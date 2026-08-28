@@ -71,11 +71,40 @@ ul.task-list li input[type="checkbox"] {
   }
 }</script>
 
+  <script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN") {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
 
 <link rel="stylesheet" href="../../styles.css">
 </head>
 
-<body class="nav-fixed fullcontent">
+<body class="nav-fixed">
 
 <div id="quarto-search-results"></div>
   <header id="quarto-header" class="headroom fixed-top quarto-banner">
@@ -158,7 +187,17 @@ ul.task-list li input[type="checkbox"] {
   </header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
 <!-- sidebar -->
 <!-- margin-sidebar -->
-    
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#procedure" id="toc-procedure" class="nav-link active" data-scroll-target="#procedure"><span class="header-section-number">1</span> Procedure</a></li>
+  <li><a href="#canonical-example-golub-leukemia" id="toc-canonical-example-golub-leukemia" class="nav-link" data-scroll-target="#canonical-example-golub-leukemia"><span class="header-section-number">2</span> Canonical example: Golub leukemia</a></li>
+  <li><a href="#references" id="toc-references" class="nav-link" data-scroll-target="#references"><span class="header-section-number">3</span> References</a></li>
+  </ul>
+<div class="toc-actions"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/what-is-a-biological-signature/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></nav>
+    </div>
 <!-- main -->
 <main class="content quarto-banner-title-block" id="quarto-document-content">
 
@@ -172,24 +211,42 @@ ul.task-list li input[type="checkbox"] {
 <figcaption>What is a Biological Signature?</figcaption>
 </figure>
 </div>
-<p>A fingerprint identifies you from a patch of skin the size of a stamp. That is the trick: a few well-chosen features stand in for the whole person, and you never need the person.</p>
-<p>A biological fingerprint does the same with molecules. A handful of genes, proteins, or metabolites — the small molecules a body makes as it burns fuel and builds tissue — carry a pattern, and the pattern is enough to tell one condition from another. This tumour and not that one. Infected, not healthy. When that pattern is measured rather than eyeballed, we call it a <strong>signature</strong>.</p>
-<section id="finding-one-is-feature-selection" class="level2">
-<h2 class="anchored" data-anchor-id="finding-one-is-feature-selection">Finding one is feature selection</h2>
-<p>One lab test reads tens of thousands of genes at once; patients are slow and costly to enrol. A gene chip, or microarray, hands you 20,000 readings on 70 people, nearly all of them noise for your question, and a model given all 20,000 will fit that noise perfectly. The signature is the short list you keep.</p>
+<p>A <strong>signature</strong> is a short list of measured molecular features (genes, proteins, or metabolites) that distinguishes one condition from another.</p>
+<p>It is feature selection on wide, small-<span class="math inline">\(n\)</span> data: tens of thousands of genes, tens of patients. A model given all features will fit noise.</p>
+<section id="procedure" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="procedure"><span class="header-section-number">1</span> Procedure</h2>
 <ol type="1">
 <li><strong>Measure wide.</strong> Every feature on every sample.</li>
-<li><strong>Find the groups.</strong> If you already know who belongs to which group, you have what the next two steps need. If you don’t, let a clustering method propose the groups first.</li>
-<li><strong>Select.</strong> Score each feature by how well it separates the groups. A <em>t</em>-test asks how far apart it puts the two group averages, relative to how much it wanders within each group. Mutual information asks a different question — how much does knowing this feature tell you about which group a sample is in — and so it can catch separations a difference of averages misses. Or let a model that is charged a price for every feature it uses (lasso, elastic net) drop the rest for you.</li>
-<li><strong>Validate on data you never touched.</strong> Hold part of the data back, fit on the rest, test on the part you held back, and rotate — that is cross-validation, and each turn is a fold. Redo the selection inside every fold.</li>
+<li><strong>Find the groups.</strong> Use known labels, or let clustering propose groups.</li>
+<li><strong>Select.</strong> Score features by group separation:
+<ul>
+<li><em><span class="math inline">\(t\)</span>-test:</em> distance between group means relative to within-group scatter.</li>
+<li><em>Mutual information:</em> how much the feature tells you about group membership.</li>
+<li><em>Penalized models</em> (lasso, elastic net): drop features by charging a cost for each one used.</li>
+</ul></li>
+<li><strong>Validate on held-out data.</strong> Redo selection <strong>inside</strong> each cross-validation fold.</li>
 </ol>
-<p>Skip step 4 and the number you report is too good. Choose the genes using all your samples and the ones you held back are no longer fresh: those genes were chosen <em>because</em> they split those exact samples. <a href="https://doi.org/10.1073/pnas.102102699">Ambroise and McLachlan (2002)</a> showed this bias drags the reported cross-validation error towards zero, and that redoing selection inside each fold pushes it back up.</p>
+<p>Selecting on all samples, then testing on a “held-out” subset, leaks the selection. <a href="https://doi.org/10.1073/pnas.102102699">Ambroise and McLachlan (2002)</a> showed that this bias drives reported error toward zero; nested selection raises it again.</p>
 </section>
-<section id="golubs-fifty-genes-are-the-canonical-case" class="level2">
-<h2 class="anchored" data-anchor-id="golubs-fifty-genes-are-the-canonical-case">Golub’s fifty genes are the canonical case</h2>
-<p>Dodging that trap is what made the founding example credible. Two kinds of acute leukemia, ALL and AML, look alike down a microscope but take opposite chemotherapies, and the call rested on four separate specialist lab tests — good, yet errors happened. <a href="https://doi.org/10.1126/science.286.5439.531">Golub and colleagues (1999)</a> measured 6,817 genes in 38 samples from acute leukemia patients. Clustering, told nothing about who had which disease, nearly found the split on its own: it sorted the patients into two groups, one holding 24 ALL patients and a single AML, the other holding 10 AML patients and 3 ALL. They then trained a 50-gene predictor and tested it on 34 fresh samples from other leukemia banks. Fifty features out of 6,817: a signature.</p>
-<p>The same four steps run on other data. Animals shed DNA into water, and a few marker sequences in a river sample say a jaguar was there. Read from starlight, an exoplanet’s atmosphere can show gases that chemistry alone would struggle to produce.</p>
-<p><strong>Further reading:</strong> <a href="https://www.jmlr.org/papers/v3/guyon03a.html">Guyon and Elisseeff (2003)</a> on feature selection; <a href="https://doi.org/10.1111/j.1467-9868.2010.00740.x">Meinshausen and Bühlmann (2010)</a> on keeping only features that survive resampling.</p>
+<section id="canonical-example-golub-leukemia" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="canonical-example-golub-leukemia"><span class="header-section-number">2</span> Canonical example: Golub leukemia</h2>
+<p>ALL and AML are two acute leukemias that look similar under a microscope and take opposite chemotherapies. Diagnosis used to rest on four specialist lab tests.</p>
+<p><a href="https://doi.org/10.1126/science.286.5439.531">Golub et al.&nbsp;(1999)</a> measured 6,817 genes in 38 acute-leukemia samples.</p>
+<ul>
+<li>Unsupervised clustering, given no disease labels, nearly recovered the split (one group 24 ALL + 1 AML; the other 10 AML + 3 ALL).</li>
+<li>A 50-gene predictor was then tested on 34 independent samples from other banks.</li>
+</ul>
+<p>Fifty features out of 6,817 is a signature.</p>
+<p>The same four steps apply to environmental DNA (a few marker sequences implying a species was present) and to exoplanet spectra (gases inconsistent with abiotic chemistry).</p>
+</section>
+<section id="references" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="references"><span class="header-section-number">3</span> References</h2>
+<ul>
+<li>Ambroise, C. &amp; McLachlan, G. J. (2002). <a href="https://doi.org/10.1073/pnas.102102699">Selection bias in gene extraction on the basis of microarray gene-expression data</a>. <em>PNAS</em>.</li>
+<li>Golub, T. R. et al.&nbsp;(1999). <a href="https://doi.org/10.1126/science.286.5439.531">Molecular classification of cancer: class discovery and class prediction by gene expression monitoring</a>. <em>Science</em> 286(5439):531–537.</li>
+<li>Guyon, I. &amp; Elisseeff, A. (2003). <a href="https://www.jmlr.org/papers/v3/guyon03a.html">An introduction to variable and feature selection</a>. <em>JMLR</em>.</li>
+<li>Meinshausen, N. &amp; Bühlmann, P. (2010). <a href="https://doi.org/10.1111/j.1467-9868.2010.00740.x">Stability selection</a>. <em>JRSS-B</em>.</li>
+</ul>
 
 
 </section>
@@ -617,4 +674,4 @@ window.document.addEventListener("DOMContentLoaded", function (event) {
 
 
 
-<footer class="footer"><div class="nav-footer"><div class="nav-footer-center"><div class="toc-actions"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/what-is-a-biological-signature/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></div></div></footer></body></html>
+<footer class="footer"><div class="nav-footer"><div class="nav-footer-center"><div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/what-is-a-biological-signature/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></div></div></footer></body></html>

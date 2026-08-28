@@ -17,6 +17,7 @@ format:
   html:
     toc: true
     toc-depth: 3
+    number-sections: true
     code-fold: show
     theme: [zephyr, theme.scss]
     fig-width: 8
@@ -26,37 +27,19 @@ format:
 
 ![](./cover.png){fig-alt="Cover card reading From Dataset to a Biological Signature, over a solid purple background."}
 
-Two acute leukemias arrive at the clinic looking much the same. Both fill the marrow
-with immature white cells, both make the patient acutely ill within weeks, and under
-a microscope the blasts of one can pass for the blasts of the other. They need
-opposite treatments. Get it wrong and you give a toxic regimen that will not work to
-someone who has a few weeks to spare.
+## Biological signature
 
-Before 1999 that call was made by a blood specialist looking down a microscope at the
-shape of the cells, at how they took up various dyes, and at which proteins sat on
-their surface. It was good, and two hospitals could reach two answers. Golub and
-colleagues asked whether the cells' gene activity could make the call on its own — and
-whether you could have found the two diseases in the data without being told they
-existed.
+A **biological signature** is a fixed gene list with weights and a decision threshold, fit to answer a specific classification question. Every reported performance number is conditional on the data having selected those genes.
 
-This post runs that question end to end, twice. The argument underneath it is one
-sentence: **a signature only exists relative to a question you asked, and every number
-you attach to one is shaped by the fact that the data itself picked the genes.** A
-machine learning scientist and a statistician say that in different words; both
-versions are here, and they are the same pipeline. For the concept without the code,
-[What is a Biological Signature?](../what-is-a-biological-signature/) is the primer.
+This post runs Golub et al. (1999) ALL/AML microarray data end to end: recover the original train/test split, fit an elastic-net signature without leakage, and report honest external validation. The pipeline is described twice — ML vocabulary and statistical vocabulary.
 
-### Two assembly lines, and a glitch on one of them
+Primer without code: [What is a Biological Signature?](../what-is-a-biological-signature/).
 
-The biology is worth two minutes, because it turns out to be what the model recovers.
-Think of bone marrow as a factory with two assembly lines running from a single stem
-cell. The **lymphoid** line builds the immune system's sharpshooters, B-cells and
-T-cells. The **myeloid** line builds everything else: red cells that carry oxygen,
-platelets that clot, and the white cells that do the frontline brawling.
+## Biology background
 
-An acute leukemia is a glitch that jams one line. The marrow fills with cells caught
-half-built — blasts — that will neither finish growing into anything useful nor stop
-dividing.
+Acute lymphoblastic leukemia (ALL) and acute myeloid leukemia (AML) require opposite treatments. Pre-1999 diagnosis used morphology, cytochemistry, and surface markers.
+
+Bone marrow stem cell gives two lines:
 
 ```{mermaid}
 flowchart TD
@@ -66,31 +49,19 @@ flowchart TD
   M -->|glitch| AML["<b>AML</b><br/>myeloblasts"]
 ```
 
-Jam the lymphoid line and you get acute lymphoblastic leukemia, ALL — the commonest
-cancer of childhood. Jam the myeloid line and you get acute myeloid leukemia, AML,
-mostly an adult disease, and faster to strip out oxygen transport and clotting because
-the myeloid line covers more jobs.
+- **ALL:** lymphoid line jammed; commonest childhood cancer.
+- **AML:** myeloid line jammed; adult disease; affects oxygen transport and clotting faster.
 
-So the diagnostic question has a clean biological shape: *which line is stuck?* Hold
-on to that. It is what the classifier ends up measuring.
+Diagnostic question: *which line is stuck?*
 
-### The data, and who went to the trouble of collecting it
+## Data provenance
 
-The measurements come from Golub et al. (1999) at the Whitehead Institute and
-Dana-Farber, who took marrow and blood from 72 acute leukemia patients and ran each
-sample over an Affymetrix HU6800 array: a glass chip carrying 7,129 tiny patches, each
-keyed to one gene. Sample material sticks to the patch that matches it and glows, so a
-bright spot means that gene was busy in that patient. They were not building a
-product; they pulled samples from hospital archives to argue that a tumour's type is
-legible in gene activity at all.
+**Source:** Golub et al. (1999), Whitehead Institute / Dana-Farber. 72 acute leukemia patients; Affymetrix HU6800 array (7,129 gene probes). Archived hospital samples; goal was to show tumour type is legible in gene expression.
 
-A decision made from this analysis is a treatment assignment: vincristine and
-steroids for ALL, cytarabine and an anthracycline for AML, for a patient seriously
-ill either way. So the interesting number is not peak accuracy. It is how much of the
-accuracy survives being carried to a different hospital.
-
-I use the copy on Efron and Hastie's *Computer Age Statistical Inference* data page,
-cached in this post's `data/` directory so the render never touches the network.
+- **Matrix used here:** Efron and Hastie's [CASI data page](https://hastie.su.domains/CASI_files/DATA/leukemia.html) (`leukemia_big.csv.gz`), cached in `data/`.
+- **Split key:** original Whitehead files (`golub_train.csv.gz`, `golub_independent.csv.gz`) carry probe accessions and patient IDs the CASI copy dropped.
+- **Objective:** classify ALL vs AML from expression.
+- **Downstream impact:** treatment assignment (vincristine/steroids vs cytarabine/anthracycline). Target metric: performance at a **different hospital**, not peak training accuracy.
 
 ```{python}
 #| label: setup
@@ -134,8 +105,7 @@ print(f"expression matrix : {X.shape[0]} samples x {X.shape[1]} genes")
 print(f"class balance     : {(y==0).sum()} ALL, {y.sum()} AML")
 ```
 
-Seventy-two samples, 7,128 genes. That is a hundred times more things measured than
-people to measure them on, and every difficulty below follows from that one ratio.
+72 samples × 7,128 genes ($p \gg n$).
 
 ```{python}
 #| label: slice
@@ -149,30 +119,16 @@ pd.DataFrame(
 )
 ```
 
-These are not raw brightness readings. Each *column* — each patient — has been
-rescaled so their 7,128 values average zero with a spread of one, which puts every
-patient on the same footing however bright their chip came out. Something was done to
-each gene across patients too, but the file's own documentation says that step is
-"lost in time".
+Each patient column is z-scored (mean 0, SD 1). Per-gene preprocessing across patients is undocumented ("lost in time").
 
-## The file on Hastie's server holds Golub's two groups, stored backwards
+## Train/test split recovery
 
-Golub's design had a feature that matters more than anything else here. The 72 samples
-are not one pool. Thirty-eight came from a single hospital, all bone marrow, and those
-built the predictor. The other 34 were collected later at different reference
-laboratories, prepared by different hands to different recipes, some of them blood
-rather than marrow. That second group differs from the training set in exactly the
-ways a new hospital would — which is the only kind of test set whose score is worth
-quoting.
+Golub's design:
 
-The file I am using has no patient identifiers, so that split looks lost. It is
-recoverable, and worth recovering properly rather than guessing from class counts.
-Here is the lever: rescaling a patient's column stretches and shifts their numbers but
-cannot reorder them, so the gene that was third-brightest before is third-brightest
-after. That surviving order is as good as a fingerprint. Replace every value by its
-rank within its column, then see which column of one file moves with which column of
-the other. Correlating ranks rather than values is what makes this a Spearman
-correlation.
+- **38 training:** single hospital, bone marrow, predictor built here.
+- **34 external test:** later collection, different labs, some blood — simulates new hospital.
+
+CASI file lacks patient IDs. Recovery method: column-wise rank order is invariant to affine rescaling → Spearman rank correlation matches CASI columns to Golub patients.
 
 ```{python}
 #| label: recover-split
@@ -196,18 +152,13 @@ print(f"best runner-up      : {best[:, -2].max():.3f}")
 print(f"CASI column 0 -> patient {ids[match[0]]};  column 34 -> patient {ids[match[34]]}")
 ```
 
-Every column matches exactly one patient, none is claimed twice, and every recovered
-label agrees. The weakest true match scores 0.945 while the best wrong candidate
-anywhere reaches 0.884, so nothing here is close. It also settles the ordering: column
-0 is patient 39 and column 34 is patient 1, so the file stores the **34 outside
-samples first**. Slice it at the front expecting training data and you get Golub's
-held-out patients instead.
+- 72/72 unique matches; all labels agree.
+- Worst true match: 0.945; best wrong candidate: 0.884.
+- **CASI stores 34 external samples first** (columns 0–33), training second (34–71).
 
-One caveat no amount of later care removes. That undocumented per-gene step may well
-have been computed across all 72 patients at once. Rescaling a patient's own column is
-safe, since it only ever looks at itself; a step that pools every patient is not,
-because it lets the 34 test samples touch the training data before the split.
-Everything below is conditional on it.
+### Preprocessing caveat
+
+Undocumented per-gene step may have pooled all 72 patients. Column z-scoring is safe; pooled gene normalization would leak test into training. All results below are conditional on column scaling only.
 
 ```{python}
 #| label: fig-data
@@ -252,74 +203,30 @@ fig.tight_layout()
 plt.show()
 ```
 
-Two hand-picked genes almost draw the line on their own, which tells you the signal
-here is unusually strong. Hold on to that when the error rates arrive.
+- CCND3 (lymphoid) vs MPO (myeloid) nearly separate classes alone.
+- Class and cohort load on **different** principal components. Ridge classifier on cohort alone: 78% CV accuracy.
 
-The right panel is the warning attached to it. Take the cloud of patients in 7,128
-dimensions and ask which single direction through it spreads them out most, then which
-does so among what is left, and so on; those directions are the principal components.
-Here the direction tracking the diagnosis and the direction tracking which of the two
-collection batches a sample belongs to are two *different* components. The batch is not
-a fog of random error over the disease signal — it is its own clean pattern at its own
-angle. Train a ridge classifier to guess only the batch, telling it nothing about the
-diagnosis, and cross-validation puts it at 78%. A model will learn that, because it is
-there to be learnt.
+## ML pipeline
 
-## For the ML scientist: the biology is all upstream of the matrix
+### Input representation
 
-**What does the model actually see?** A table: one row per patient, one column per
-gene, one number in each cell. Every piece of biology sits upstream of it — which
-patch stands for which gene, what to do with readings too dim or too bright to trust,
-how to put different chips on a comparable scale. All of it is specific to this assay
-and travels nowhere; redo the study on today's sequencing and every choice changes,
-while the table coming out looks the same. After the table it is ordinary supervised
-learning. That lopsidedness is why genomics pipelines break when they are moved rather
-than when they are built.
+Model sees samples × genes matrix. Biology (probe mapping, normalization) is upstream and assay-specific.
 
-**So is finding a signature supervised or unsupervised?** Supervised, and worth saying
-flatly, because the field's vocabulary blurs it. A signature is only defined against a
-question — sick or well, this tumour or that one. Take the labels away and the data
-still has structure, but structure is not a signature. It is a pattern that might be
-the disease, or the patients' sex, or the laboratory, or the day the samples were run.
-Methods that work without labels do the supporting work, including the check that the
-biggest patterns are biology rather than paperwork — which is what the right panel was
-for.
+### Supervised signature
 
-There is a real exception, and Golub's paper is why it is famous. Cluster first, find
-a grouping nobody had a name for, then treat those groups as if they were labels and
-go looking for what separates them. That is class *discovery*, and their paper did
-both halves. Discovery proposes the question; answering it is still supervised.
+Signature requires labels (ALL vs AML). Unsupervised structure ≠ signature without a question. Golub (1999) also did class discovery then prediction; discovery proposes the question, prediction remains supervised.
 
-**What actually ships to a hospital?** Not a model somebody keeps tuning: a fixed list
-of genes, a fixed weight for each, and a fixed cut-off, all locked before anyone opens
-the test set. Which is why the penalty below is set by testing inside the training
-data, never by trying values against the test set and keeping the best:
+### Elastic net objective
+
+Shipped artifact: fixed gene list, weights, threshold — locked before opening test set.
 
 $$
 \hat\beta \;=\; \arg\min_{\beta}\; -\frac{1}{n}\sum_{i=1}^{n}\Big[y_i\,x_i^{\top}\beta - \log\big(1 + e^{x_i^{\top}\beta}\big)\Big] \;+\; \lambda\Big(\alpha\lVert\beta\rVert_1 + \tfrac{1-\alpha}{2}\lVert\beta\rVert_2^2\Big)
 $$
 
-Read it as two demands pulling against each other. The first part rewards fitting the
-patients you have. The part after the plus sign charges for weight put on genes, in two
-currencies. The first, $\lVert\beta\rVert_1$, charges by the plain size of a weight. That charge
-has a sharp corner at zero, and the corner is the whole point: it makes an exact zero
-the best answer for a gene even when some small non-zero weight would fit the patients
-slightly better. So genes drop out completely and a short list survives. The second,
-$\lVert\beta\rVert_2^2$, charges by the *square* of a weight, which is smooth at zero
-and so shrinks weights without ever quite reaching it. What it does instead is punish
-one big weight far more than two medium ones, so genes that rise and fall together end
-up sharing the credit rather than one being kept at random and its twins discarded.
-Together they are the elastic net. Fixing $\alpha = 0.5$ keeps both charges in play and
-leaves a single dial: $\lambda$, how expensive genes are in total.
-
-Setting that dial needs care, because data used to choose it has helped build the
-model and can no longer judge it. So choosing and judging get separate patients. Split
-the 38 into five groups; hold one out; inside the other four run a smaller split that
-tries each candidate penalty and keeps the winner. (The code and the figure below turn
-the dial by its reciprocal, $C$, so larger $C$ means a *weaker* penalty.) Only then is the held-out group
-spent, scoring a model whose dial it had no hand in setting. Rotate through all five
-and average. An inner loop that chooses, an outer loop that scores: nested
-cross-validation.
+- L1 ($\lVert\beta\rVert_1$): sparsity; exact zeros.
+- L2 ($\lVert\beta\rVert_2^2$): groups correlated genes.
+- $\alpha = 0.5$; tune $\lambda$ (via $C = 1/\lambda$) by nested cross-validation on 38 training samples only.
 
 ```{python}
 #| label: fig-path
@@ -373,9 +280,7 @@ ax.legend(frameon=False, fontsize=8)
 plt.show()
 ```
 
-That two-loop procedure puts the predictor at 0.921 accuracy on the training
-patients. Now lock the gene list, the weights and the cut-off, and open the 34 outside
-samples — once.
+Nested CV training accuracy: **0.921**. External test (once):
 
 ```{python}
 #| label: external
@@ -394,19 +299,10 @@ wrong = np.flatnonzero((p_test > 0.5).astype(int) != yte)
 print(f"the one error     : predicted p(AML) = {p_test[wrong][0]:.3f}")
 ```
 
-**What did it find?** Thirty-three of the 34 outside samples correct. The AUC of 1.000
-says that given any AML patient and any ALL patient, the model always gives the AML
-patient the higher probability: it ranks all 34 correctly, even though the cut-off at
-0.5 converts one of those rankings into a wrong answer. The Brier score averages the *squared*
-gap between each quoted probability and what actually happened, and squaring is what
-makes a confident mistake cost far more than a hesitant one. The single error sits at $p = 0.468$, three hundredths on the wrong side of the
-line — the model was almost exactly undecided.
+Results:
 
-Note which way the gap runs. The training-only estimate said 0.921 and the outside
-cohort delivered 0.971, so the internal number *understated* how well the model
-travelled — the opposite of the failure everyone is trained to expect.
-
-The gene list is what closes the loop back to the marrow.
+- **33/34** correct; AUC **1.000** (perfect ranking); one error at $p = 0.468$.
+- Training CV (0.921) **understated** external performance (0.971).
 
 ```{python}
 #| label: lineage
@@ -429,80 +325,44 @@ for a, note in hits:
 print(f"\n{len(hits)} of these annotated markers survived selection.")
 ```
 
-Myeloid markers on one side, lymphoid on the other. The model is reading out which
-assembly line is stuck: it has rediscovered the question the biology poses, rather
-than memorising 72 patients. And among the genes it keeps is myeloperoxidase — the
-very enzyme the pre-1999 laboratory stain tested for. The gene activity arrives at the
-specialist's own marker from the other direction.
+Selected genes: myeloid vs lymphoid markers; includes MPO (pre-1999 stain target).
 
-That is the optimistic reading. The next section runs the same pipeline and asks what
-those numbers are estimates *of*.
+## Statistical pipeline
 
-## For the statistician: the data chose the genes, and every number remembers that
+Same procedure; emphasis on inference under $p \gg n$ and post-selection bias.
 
-Describe the same job in a statistician's words and the difficulty changes shape.
-Statisticians write that hundred-to-one ratio as $p \gg n$ — far more things measured
-than subjects to measure them on — and add a bet that only a handful of the 7,128
-matter. The procedure then has to do two jobs at once: pick the handful, and report a
-weight for each one it picked. Those jobs cannot be separated, and the second inherits
-everything the first did.
+### Post-selection inference
 
-That is why the usual confidence interval around a selected gene's weight means
-nothing. Such an interval assumes the gene was named in advance. This one is in the
-list *because* it looked good in these 38 patients — it won a contest against 7,127
-rivals, and some of why it won is luck that will not repeat. Quote the interval anyway
-and it comes out too narrow, the p-value beside it too small. Three honest repairs
-exist: choose genes on one half of the patients and do all inference on the half never
-consulted; work out what winning the contest does to the numbers and correct for it,
-which is selective inference; or run fake genes that imitate the real correlation
-structure but are known to be unrelated to the disease through the same contest, and
-count how often a fake wins — knockoffs.
+Selected gene weights inherit selection luck. Standard CIs assume pre-specified variables. Repairs:
 
-Then there is the sheer number of tests. Run 7,128 comparisons at the usual 5%
-threshold and about 356 genes clear it by chance alone. The reflex fix — demand a far
-stricter threshold on each test — throws away almost every real finding along with the
-false ones at this scale. The guarantee people use instead is the false discovery
-rate: not "how likely am I to make even one mistake", but "of the genes I report, what
-fraction should I expect to be wrong",
+1. Split sample: select on one half, infer on other.
+2. Selective inference: correct for selection.
+3. Knockoffs: fake genes through same contest.
+
+### False discovery rate
+
+7,128 tests at 5% → ~356 false positives by chance. **FDR** controls expected fraction wrong among reported genes:
 
 $$
-\mathrm{FDR} \;=\; \mathbb{E}\!\left[\frac{V}{\max(R, 1)}\right],
+\mathrm{FDR} \;=\; \mathbb{E}\!\left[\frac{V}{\max(R, 1)}\right]
 $$
 
-where $R$ counts the genes you reported and $V$ counts how many of those were wrong.
-Setting that expected fraction to, say, 10% is a workable promise: a tenth of your
-list is junk, on average, and you proceed knowing it.
+Benjamini–Hochberg delivers long-run FDR control when genes correlate; single-list fraction can swing (gene gangs).
 
-The trouble is the phrase *on average*. Genes do not act independently; they come in
-gangs that switch on and off together, so one upstream event drags fifty along and the
-number of genuinely separate questions is far below 7,128. Benjamini–Hochberg still
-delivers its long-run promise when genes move *together*, which is the common case
-here; it is not guaranteed when a block moves in opposition, as repression produces. But the fraction you get
-*this time* swings widely around it, precisely because genes move in gangs — one gang
-going wrong takes fifty entries with it. You can control the average perfectly and
-still hold a badly wrong list today.
+### Pipeline stages
 
-Stated as stages, the pipeline the section above ran informally is:
+1. Pre-specify estimand and threshold.
+2. Split before any transformation.
+3. Fit scaling and gene filter on training folds only.
+4. Inner loop: choose penalty; outer loop: score performance.
+5. Stability selection across subsamples.
+6. Lock model; test externally once; report intervals and calibration.
 
-1. Decide what you are estimating, and where the cut-off goes, before looking.
-2. Split the data before any transformation touches it.
-3. Fit rescaling and any gene filter on training data only, inside each fold.
-4. Choose the penalty in an inner loop; measure performance in an outer one.
-5. Check the gene set is stable, not merely best on one draw.
-6. Lock the weights and cut-off, test outside once, and report intervals and how
-   truthful the probabilities were — not one bare accuracy figure.
+Step 3 is most commonly violated.
 
-Step 3 is the one usually violated, and the violation is almost never deliberate.
+### Leakage demonstration
 
-### Cheating happens by default, because the gene filter looked at everything
-
-The natural way to handle 7,128 genes is to score each on how cleanly it separates ALL
-from AML, keep the best 50, and cross-validate on those. It feels safe: inside the loop
-the model only ever trains on the training fold. But the scoring step ran once, over
-all the data, before the loop started. So the fold you are holding back already had a
-vote in choosing the genes it is about to score. Information has leaked across the
-split, which is why this is called leakage. Ambroise and McLachlan named it in 2002,
-and it reproduces in a few lines.
+Score all genes on full data, keep top 50, then cross-validate → held-out fold influenced gene choice. [Ambroise and McLachlan (2002)](https://doi.org/10.1073/pnas.99.6562).
 
 ```{python}
 #| label: leakage
@@ -530,28 +390,13 @@ print(f"labels shuffled : filter once {opt_n:.1%} error | filter in fold {honest
 print(f"chance for this class balance : {(y == 0).mean():.1%} correct by always saying ALL")
 ```
 
-On the real labels the gap is small — 2.9% error the cheating way against 4.3% done
-properly — and that is the honest result, not a failed demonstration. The ALL/AML
-difference is so stark that cheating has almost nothing left to add.
+Real labels: 2.9% (leaked) vs 4.3% (honest) — small gap because signal is strong.
 
-The second line is the demonstration. Shuffle the labels so there is genuinely nothing
-to find, and picking the genes once over the whole dataset reports 7.0% error — 93%
-accuracy on pure noise. Pick inside each fold instead and the error climbs to 33.2%,
-about what you get by ignoring the data and calling everyone ALL — the cell prints that
-as 65.3% correct, which is 34.7% error. So the
-flattery is not a small bias that shrinks with the signal. With nothing there, the
-flattery is the whole number: invisible when you do not need the estimate,
-catastrophic when you do.
+Shuffled labels: 7.0% error (93% accuracy on noise) vs 33.2% (honest) ≈ always-ALL baseline.
 
-### The gene list is one draw, not the answer
+### Stability selection
 
-Being the best list for these 38 patients is not the same as being a list that would
-come back if you ran the study again. There is a cheap way to tell the difference.
-Take a random half of the training patients, fit the same kind of model at one fixed
-middling penalty, note which genes survived, then draw another random half — a hundred
-times. A gene picked for a real biological
-reason keeps reappearing; a gene picked because it flattered one particular set of
-patients does not. Counting those reappearances is stability selection.
+100 half-samples of 38 training patients; fixed penalty; count reselection frequency.
 
 ```{python}
 #| label: fig-stability
@@ -588,20 +433,11 @@ ax.legend(frameon=False, fontsize=8)
 plt.show()
 ```
 
-Forty-five genes turn up in at least half the draws, and only 12 in nine draws out of
-ten. These runs hold the penalty fixed instead of retuning it each time, so they
-measure how steady this kind of selection is rather than re-deriving the shipped
-88-gene list exactly. The lesson transfers to it regardless: a list built this way is
-not a single settled object. Most of its members could be swapped for a neighbour that
-rises and falls with them, and a different 38 patients would have handed back a visibly
-different list with much the same accuracy.
+45 genes ≥50% frequency; 12 ≥90%. Gene list is one draw, not a fixed biological object.
 
-That wobble is not something the elastic net introduced. Rebuild Golub's own 50-gene
-predictor with the score from his paper — the gap between the two group averages
-divided by how much the groups scatter, $P(g,c) = (\mu_1 - \mu_0)/(\sigma_1 +
-\sigma_0)$ — then compute the identical score after the tidying step his methods
-section mentions in passing: pull readings below 100 up to 100 and above 16,000 down
-to 16,000, then take logarithms.
+### Golub-50 comparison
+
+Reconstruct Golub's 50-gene predictor ($P(g,c) = (\mu_1 - \mu_0)/(\sigma_1 + \sigma_0)$); compare raw vs log10-clipped preprocessing.
 
 ```{python}
 #| label: golub50
@@ -625,20 +461,11 @@ print("top AML-high probes:",
       ", ".join(acc[i] for i in np.argsort(-P_log)[:4]))
 ```
 
-His top 50 changes by 18 genes on that one choice, with the patients, the data and the
-scoring rule all held fixed. Against that backdrop the elastic net agreeing with him on
-26 of 50 is neither a failure to replicate nor a confirmation — it is what two
-reasonable ways of choosing agree on when the thing chosen is this wobbly. The gene
-list is an estimate, like an average or a slope, and estimates come with a spread.
+Log preprocessing alone changes 18/50 genes. Elastic net agrees with Golub-50 on 26/50.
 
-## Closing: 34 patients cannot tell you how well this works
+## External validation limits
 
-The outside cohort did what it was supposed to do. Collected somewhere else, prepared
-differently, and including a tissue the training set never contained — and the locked
-model still got 33 of 34 right. That is a real result, and Golub designing that split
-in advance is why it means anything at all.
-
-But 34 is 34.
+33/34 external accuracy is real but $n = 34$.
 
 ```{python}
 #| label: closing
@@ -660,31 +487,12 @@ for prev, where in [(0.35, "suspected leukemia at referral"), (0.02, "a broader 
     print(f"  prevalence {prev:>5.0%} ({where}): PPV could be as low as {ppv:.2f}")
 ```
 
-Thirty-three out of 34 is 0.971, but the honest range around it — the set of true
-accuracies that could plausibly have produced this result — runs from 0.851 to 0.995.
-A model that really gets 30 of 34 right would look no different on evidence this thin.
+- 33/34 → 95% CI **[0.851, 0.995]** for true accuracy.
+- 0/20 false AML calls → consistent with FPR up to **~17%**.
+- PPV at 35% prevalence (referral): could be as low as **~0.75**.
+- PPV at 2% prevalence (general clinic): could be as low as **~0.10**.
 
-The same thinness hides on the other side. The model never once called an ALL patient
-AML — 20 out of 20 — which looks like perfection. But no mistakes in twenty attempts
-is still consistent with a true error rate near 17%, and that bound is what travels.
-Push it through the arithmetic of who is being tested, using that bound in place of
-the flawless score. Among patients already referred with suspected leukemia, about a
-third of whom have AML, a positive call comes out right about three times in four. Take
-the same model to a broader haematology clinic where only one leukemia patient in fifty
-has AML, and the same figure drops to about one time in ten — most positive answers
-wrong, because nearly everyone it meets has the other disease. Only the false-alarm
-rate is being held at its pessimistic bound here; the hit rate stays at the 13 of 14
-actually observed. So these are not true worst cases. They are what twenty clean calls
-on the other side fail to rule out. Note what this arithmetic does *not* cover. Every error rate here was measured on
-people who already had one of these two leukemias, so none of it says what the model
-would do when handed someone who has neither.
-
-Which returns to the sentence at the top. A signature is defined against a question,
-and also against the population you asked it in. Accuracy is not a property of the
-model. It is a property of the model pointed at a particular group of people. Golub's
-predictor answers "which of these two leukemias does this patient have" for a patient
-who already has one of them. Point it at a population where AML is rare and the
-arithmetic above, not the classifier, decides what it is worth.
+Accuracy is a property of model **and population**. Signature answers "ALL or AML among patients known to have one of them."
 
 ## References
 

@@ -196,10 +196,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#a-schema-turns-the-rubric-into-a-contract" id="toc-a-schema-turns-the-rubric-into-a-contract" class="nav-link active" data-scroll-target="#a-schema-turns-the-rubric-into-a-contract">A schema turns the rubric into a contract</a></li>
-  <li><a href="#the-test-set-is-the-instrument-not-the-input" id="toc-the-test-set-is-the-instrument-not-the-input" class="nav-link" data-scroll-target="#the-test-set-is-the-instrument-not-the-input">The test set is the instrument, not the input</a></li>
-  <li><a href="#batches-turn-the-scoring-loop-into-a-job" id="toc-batches-turn-the-scoring-loop-into-a-job" class="nav-link" data-scroll-target="#batches-turn-the-scoring-loop-into-a-job">Batches turn the scoring loop into a job</a></li>
-  <li><a href="#what-the-two-numbers-are-for" id="toc-what-the-two-numbers-are-for" class="nav-link" data-scroll-target="#what-the-two-numbers-are-for">What the two numbers are for</a></li>
+  <li><a href="#structured-outputs" id="toc-structured-outputs" class="nav-link active" data-scroll-target="#structured-outputs"><span class="header-section-number">1</span> Structured outputs</a></li>
+  <li><a href="#test-set" id="toc-test-set" class="nav-link" data-scroll-target="#test-set"><span class="header-section-number">2</span> Test set</a></li>
+  <li><a href="#constraints" id="toc-constraints" class="nav-link" data-scroll-target="#constraints"><span class="header-section-number">3</span> Constraints</a></li>
+  <li><a href="#batches-api" id="toc-batches-api" class="nav-link" data-scroll-target="#batches-api"><span class="header-section-number">4</span> Batches API</a></li>
+  <li><a href="#metrics" id="toc-metrics" class="nav-link" data-scroll-target="#metrics"><span class="header-section-number">5</span> Metrics</a></li>
+  <li><a href="#references" id="toc-references" class="nav-link" data-scroll-target="#references"><span class="header-section-number">6</span> References</a></li>
   </ul>
 <div class="toc-actions"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/claude-api-eval-pipeline/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></nav>
     </div>
@@ -216,12 +218,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <figcaption>Wiring an Eval Pipeline to the Claude API</figcaption>
 </figure>
 </div>
-<p>You have the groundedness judge from <a href="../../posts/prompt-evaluation-pipelines/index.html">the previous post</a>, ending in a line that asks for JSON only. You <code>json.loads()</code> the reply and it works — until one answer arrives wrapped in a markdown fence and the harness dies at case 37 of 200.</p>
-<p>“Reply with JSON only” is a request. A judge becomes a component the moment its verdict is a typed object the harness can fail on.</p>
-<section id="a-schema-turns-the-rubric-into-a-contract" class="level2">
-<h2 class="anchored" data-anchor-id="a-schema-turns-the-rubric-into-a-contract">A schema turns the rubric into a contract</h2>
-<p><code>messages.parse()</code> constrains the response to a Pydantic model, so the format instruction leaves the rubric entirely and the parse step disappears:</p>
-<div id="707c738e" class="cell" data-execution_count="1">
+<p>When output quality has no regex — e.g., “did it stick to the source?” — a second model grades against a <strong>rubric</strong>. This post grades <strong>groundedness</strong>: every factual claim in an answer traceable to retrieved context.</p>
+<p>“Reply with JSON only” is a request, not a guarantee. A judge becomes a component when its verdict is a typed object the harness can fail on. For pipeline stages, test sets, and judge failure modes, see <a href="../../posts/prompt-evaluation-pipelines/index.html">the previous post</a>.</p>
+<section id="structured-outputs" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="structured-outputs"><span class="header-section-number">1</span> Structured outputs</h2>
+<p>The Claude API can constrain generation to a JSON schema. In Python, define the shape with a Pydantic model; <code>messages.parse()</code> returns a validated instance.</p>
+<div id="2b25488d" class="cell" data-execution_count="1">
 <div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> typing <span class="im">import</span> Literal</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> anthropic <span class="im">import</span> Anthropic</span>
@@ -268,15 +270,25 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb1-44"><a href="#cb1-44" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> <span class="pp">RuntimeError</span>(<span class="ss">f"no verdict: </span><span class="sc">{</span>response<span class="sc">.</span>stop_reason<span class="sc">}</span><span class="ss">"</span>)</span>
 <span id="cb1-45"><a href="#cb1-45" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> response.parsed_output</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </div>
-<p>Field order carries weight: <code>unsupported_claims</code> is generated before <code>verdict</code>, so the model commits to evidence before label. <code>max_tokens</code> is generous because it caps thinking and reply <em>together</em> — and running out fails two ways one guard can’t cover: spend it inside the thinking and there is no text, so <code>parsed_output</code> is <code>None</code>; spend it mid-JSON and <code>parse()</code> raises before you have a response to inspect. Illustratively:</p>
+<ul>
+<li>Field order matters: <code>unsupported_claims</code> before <code>verdict</code> forces evidence before the label.</li>
+<li><code>max_tokens</code> caps reasoning and reply from one budget. Budget exhaustion yields <code>parsed_output is None</code> or a <code>ValidationError</code> mid-JSON.</li>
+</ul>
+<p>Example verdict:</p>
 <pre class="text"><code>Verdict(unsupported_claims=['Refunds can also be issued as store credit.'],
         verdict='fail')</code></pre>
-<p>A typed verdict is worth only as much as the cases you feed it.</p>
 </section>
-<section id="the-test-set-is-the-instrument-not-the-input" class="level2">
-<h2 class="anchored" data-anchor-id="the-test-set-is-the-instrument-not-the-input">The test set is the instrument, not the input</h2>
-<p>The data is synthetic: six hand-written <code>(context, answer)</code> pairs standing in for a support assistant over a company’s help-centre articles — context is what a retriever pulled, the label what a human reviewer said. Three are grounded; three carry one fabricated claim in the documentation’s own vocabulary, an invented processing SLA say. That is the failure with money behind it: a confidently wrong instruction costs more than “I don’t know”. Synthetic wins because the quantity we want, judge–human agreement, needs known labels.</p>
-<div id="7b60c92a" class="cell" data-execution_count="2">
+<section id="test-set" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="test-set"><span class="header-section-number">2</span> Test set</h2>
+<p><strong>Data:</strong> synthetic — six hand-written <code>(context, answer)</code> pairs standing in for a support assistant over help-centre articles.</p>
+<ul>
+<li><code>context</code>: passage a retriever pulled from articles</li>
+<li><code>answer</code>: assistant reply</li>
+<li><code>label</code>: human verdict</li>
+</ul>
+<p>Three pairs are grounded; three contain exactly one fabricated claim in the documentation’s vocabulary (e.g., an invented processing-time SLA). That failure is costly for customers and invisible to string matching.</p>
+<p>Synthetic data fits because the target metric is judge–human agreement, which requires labelled cases with known verdicts.</p>
+<div id="d2100434" class="cell" data-execution_count="2">
 <div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>CASES <span class="op">=</span> [</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    {</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>        <span class="st">"id"</span>: <span class="st">"refund-window-grounded"</span>,</span>
@@ -298,10 +310,19 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>]</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </div>
 </section>
-<section id="batches-turn-the-scoring-loop-into-a-job" class="level2">
-<h2 class="anchored" data-anchor-id="batches-turn-the-scoring-loop-into-a-job">Batches turn the scoring loop into a job</h2>
-<p>Judges are the expensive part of a suite. The Batches API submits every case at once, at half the per-token price:</p>
-<div id="5a05b96e" class="cell" data-execution_count="3">
+<section id="constraints" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="constraints"><span class="header-section-number">3</span> Constraints</h2>
+<ul>
+<li>Six cases demonstrate machinery; calibration sets run to 50–200 cases and require periodic re-measurement as models update.</li>
+<li>This pipeline scores answers against context, not retrieval quality. An answer grounded in the wrong passage still passes; retrieval failure needs a separate scorer.</li>
+</ul>
+<p>Mechanics are identical at six cases or two hundred; at scale, batch execution matters.</p>
+</section>
+<section id="batches-api" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="batches-api"><span class="header-section-number">4</span> Batches API</h2>
+<p>Each judged case is an API call. The Batches API submits all cases as one job, polls until completion, and bills at half per-token price.</p>
+<p>Each request carries a <code>custom_id</code> tying results back to cases:</p>
+<div id="1c1e4ce8" class="cell" data-execution_count="3">
 <div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> time</span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> anthropic.types.message_create_params <span class="im">import</span> MessageCreateParamsNonStreaming</span>
@@ -337,8 +358,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb4-33"><a href="#cb4-33" aria-hidden="true" tabindex="-1"></a><span class="cf">while</span> client.messages.batches.retrieve(batch.<span class="bu">id</span>).processing_status <span class="op">!=</span> <span class="st">"ended"</span>:</span>
 <span id="cb4-34"><a href="#cb4-34" aria-hidden="true" tabindex="-1"></a>    time.sleep(<span class="dv">30</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </div>
-<p>The batch path takes <code>output_config.format</code> rather than <code>parse()</code>’s <code>output_format=</code>, so you hand it a raw schema — and <code>extra="forbid"</code> makes that schema legal, since the strict subset requires <code>additionalProperties: false</code>. Results arrive in <strong>any</strong> order, so cases key on <code>custom_id</code>, never position:</p>
-<div id="9bd2e280" class="cell" data-execution_count="4">
+<p>Batch path differences:</p>
+<ul>
+<li>Uses <code>output_config.format</code> with raw JSON schema (<code>Verdict.model_json_schema()</code>), not <code>parse()</code>’s <code>output_format=</code>.</li>
+<li><code>extra="forbid"</code> on the Pydantic model sets <code>additionalProperties: false</code>, required by the API’s strict schema subset.</li>
+</ul>
+<p>Results return in completion order, not submission order. Look up by <code>custom_id</code>:</p>
+<div id="25a408c7" class="cell" data-execution_count="4">
 <div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>verdicts <span class="op">=</span> {}</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> result <span class="kw">in</span> client.messages.batches.results(batch.<span class="bu">id</span>):</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> result.result.<span class="bu">type</span> <span class="op">==</span> <span class="st">"errored"</span>:</span>
@@ -357,15 +383,27 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>pass_rate <span class="op">=</span> <span class="bu">sum</span>(v.verdict <span class="op">==</span> <span class="st">"pass"</span> <span class="cf">for</span> v <span class="kw">in</span> verdicts.values()) <span class="op">/</span> <span class="bu">len</span>(verdicts)</span>
 <span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>agreement <span class="op">=</span> <span class="bu">sum</span>(verdicts[i].verdict <span class="op">==</span> labels[i] <span class="cf">for</span> i <span class="kw">in</span> labels) <span class="op">/</span> <span class="bu">len</span>(labels)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </div>
-<p><code>succeeded</code> is a transport verdict, not a content one: a refused or truncated case lands there with no text block, or half of one — hence the <code>stop_reason</code> check rather than trusting a string that parses. Each raise names the case and what distinguished it, so failures are diagnosable rather than anonymous. The six cases would plausibly give:</p>
+<p><code>succeeded</code> means transport success, not usable content. Check <code>stop_reason == "end_turn"</code>; refusals and truncated replies can still arrive under <code>succeeded</code>.</p>
+<p>Plausible output on six cases:</p>
 <pre class="text"><code>pass rate                   0.67
 agreement with labels       0.83  (5/6)
 disagreement                refund-window-invented-sla: judged pass, labelled fail</code></pre>
 </section>
-<section id="what-the-two-numbers-are-for" class="level2">
-<h2 class="anchored" data-anchor-id="what-the-two-numbers-are-for">What the two numbers are for</h2>
-<p>The pass rate is the number people quote; agreement is what licenses quoting it. The case the judge missed is the invented SLA — the hallucination wearing the documentation’s vocabulary, the failure this exists to catch. One disagreement in six is how you learn you haven’t caught it.</p>
-<p>Which is where this stops. Six cases is a demonstration; a calibration set is fifty to a couple of hundred, re-run whenever the provider updates the model underneath you. And none of it measures the retriever. Typed verdicts buy a pipeline that fails loudly, not a judge you can trust unmeasured.</p>
+<section id="metrics" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="metrics"><span class="header-section-number">5</span> Metrics</h2>
+<p>Two ratios:</p>
+<ul>
+<li><strong>Pass rate</strong> — fraction of answers the judge passed (about the system under test).</li>
+<li><strong>Agreement with labels</strong> — fraction where judge verdict matched human label (about the judge).</li>
+</ul>
+<p>Agreement determines whether pass rate is meaningful. A judge wrong one time in five can skew reported pass rate by up to twenty points. Disagreement on the invented processing-time case shows the pipeline has not yet caught vocabulary-matched hallucinations.</p>
+<p>Typed verdicts make failures visible: refusals, truncated replies, and malformed JSON stop the run and name the case. Batch submission and the two ratios are ordinary code once the verdict has a type.</p>
+</section>
+<section id="references" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="references"><span class="header-section-number">6</span> References</h2>
+<ul>
+<li><a href="../../posts/prompt-evaluation-pipelines/index.html">How Prompt Evaluation Pipelines Work</a> — criteria, test sets, judge calibration</li>
+</ul>
 
 
 </section>

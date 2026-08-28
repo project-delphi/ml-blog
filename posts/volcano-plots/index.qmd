@@ -16,6 +16,7 @@ format:
   html:
     toc: true
     toc-depth: 3
+    number-sections: true
     code-fold: show
     theme: [zephyr, theme.scss]
     fig-width: 8
@@ -59,42 +60,30 @@ plt.rcParams.update({
 })
 ```
 
-An experiment measures twenty thousand things at once — expression of every gene in a
-tumour biopsy, abundance of every protein in a mass-spectrometry run, every engagement
-metric in a feature rollout. Out of that comes one number per feature for how much it
-moved, one for how sure you are it moved at all, and a request from your team for a
-shortlist worth chasing.
+## Volcano plot
 
-Rank that list by how much each feature moved and the top of it fills with the
-quietest, noisiest measurements in the assay, where an accidental jump of three counts
-reads as an eight-fold surge. Rank it by statistical certainty instead and the top fills
-with the loudest measurements, where a 7% shift is nailed down so precisely that it
-clears any significance bar you care to set — and is still a 7% shift, too small to
-change a cell or a product. Magnitude without certainty picks noise. Certainty without
-magnitude picks trivia.
+A **volcano plot** places effect size on the horizontal axis and statistical significance on the vertical axis. It is used when thousands of features are tested at once — gene expression, protein abundance, product metrics — and a shortlist must satisfy both magnitude and certainty.
 
-A **volcano plot** is the two-dimensional answer: effect size along the horizontal axis,
-statistical significance up the vertical one, so a shortlist becomes a region of the
-plane rather than the head of a list. This post builds that plane from the two
-transforms it rests on, lets you drag its thresholds around a simulated screen, and then
-runs it over a real airway RNA-seq experiment.
+- **Effect size alone** ranks noisy low-abundance features with large apparent fold changes.
+- **Significance alone** ranks precisely measured but biologically trivial shifts.
+- **Both gates together** define a region of the plane rather than the head of a one-dimensional list.
 
-## One-dimensional rankings pick the wrong features
+This post builds the axes, provides an interactive threshold widget on simulated data, and applies the same geometry to a real RNA-seq dataset.
 
-The failure is easiest to see in a screen where you know the answer. So we simulate one
-with four kinds of feature in it, which between them cover what a real assay contains:
-1,785 unchanged background features with moderate noise; 765 low-abundance features that
-are also unchanged, but so noisy that chance alone throws them a large apparent fold
-change; 300 deeply measured features whose shift is real but tiny — 6% to 32% — and whose
-standard errors are small enough to make it overwhelmingly significant; and 150 genuine
-responders, moving 3- to 16-fold, which are the only features we want back.
+## One-dimensional rankings
 
-Each feature is measured in four replicates per group and gets an ordinary two-sample
-$t$-test, with the variance estimated from those four rather than assumed — so a feature
-can clear the bar on a sample variance that came out small by luck, which is a failure
-mode the post comes back to. Then we hand each of three selection rules the same budget —
-the number of candidates the dual filter picks, so nobody wins by simply choosing more —
-and count how many of the 150 genuine responders each rule recovers.
+### Simulation design
+
+The simulation below uses four feature populations covering typical assay failure modes:
+
+- **1,785** unchanged background features (moderate noise).
+- **765** low-abundance unchanged features (high variance; chance fold changes).
+- **300** real but tiny shifts (6–32%; small standard errors → high significance).
+- **150** genuine responders (3–16 fold change).
+
+Each feature has four replicates per group. A two-sample $t$-test uses sample variance (not assumed), so a feature can clear significance on a lucky small variance estimate.
+
+Three selection rules share the same budget — the candidate count from the dual filter — and recovery of the 150 genuine responders is counted.
 
 ```{python}
 #| label: fig-rankings
@@ -166,28 +155,23 @@ for name, picked in selections.items():
           f"{counts[1]:>8}{counts[2]:>12}")
 ```
 
-Teal is a genuine responder, amber an impostor. All three rules spent the same budget of
-154 candidates. Effect size alone returned 97 of the 150 responders, padded with 57
-low-count artifacts. Significance alone did worse — 68 responders, alongside 85 features
-whose shift is real, certain, and far too small to act on. Requiring both gates returned
-140 of the 150, at 91% precision against 63% and 44%.
+### Results
 
-The impostors each rule admits say why. Effect-size ranking took 57 noisy features and not
-one negligible-but-certain feature; significance ranking took 85 of the negligible ones
-and not a single noisy one. Each rule is blind along exactly the axis it does not use.
-Requiring both gates still leaves 14 impostors — nine low-count features and five
-unchanged background ones that cleared a $p \le 0.01$ bar by luck across 3,000 tests. That
-residue is what multiple-testing control is for, and it is the last thing this post fixes.
+Teal marks genuine responders; amber marks impostors. All three rules select **154** candidates.
 
-## The gates are yours to move
+| Rule | Genuine recovered | Precision | Main impostor type |
+| :--- | ---: | ---: | :--- |
+| Effect size alone | 97 / 150 | 63% | 57 low-count artifacts |
+| Significance alone | 68 / 150 | 44% | 85 negligible-but-certain features |
+| Both gates | 140 / 150 | 91% | 9 low-count + 5 background (lucky $p \le 0.01$) |
 
-Those thresholds — a 2-fold change, $p \le 0.01$ — are conventions, not laws, and the
-whole trade the volcano plot makes lives in how you set them. Tighten them and precision
-climbs while real hits fall off the list; loosen them and the reverse. The widget below
-re-runs the same four-population screen in your browser and lets you drag both gates,
-change the replicate count, and switch either axis to the alternative on offer. Every
-move re-scores all 3,000 features, and the comparison stays the one the figure used: the
-same budget, handed to each rule in turn.
+Each one-dimensional rule is blind along the axis it ignores. The dual filter still leaves 14 impostors from multiple testing across 3,000 hypotheses — addressed by FDR adjustment below.
+
+## Interactive threshold widget
+
+Default thresholds ($|\log_2\text{FC}| \ge 1$, $p \le 0.01$) are conventions. Tightening raises precision and drops real hits; loosening does the reverse.
+
+The widget re-runs the four-population screen in the browser. Drag both gates, change replicate count, or switch the vertical axis between raw $p$ and Benjamini–Hochberg $q$.
 
 ::: {.widget-container}
 ::: {.widget-header}
@@ -197,124 +181,68 @@ same budget, handed to each rule in turn.
 <div id="widget-screen"></div>
 :::
 
-Four things are worth doing to it before reading on. Drag the significance gate to zero:
-the filter degenerates into effect-size ranking and the amber low-count wings flood in.
-Drag the effect-size gate to zero instead and the plum band of negligible-but-certain
-features climbs into the selection. Raise the replicate count to 12 and watch two things
-happen at once: the plum band climbs straight up while staying exactly as far from the
-centre, because more data does not shrink a small effect, it only measures it better — and
-the amber wings pull inward, because more data *does* shrink an apparent effect that was
-only ever noise. And switch the vertical axis from raw $p$ to a Benjamini–Hochberg $q$,
-which is what turns a threshold picked by convention into one with a false-discovery
-guarantee behind it.
+Suggested checks:
 
-## Microarray genomics forced dual filtering into existence
+- Set significance gate to zero → effect-size ranking; low-count wings flood in.
+- Set effect-size gate to zero → negligible-but-certain features dominate.
+- Raise replicates to 12 → plum band rises (precision improves, effect unchanged); amber wings shrink (noise estimates tighten).
+- Switch vertical axis to $q$ → threshold carries a false-discovery guarantee.
 
-The plot exists because a generation of biologists ran into exactly this in the late
-1990s. For decades molecular biology had studied genes one at a time, on Northern blots
-and by quantitative PCR, where a single hypothesis got its own dedicated assay and its
-own validation. High-density cDNA microarrays and Affymetrix GeneChips ended that: one
-hybridisation now queried the whole transcriptome, and researchers held expression
-estimates for 15,000 genes at once — with three to six replicates per condition, because
-reagents and tissue were expensive.
+## Historical context
 
-The first response was to threshold on fold change alone, declaring any gene that moved
-two-fold a hit. That ignored variance completely, and the literature filled with
-low-intensity, high-noise claims nobody could reproduce. The obvious correction — run a
-$t$-test on every gene and sort by $p$-value — failed in the opposite direction. At $n =
-3$, a sample variance can come out spuriously tiny by luck alone, handing a 10% change a
-$p$-value of $10^{-6}$.
+High-density cDNA microarrays (late 1990s) produced expression estimates for ~15,000 genes with 3–6 replicates per condition.
 
-Neither number was safe by itself, and by the early 2000s several groups had converged
-on plotting them against each other. Work by [Jin et al.
-(2001)](https://doi.org/10.1038/ng766), [Wolfinger et al.
-(2001)](https://doi.org/10.1089/106652701753307520) and [Cui and Churchill
-(2003)](https://doi.org/10.1186/gb-2003-4-4-210) established the form; Cui and Churchill
-named it, after the shape a genome-wide null makes — a wide caldera of unchanged genes
-with two eruption plumes rising on the flanks. That shape is not decoration. It follows
-from what the two axes do.
+- **Fold-change-only** thresholds ignored variance; low-intensity noise dominated reproducibility failures.
+- **$p$-value-only** ranking at $n=3$ rewarded spuriously small sample variances on trivial shifts.
 
-## The log transform makes the two directions comparable
+By the early 2000s, several groups plotted effect size against significance. [Jin et al. (2001)](https://doi.org/10.1038/ng766), [Wolfinger et al. (2001)](https://doi.org/10.1089/106652701753307520), and [Cui and Churchill (2003)](https://doi.org/10.1186/gb-2003-4-4-210) established the form; Cui and Churchill named it after the genome-wide null shape — a caldera with eruption plumes on the flanks.
 
-The raw ratio between a treated sample $B$ and a control $A$ is a lopsided coordinate. A
-doubling gives $B/A = 2$; a halving gives $0.5$. Upregulation has the whole interval
-$[1, \infty)$ to spread out in, while everything that went down is squeezed into the
-sliver $(0, 1]$. Plot raw ratios and a 10-fold increase sits nine units right of
-baseline while a 10-fold decrease sits nine tenths of a unit to the left — the widget's
-raw-ratio axis shows this directly, and it is unusable.
+## Log transforms
 
-The base-2 logarithm fixes it, because it turns multiplication into addition:
+### Horizontal axis: log2 fold change
+
+Raw ratio $B/A$ is asymmetric: doubling gives 2, halving gives 0.5. Base-2 log fixes this:
 
 $$\log_2\left(\frac{B}{A}\right) = -\log_2\left(\frac{A}{B}\right)$$
 
-A doubling is $+1$, a halving is $-1$, a four-fold change is $\pm 2$, and no change sits
-at zero. Equal biological moves in opposite directions are now equally far from the
-origin, which is what makes the plot's left–right symmetry mean something.
+Doubling is $+1$, halving is $-1$, no change is 0. Opposite-direction changes of equal magnitude sit equally far from the origin.
 
-The vertical axis gets a log too, for a different reason. Under the null that a feature
-is unchanged, the estimated log fold change $\hat{\beta}$ scatters around zero with
-standard error $\text{SE}(\hat{\beta})$, and the test statistic is $t =
-\hat{\beta}/\text{SE}(\hat{\beta})$. Tail probabilities fall off exponentially in $t$,
-so raw $p$-values pile up against zero and become impossible to read. Taking
-$-\log_{10}(p)$ spreads them out, and through the Gaussian tail approximation it also
-tells you the shape of the cloud:
+### Vertical axis: $-\log_{10}(p)$
+
+Under the null, $\hat{\beta}$ scatters with standard error $\text{SE}(\hat{\beta})$ and $t = \hat{\beta}/\text{SE}(\hat{\beta})$. Raw $p$-values pile at zero. $-\log_{10}(p)$ spreads tail probabilities:
 
 $$-\log_{10}(p) \;\approx\; \frac{t^2}{2 \ln 10} \;=\; \frac{\hat{\beta}^2}{2 \ln(10)\,\text{SE}^2}$$
 
-Height grows with the *square* of the effect size, at a rate set by each feature's own
-standard error. That is the volcano's silhouette: a parabola-like envelope opening
-upward from the caldera, with the most precisely measured features climbing its steepest
-walls. It also explains the trap in the middle. A feature with a tiny $\hat{\beta}$ still
-flies upward if its $\text{SE}$ is small enough — which is exactly the plum population in
-the widget.
+Height grows with the square of effect size at a rate set by each feature's SE. That produces the volcano's upward-opening envelope. Features with tiny $\hat{\beta}$ but small SE still rise — the "plum" population in the widget.
 
-## Two thresholds carve the plane into four decisions
+## Threshold regions
 
-Cross a vertical pair of gates at $|\log_2\text{FC}| = c$ with a horizontal one at
-significance $\alpha$ and the plane splits into four regions, each of which means
-something different for what you do next.
+Vertical gates at $|\log_2\text{FC}| = c$ and a horizontal gate at significance $\alpha$ partition the plane into four regions:
 
-1. **The caldera**, $p > \alpha$ and $|\log_2\text{FC}| < c$. Nothing to see: neither
-   evidence nor magnitude.
-2. **The outer wings**, $p > \alpha$ but $|\log_2\text{FC}| \ge c$. Large apparent moves
-   the data cannot support — mostly low-abundance features whose noise is doing the
-   moving.
-3. **The top centre**, $p \le \alpha$ but $|\log_2\text{FC}| < c$. Real, certain, and too
-   small to matter. This region grows as your sample size does.
-4. **The top corners**, $p \le \alpha$ and $|\log_2\text{FC}| \ge c$. The shortlist:
-   large enough to have consequences, certain enough to defend.
+1. **Caldera** — $p > \alpha$, $|\log_2\text{FC}| < c$: no evidence, no magnitude.
+2. **Outer wings** — $p > \alpha$, $|\log_2\text{FC}| \ge c$: large apparent moves unsupported by data (mostly low-abundance noise).
+3. **Top centre** — $p \le \alpha$, $|\log_2\text{FC}| < c$: real, certain, too small to act on; grows with sample size.
+4. **Top corners** — $p \le \alpha$, $|\log_2\text{FC}| \ge c$: shortlist region.
 
-One correction is not optional. With 3,000 or 20,000 tests, a threshold of $p \le 0.01$
-admits hundreds of false positives by construction, so the vertical axis should carry a
-Benjamini–Hochberg $q$-value instead of a raw $p$:
+### Multiple testing
+
+With 3,000–20,000 tests, $p \le 0.01$ admits hundreds of false positives. Use Benjamini–Hochberg $q$ on the vertical axis:
 
 $$q_i = \min_{k \ge i} \left( \frac{m \cdot p_{(k)}}{k} \right)$$
 
-with $m$ the number of hypotheses and $p_{(k)}$ the $k$-th smallest $p$-value. Thresholding
-at $q \le 0.05$ means no more than 5% of what you selected is expected to be a false
-discovery — a claim about your shortlist, which is what you actually wanted.
+Thresholding at $q \le 0.05$ targets ≤5% false discoveries among selected features.
 
-## On real airway data, the filter recovers the glucocorticoid programme
+## Airway RNA-seq example
 
-Simulations are agreeable because the answer is known in advance. Real screens are not,
-so we run the same geometry over the **Airway RNA-seq dataset** ([Himes et al.,
-2014](https://doi.org/10.1371/journal.pone.0099625), *PLoS ONE* 9(6): e99625; NCBI GEO
-accession [GSE52778](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE52778)).
+### Data provenance
 
-Blanca Himes and colleagues at Harvard Medical School and Brigham and Women's Hospital
-gathered it to work out how glucocorticoids — the steroids in every asthma inhaler —
-actually act on the airway. They took primary human airway smooth muscle cells from four
-donors, split each culture in two, treated one half with $1\,\mu\text{M}$ dexamethasone
-for 18 hours and left the other untreated, then sequenced all eight libraries. The
-question asked of the data is which of 18,028 transcripts respond to the steroid, and it
-is asked because the answer directs money: chasing a false positive burns hundreds of
-thousands of dollars of antibodies, assays and knockout animals, while missing a true one
-throws away an anti-inflammatory target.
+**Airway RNA-seq dataset** ([Himes et al., 2014](https://doi.org/10.1371/journal.pone.0099625), *PLoS ONE* 9(6): e99625; NCBI GEO [GSE52778](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE52778)).
 
-Counts are what the sequencer produces, so the fold changes below come from `DESeq2`'s
-negative-binomial model, which handles count overdispersion at $n = 4$ and shrinks the
-noisiest estimates. Its output is a table of log fold changes and FDR-adjusted $q$-values
-per gene, which is exactly a volcano plot waiting to be drawn.
+- **Collector:** Blanca Himes et al., Harvard Medical School / Brigham and Women's Hospital.
+- **Design:** Primary human airway smooth muscle cells from four donors; each culture split; one half treated with $1\,\mu\text{M}$ dexamethasone for 18 h, other untreated; eight libraries sequenced.
+- **Objective:** Which of 18,028 transcripts respond to glucocorticoid treatment.
+- **Downstream impact:** False positives waste assay and animal validation cost; false negatives discard anti-inflammatory targets.
+- **Method:** `DESeq2` negative-binomial model handles count overdispersion at $n=4$ and shrinks noisy estimates; output is log fold change and FDR-adjusted $q$ per gene.
 
 ```{python}
 #| label: fig-airway
@@ -356,30 +284,18 @@ plt.tight_layout()
 plt.show()
 ```
 
-The corners are the known glucocorticoid programme, which is the reassuring part: a rule
-this blunt reproduces what the field established gene by gene.
+### Key genes in the corner region
 
-- ***DUSP1***, $\log_2\text{FC} = +2.95$ (7.7-fold), $q = 2.2 \times 10^{-126}$ — the
-  phosphatase that switches off pro-inflammatory MAP kinase signalling.
-- ***FKBP5***, $+4.05$ (16.5-fold), $q = 9.0 \times 10^{-26}$ — a co-chaperone of the
-  glucocorticoid receptor itself, and part of its negative feedback.
-- ***CRISPLD2***, $+2.63$ (6.2-fold), $q = 4.7 \times 10^{-46}$ — the novel finding of
-  the Himes paper, a steroid-regulated gene that modulates airway cytokine secretion.
-- ***IL6***, $-0.75$ (a 41% fall), $q = 0.071$ — a classic steroid-repressed cytokine
-  that lands *outside* both gates here, because unstimulated smooth muscle barely
-  expresses it. The plot is telling you this experiment cannot speak to *IL6*, which is
-  more useful than a rank would have been.
+- ***DUSP1*** — $\log_2\text{FC} = +2.95$ (7.7-fold), $q = 2.2 \times 10^{-126}$; MAP kinase phosphatase.
+- ***FKBP5*** — $+4.05$ (16.5-fold), $q = 9.0 \times 10^{-26}$; glucocorticoid receptor co-chaperone.
+- ***CRISPLD2*** — $+2.63$ (6.2-fold), $q = 4.7 \times 10^{-46}$; steroid-regulated cytokine modulator (Himes et al. finding).
+- ***IL6*** — $-0.75$ (41% fall), $q = 0.071$; outside both gates because unstimulated smooth muscle barely expresses it.
 
-## Caveat: the volcano hides how much signal each feature had
+## MA plot complement
 
-Two axes cost you a third. Neither position on this plot records a feature's baseline
-abundance, and in RNA-seq, single-cell data and proteomics the noise depends on it
-strongly: read counts are discrete, so relative variance grows as counts shrink. A gene
-averaging 2 reads in control and 6 in treated shows a three-fold change from Poisson
-noise alone — that is the simulation's amber population, and it is real.
+The volcano plot does not encode baseline abundance. In RNA-seq and proteomics, variance depends strongly on count level — a gene at 2 vs 6 reads can show a three-fold change from Poisson noise alone.
 
-The companion plot is the **MA plot**, which puts $\log_2$ fold change against mean
-expression and so shows exactly what the volcano dropped.
+The **MA plot** plots $\log_2$ fold change against mean expression and exposes the low-count dispersion funnel.
 
 ```{python}
 #| label: fig-ma
@@ -414,42 +330,17 @@ plt.tight_layout()
 plt.show()
 ```
 
-The funnel on the right is the point: below about ten reads, fold changes fan out between
-$-5$ and $+5$ with nothing behind them. Modern pipelines answer it with empirical Bayes
-shrinkage — `apeglm` or `ashr` in `DESeq2`, the moderated $t$ of `limma` — pulling
-poorly-supported estimates toward zero while leaving well-measured ones alone. Shrunken
-estimates are what belongs on a volcano's horizontal axis.
+Below ~10 reads, fold changes fan out with no biological support. Modern pipelines apply empirical Bayes shrinkage (`apeglm`, `ashr` in `DESeq2`; moderated $t$ in `limma`) before plotting horizontal coordinates.
 
-## The same geometry works outside genomics
+## Non-genomics applications
 
-Nothing in the construction is biological. It needs many simultaneous tests, an effect
-size worth measuring on a multiplicative scale, and heterogeneous variances — which
-describes plenty of work that has never touched a sequencer.
+Requirements: many simultaneous tests, multiplicative effect size, heterogeneous variances.
 
-In clinical proteomics, label-free LC-MS/MS quantification compares peptide intensities
-across patient cohorts, with heavy missingness and run-to-run ion suppression; plotting
-$\log_2$ protein ratio against significance separates candidate biomarkers from
-instrument artifacts. In pooled CRISPR knockout screens, `MAGeCK` scores the depletion of
-100,000 guide RNAs, and the same two gates split high-potency dependencies from
-non-targeting controls and off-target toxicity. And in product experimentation, a
-feature release moves hundreds of tracked metrics at once: the top corners are genuine
-wins and regressions, the top centre is the statistically real drift that nobody should
-roll back a release for, and the wings are small segments whose telemetry is too noisy to
-act on. The vocabulary changes; the plane does not.
+- **Clinical proteomics** — $\log_2$ protein ratio vs significance separates biomarkers from instrument artifacts (LC-MS/MS, heavy missingness).
+- **CRISPR screens** — `MAGeCK` scores guide depletion; dual gates separate dependencies from non-targeting controls.
+- **Product experimentation** — top corners = real wins/regressions; top centre = statistically real but negligible drift; wings = noisy segments.
 
-## When to plot the volcano
-
-The claim at the top was that neither axis is safe alone: effect size picks up noise,
-significance picks up trivia. The simulation put numbers on it — given 154 candidates to
-spend, the two one-dimensional rules found 97 and 68 of the 150 real responders, both
-gates together 140 — and the airway data showed the same rule recovering a drug programme
-that took the field years to assemble gene by gene.
-
-What makes it work is that it is an explicit two-dimensional decision rule, written where
-you can see it. The $\log_2$ transform makes opposite-direction changes comparable; the
-$-\log_{10}$ transform makes tail probabilities legible and gives the cloud its shape;
-and the thresholds you draw across them are an argument you can defend, or change in
-front of someone who disagrees.
+## Plot selection
 
 | Rule | Horizontal | Vertical | Strength | Failure mode |
 | :--- | :--- | :--- | :--- | :--- |
@@ -458,13 +349,11 @@ front of someone who disagrees.
 | Volcano plot | $\log_2(\text{FC})$ | $-\log_{10}(q)$ | Both at once | Hides abundance |
 | MA plot | $\log_{10}(\text{mean})$ | $\log_2(\text{FC})$ | Exposes count variance | No significance test |
 
-Three habits make it trustworthy in production. Put an FDR-adjusted $q$-value on the
-vertical axis, never a raw $p$, or the multiple-testing problem you drew the plot to
-manage is still in the shortlist. Check the corners against an MA plot before committing
-to anything, because a hit that is only a hit at five reads is not one. And with small
-$n$, shrink the fold changes before you plot them. Do those, and the geometry does what a
-ranking never could: it makes the trade between "big enough to matter" and "sure enough
-to believe" something you decide on purpose.
+Production checklist:
+
+1. Use FDR-adjusted $q$, not raw $p$, on the vertical axis.
+2. Check corner hits against an MA plot before committing.
+3. With small $n$, shrink fold changes before plotting.
 
 ```{python}
 #| label: widget-injection
@@ -487,3 +376,10 @@ print("```{=html}")
 print("<script>" + js_code.replace("</", "<\\/") + "</script>")
 print("```")
 ```
+
+## References
+
+- Cui, X. and Churchill, G. A. (2003). [Statistical tests for differential expression in cDNA microarray experiments](https://doi.org/10.1186/gb-2003-4-4-210). *Genome Biology* 4(4):210.
+- Himes, B. E. et al. (2014). [RNA-Seq transcriptome profiling identifies CRISPLD2 as a glucocorticoid responsive gene that modulates cytokine function in airway smooth muscle cells](https://doi.org/10.1371/journal.pone.0099625). *PLoS ONE* 9(6): e99625. GEO [GSE52778](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE52778).
+- Jin, W. et al. (2001). [The contributions of sex, genotype and age to transcriptional variance in Drosophila melanogaster](https://doi.org/10.1038/ng766). *Nature Genetics* 29:389–395.
+- Wolfinger, R. D. et al. (2001). [Assessing gene significance from cDNA microarray expression data via mixed models](https://doi.org/10.1089/106652701753307520). *Journal of Computational Biology* 8(6):625–637.

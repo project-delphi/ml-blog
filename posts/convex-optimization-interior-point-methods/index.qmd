@@ -7,54 +7,46 @@ categories: [Optimization, Mathematics, Machine Learning, Algorithms]
 image: "./cover.png"
 tags: [Convex Optimization, Interior Point Methods, KKT Conditions, Duality, Log Barrier, Newton's Method]
 jupyter: ipm-blog
-number-sections: true
 format:
     html:
         toc: true
         toc-depth: 3
         code-fold: show
+        number-sections: true
 ---
 
 ![From First Principles to Interior Point Methods](./cover.png)
 
-Most numerical algorithms come with asterisks. Gradient descent on a neural network *might* find a good solution. A genetic algorithm *might* escape a bad basin. Convex optimization is the rare corner of computational mathematics where the asterisks disappear: if your problem is convex, a solver will find **the** global optimum, certify it with a mathematical proof of optimality, and do so in polynomial time.
+Convex optimization minimizes a convex objective over a convex feasible set. For such problems:
 
-Two things have to be true for that to work, and neither is obvious. The first is geometric: a convex problem has no false bottoms, so an algorithm that can only see its immediate neighborhood is still entitled to make claims about the whole landscape. The second is that the proof comes out of the algorithm as a by-product — the solver knows how far from optimal it is at every step, not only once it stops.
+- Any local minimum is global.
+- Dual multipliers certify optimality.
+- Interior point methods (IPMs) solve LP/QP/SOCP/SDP in polynomial time.
 
-Earning the second one is the harder job, and the obstacle is the constraints. A constraint is a wall: you are on the legal side of it or you are not, and which walls the answer ends up pressed against is a combinatorial question with $2^m$ possible answers. **Interior point methods** — the algorithm family behind most solvers you would actually use — get around that by refusing to ask it. They replace every hard wall with a smooth forcefield, solve the easy problem that results, and then turn the forcefield down until it is indistinguishable from the wall. Everything below is an argument for why that works and a demonstration that it does.
+IPMs replace hard inequality constraints with smooth log barriers, trace a **central path** through the strict interior, and shrink a barrier parameter $\mu\to0$ while re-solving with Newton's method.
 
-## Convexity is the assumption that makes a local answer a global one
-
-### A local search only ever knows its own neighborhood
-
-An optimization landscape can hide arbitrary cruelty: exponentially many local minima, saddle plateaus, discontinuous cliffs. A local search method — which is essentially all we have in high dimensions — can only ever report "I can't improve from here." For a general nonconvex problem, that statement is nearly worthless: the true optimum may be a mountain range away.
-
-Convexity is precisely the structural assumption that upgrades "I can't improve locally" into "this is the global optimum." The landscape is a single bowl (possibly with flat regions, but never a false bottom), and the feasible region has no disconnected pockets to get trapped in. That single fact is why R. Tyrrell Rockafellar famously wrote:
-
-> "The great watershed in optimization isn't between linearity and nonlinearity, but convexity and nonconvexity."
-
-### A convex set is one you can see across
-
-Two separate objects have to be well behaved before any of that holds: the region you are allowed to search, and the function you are minimizing over it. Take the region first. What it must not do is let you leave and come back — if the straight route between two allowed points passes through forbidden ground, a method that only walks downhill can be walled off from the answer by terrain it is never permitted to cross. Ruling that out is the whole definition.
+## Convex sets
 
 ::: {.callout-note title="Definition: Convex set"}
-A set $C \subseteq \mathbb{R}^n$ is **convex** if the line segment between any two of its points stays inside it:
+A set $C \subseteq \mathbb{R}^n$ is **convex** if
 
 $$
 x, y \in C,\ \theta \in [0, 1] \quad \Longrightarrow \quad \theta x + (1-\theta)y \in C.
 $$
-
-Intuition: a convex set has no dents, holes, or disconnected pieces. Stand anywhere inside it, look toward any other point of the set — your line of sight never leaves the set.
 :::
 
-Nearly everything you would want to write down qualifies. A hyperplane $\{x : a^T x = b\}$ — a flat sheet cutting through the space — is convex, and so is the halfspace $\{x : a^T x \le b\}$ on one side of it, the norm ball $\{x : \lVert x - c \rVert \le r\}$ of all points within distance $r$ of a center, and the probability simplex $\{x : x \succeq 0,\ \mathbf{1}^T x = 1\}$ of all ways to split one unit of something across $n$ options. So, crucially, is **any intersection of convex sets**. That last closure property is why constraint systems work at all: each constraint carves out its own convex region, and the feasible set — the points obeying every constraint at once — stays convex no matter how many you stack.
+Examples:
 
-### A convex function is a bowl with no hump to hide behind
+- Hyperplane $\{x : a^T x = b\}$.
+- Halfspace $\{x : a^T x \le b\}$.
+- Norm ball $\{x : \lVert x - c \rVert \le r\}$.
+- Probability simplex $\{x : x \succeq 0,\ \mathbf{1}^T x = 1\}$.
+- Any intersection of convex sets.
 
-The function needs the mirror image of that property. Draw its graph, pick two points on it, and stretch a straight chord between them. For a convex function the chord never dips below the graph. That is the precise version of "a single bowl": the surface is allowed to be flat in places, but it can never bulge upward into a ridge with a hollow behind it.
+## Convex functions
 
 ::: {.callout-note title="Definition: Convex function"}
-A function $f : \mathbb{R}^n \to \mathbb{R}$ with convex domain is **convex** if the chord between any two points on its graph lies on or above the graph:
+$f : \mathbb{R}^n \to \mathbb{R}$ with convex domain is **convex** if
 
 $$
 f\big(\theta x + (1-\theta) y\big) \;\le\; \theta f(x) + (1-\theta) f(y),
@@ -62,72 +54,28 @@ f\big(\theta x + (1-\theta) y\big) \;\le\; \theta f(x) + (1-\theta) f(y),
 $$
 :::
 
-::: {.callout-tip title="Two equivalent tests you will actually use"}
-For differentiable $f$, convexity is equivalent to the **first-order condition**
+For differentiable $f$:
 
-$$
-f(y) \;\ge\; f(x) + \nabla f(x)^T (y - x) \qquad \forall\, x, y,
-$$
+- **First-order:** $f(y) \ge f(x) + \nabla f(x)^T (y - x)$ — tangent plane is a global underestimator.
+- **Second-order:** $\nabla^2 f(x) \succeq 0$ everywhere.
 
-i.e. *every tangent plane is a global underestimator*. This is the secret engine of the whole theory: local gradient information gives you a **global** lower bound on the function. For twice-differentiable $f$, convexity is equivalent to the matrix of second derivatives — the Hessian — never curving downward in any direction, written $\nabla^2 f(x) \succeq 0$ and read as *positive semidefinite everywhere*.
-:::
-
-### Why a local minimum has to be a global one
-
-Those two definitions are all the machinery the central guarantee needs. Convex set, convex function, and the argument below: if you cannot find anywhere better nearby, there is nowhere better at all.
+## Local minima are global
 
 ::: {.callout-important title="Theorem — no false bottoms"}
-Let $f$ be a convex function and $C$ a convex set. If $x^\star \in C$ is a **local** minimum of $f$ over $C$, then $x^\star$ is a **global** minimum of $f$ over $C$.
+If $f$ is convex, $C$ is convex, and $x^\star \in C$ is a local minimum of $f$ over $C$, then $x^\star$ is a global minimum.
 :::
 
-**Proof (by contradiction).**
+**Proof sketch.**
 
-**Step 1 — write down what "local minimum" means.** There exists a radius $\varepsilon > 0$ such that
+1. Local minimum: $f(x^\star) \le f(x)$ for $\lVert x - x^\star \rVert \le \varepsilon$.
+2. Suppose $f(y) < f(x^\star)$ for some feasible $y$.
+3. Set $z_\theta = (1-\theta)x^\star + \theta y \in C$ by convexity of $C$.
+4. Choose $\theta>0$ small enough that $\lVert z_\theta - x^\star \rVert \le \varepsilon$.
+5. Convexity of $f$ gives $f(z_\theta) < f(x^\star)$ — contradiction.
 
-$$
-f(x^\star) \le f(x) \quad \text{for every } x \in C \text{ with } \lVert x - x^\star \rVert \le \varepsilon.
-$$
+Any algorithm that finds local minima on convex problems finds global minima.
 
-**Step 2 — suppose the theorem is false.** Then there exists some feasible point $y \in C$ that is strictly better:
-
-$$
-f(y) < f(x^\star).
-$$
-
-**Step 3 — build a path from $x^\star$ toward $y$ that never leaves the feasible set.** For $\theta \in [0,1]$ define
-
-$$
-z_\theta = (1-\theta)\, x^\star + \theta\, y.
-$$
-
-Because $C$ is a **convex set** and both endpoints are in $C$, every $z_\theta$ is feasible. (This is exactly where set-convexity earns its keep — in a nonconvex feasible set the segment could exit and re-enter, and the argument dies.)
-
-**Step 4 — step only a tiny distance, staying inside the local neighborhood.** Pick
-
-$$
-\theta = \min\!\left(1,\ \frac{\varepsilon}{\lVert y - x^\star \rVert}\right) > 0,
-\qquad\text{so that}\qquad
-\lVert z_\theta - x^\star \rVert = \theta \,\lVert y - x^\star \rVert \le \varepsilon.
-$$
-
-So $z_\theta$ lives in the $\varepsilon$-ball where $x^\star$ is supposed to be unbeatable.
-
-**Step 5 — apply function-convexity along the segment.**
-
-$$
-f(z_\theta) \;\le\; (1-\theta)\, f(x^\star) + \theta\, f(y)
-\;<\; (1-\theta)\, f(x^\star) + \theta\, f(x^\star) \;=\; f(x^\star),
-$$
-
-where the strict inequality uses $f(y) < f(x^\star)$ and $\theta > 0$.
-
-**Step 6 — contradiction.** We produced a feasible point $z_\theta$ inside the $\varepsilon$-ball with $f(z_\theta) < f(x^\star)$, contradicting Step 1. Hence no such $y$ exists, and $x^\star$ is globally optimal. $\blacksquare$
-
-The proof is short but the consequence is enormous: **any algorithm that reliably finds local minima is, on convex problems, an algorithm that finds global minima.** Everything else here is engineering built on top of that guarantee — which leaves the question of what a problem has to look like to qualify for it.
-
-## Every convex program fits one standard form {#sec-formulation}
-
-A solver cannot read your intentions; it reads a data structure. So problems get written in a single agreed shape — an objective to minimize, a list of things that must stay below zero, and a list of things that must equal zero — and the convexity requirements attach to the pieces of that shape. Getting a real problem into this form *is* most of the modeling work, and the payoff is that everything proved above transfers to it wholesale:
+## Standard form {#sec-formulation}
 
 $$
 \begin{aligned}
@@ -137,37 +85,22 @@ $$
 \end{aligned}
 $$
 
-Each component carries a specific structural obligation:
+| Component | Requirement |
+|---|---|
+| Objective $f(x)$ | convex |
+| Inequalities $g_i(x)\le0$ | each $g_i$ convex |
+| Equalities $h_j(x)=0$ | each $h_j$ **affine** |
 
-| Component | Symbol | Requirement | Geometric role |
-|---|---|---|---|
-| Objective | $f(x)$ | convex | the bowl we descend |
-| Inequality constraints | $g_i(x) \le 0$ | each $g_i$ convex | carve out convex regions (sublevel sets) |
-| Equality constraints | $h_j(x) = 0$ | each $h_j$ **affine**: $a_j^T x - b_j$ | restrict to a flat plane |
+- Convex $g_i$: sublevel set $\{x:g_i(x)\le0\}$ is convex.
+- Equalities must be affine: $h$ convex and $-h$ convex $\Rightarrow$ $h$ affine.
 
-- **Objective $f$**: convexity guarantees no false bottoms, per the theorem above.
-- **Inequalities $g_i(x) \le 0$**: the region where a convex function stays at or below a fixed level — its sublevel set $\{x : g_i(x) \le 0\}$ — is a convex set, and intersecting $m$ of them stays convex.
-- **Equalities $h_j(x) = 0$**: each must be *affine*, meaning linear plus a constant. Stacked up they read $Ax = b$ with $A \in \mathbb{R}^{p \times n}$, which describes a flat slice through the space and is convex.
-
-### Why equality constraints *must* be affine
-
-This is the constraint people most often get wrong. An equality $h(x) = 0$ is the intersection of two inequalities:
-
-$$
-\{x : h(x) = 0\} \;=\; \{x : h(x) \le 0\} \,\cap\, \{x : -h(x) \le 0\}.
-$$
-
-For both pieces to be convex sets via the sublevel-set argument, we need $h$ convex **and** $-h$ convex — i.e. $h$ both convex and concave. The only functions that are both are **affine** functions $h(x) = a^T x - b$.
-
-::: {.callout-warning title="A concrete failure"}
-Take the perfectly convex function $h(x) = x_1^2 + x_2^2 - 1$. The *inequality* $h(x) \le 0$ gives the unit disk — convex, fine. But the *equality* $h(x) = 0$ gives the unit **circle**: take the two feasible points $(1, 0)$ and $(-1, 0)$; their midpoint $(0,0)$ is not on the circle. The feasible set is nonconvex, the local-implies-global theorem no longer applies, and every guarantee in this post evaporates. Curved equality constraints silently convert your convex program into a nonconvex one.
+::: {.callout-warning title="Non-affine equality failure"}
+$h(x)=x_1^2+x_2^2-1$: inequality $h\le0$ is the unit disk (convex); equality $h=0$ is the unit circle (nonconvex). Curved equalities destroy convexity guarantees.
 :::
 
-## The austere standard form swallows most of engineering {#sec-applications}
+## Problem classes {#sec-applications}
 
-Three lines of notation with an affineness rule bolted to one of them does not sound like it should reach very far. It reaches remarkably far. Problems in the standard form are sorted into a handful of named classes by how complicated their objective and constraints are, and the names are worth knowing because solvers advertise themselves by them.
-
-A **linear program** (LP) has a linear objective and linear constraints. A **quadratic program** (QP) upgrades the objective to a convex quadratic — a sum of squares, essentially — while keeping the constraints linear. A **second-order cone program** (SOCP) allows constraints of the form "this vector's length is at most this linear function," which covers most norms and robustness requirements. A **semidefinite program** (SDP) constrains a matrix built from the variables to be positive semidefinite. Each class contains the one before it:
+Nested hierarchy:
 
 ```{mermaid}
 flowchart LR
@@ -179,208 +112,155 @@ flowchart LR
     SDP -.- SDPex["control synthesis,<br/>relaxations"]
 ```
 
-The nesting is what makes the machinery worth building once: interior point methods solve all four classes with the same core mechanism, so a technique developed for linear programs in the 1980s is what runs inside a semidefinite solver today. Five problems, spread across seventy years and four fields, show how little the shape changes:
+| Application | Class | Objective | Constraints |
+|---|---|---|---|
+| Markowitz portfolios | QP | $w^T\Sigma w$ | return, budget, no short |
+| Network flows | LP | linear cost | capacity, conservation |
+| SVM | QP | $\tfrac12\lVert w\rVert^2 + C\sum\xi_i$ | margin |
+| LASSO | QP | $\tfrac12\lVert Ax-b\rVert^2 + \lambda\lVert x\rVert_1$ | (via $-t\preceq x\preceq t$) |
+| MPC | QP/SOCP | tracking cost | dynamics, limits |
 
-| Application | Era | Class | Objective | Binding constraints |
-|---|---|---|---|---|
-| Markowitz portfolios | 1952 | QP | portfolio variance | target return, budget, no shorting |
-| Network flows / LP | 1940s | LP | linear cost | capacity, conservation |
-| Support Vector Machines | 1995 | QP | margin + slack penalty | classification margins |
-| LASSO / compressed sensing | 1996 | QP | squared error + $\ell_1$ | (in constrained form) sparsity budget |
-| Model Predictive Control | 1980s→today | QP/SOCP | tracking cost | dynamics, actuator & state limits |
-
-### Markowitz: portfolio risk is a convex quadratic
-
-Start with the oldest of them. An investor splitting a fixed sum across $n$ assets faces a trade-off nobody can dodge: the combinations with the highest expected return are also the ones that swing hardest. Harry Markowitz's 1952 move was to make "swings hardest" a number — the variance of the portfolio's return, which the assets' covariance matrix determines exactly — and then ask for the least of it subject to a promised return. Choose weights $w \in \mathbb{R}^n$ over assets with expected returns $\mu \in \mathbb{R}^n$ and covariance $\Sigma \succeq 0$:
+### Markowitz portfolio
 
 $$
 \begin{aligned}
-\min_{w} \quad & w^T \Sigma w && \text{(portfolio variance — convex quadratic since } \Sigma \succeq 0\text{)} \\
-\text{s.t.} \quad & \mu^T w \ge r_{\min} && \text{(target return — linear inequality)} \\
-& \mathbf{1}^T w = 1 && \text{(fully invested — affine equality)} \\
-& w \succeq 0 && \text{(no short selling — linear inequalities)}.
+\min_{w} \quad & w^T \Sigma w \\
+\text{s.t.} \quad & \mu^T w \ge r_{\min}, \quad \mathbf{1}^T w = 1, \quad w \succeq 0.
 \end{aligned}
 $$
 
-The Lagrange multiplier on the return constraint *is* the marginal risk price of demanding one more unit of expected return — a preview of the shadow-price interpretation in @sec-duality.
+Return-constraint multiplier is marginal risk price (shadow price; @sec-duality).
 
-### Network flow: the LP that made interior point methods famous
-
-The other classical case is even plainer, and it is the one the whole algorithm family was invented on. Anything that moves through a network with limited pipes — goods through depots, power through cables, packets through links — has to satisfy two rules: nothing may exceed a pipe's capacity, and nothing may appear or vanish at a junction. Both are linear, so minimizing cost under them is a linear program. Route flow $x_{uv}$ over the edges of a network with edge costs $c_{uv}$ and capacities $k_{uv}$:
+### Network flow LP
 
 $$
 \begin{aligned}
 \min_{x} \quad & \sum_{(u,v)} c_{uv}\, x_{uv} \\
-\text{s.t.} \quad & \textstyle\sum_{u} x_{uv} - \sum_{w} x_{vw} = d_v \quad \forall v && \text{(flow conservation — affine)} \\
-& 0 \le x_{uv} \le k_{uv} && \text{(capacities — linear)}.
+\text{s.t.} \quad & \textstyle\sum_{u} x_{uv} - \sum_{w} x_{vw} = d_v \quad \forall v \\
+& 0 \le x_{uv} \le k_{uv}.
 \end{aligned}
 $$
 
-This LP skeleton underlies supply chains, airline scheduling, electricity dispatch, and ad-budget allocation. It is also where interior point methods made history. Until 1984 large LPs were solved by the simplex method, which walks along the *outside* of the feasible region from corner to corner; Karmarkar's algorithm cut through the interior instead and was the first practical solver with a polynomial-time guarantee, ending simplex's monopoly.
+Karmarkar's 1984 interior-point method ended simplex monopoly on large LPs.
 
-### Support vector machines are a QP whose dual explains their sparsity
-
-The same shape shows up in machine learning half a century later. A classifier that separates two labeled classes with a straight boundary has many boundaries to choose from; the support vector machine picks the one sitting as far as possible from the nearest example of either class, and pays a penalty for each point it has to let sit on the wrong side. Given labeled data $(x_i, y_i)$ with $y_i \in \{-1, +1\}$, that is:
+### SVM (QP)
 
 $$
 \begin{aligned}
 \min_{w, b, \xi} \quad & \tfrac{1}{2}\lVert w \rVert_2^2 + C \sum_{i=1}^N \xi_i \\
-\text{s.t.} \quad & y_i\,(w^T x_i + b) \ge 1 - \xi_i, \quad i = 1, \dots, N \\
-& \xi_i \ge 0.
+\text{s.t.} \quad & y_i\,(w^T x_i + b) \ge 1 - \xi_i, \quad \xi_i \ge 0.
 \end{aligned}
 $$
 
-A convex QP: quadratic objective, linear constraints. Restating it in terms of the constraint prices of @sec-duality is what exposes the kernel trick, and it also shows that only the points actually touching the margin — the *support vectors* — carry a nonzero price. That property, complementary slackness, is derived below; it is literally why a trained SVM can forget most of its training set.
+Dual problem yields kernel trick; complementary slackness gives support-vector sparsity.
 
-### LASSO relaxes an intractable problem into a convex one
-
-Feature selection asks a harder question than it looks. Choosing which handful of variables to keep is a search over subsets, and doing it exactly is intractable at any realistic size. Penalizing the sum of the coefficients' absolute values instead turns that search into a convex problem, and it drives coefficients to exactly zero rather than merely shrinking them — regression and selection in one fit:
+### LASSO
 
 $$
 \min_{x} \;\; \tfrac{1}{2} \lVert A x - b \rVert_2^2 + \lambda \lVert x \rVert_1
-\qquad\Longleftrightarrow\qquad
-\begin{aligned}
-\min_{x,\,t} \;\; & \tfrac{1}{2} \lVert A x - b \rVert_2^2 + \lambda\, \mathbf{1}^T t \\
-\text{s.t.} \;\; & -t \preceq x \preceq t,
-\end{aligned}
+\quad\Longleftrightarrow\quad
+\min_{x,\,t} \;\; \tfrac{1}{2} \lVert A x - b \rVert_2^2 + \lambda\, \mathbf{1}^T t
+\;\;\text{s.t.}\;\; -t \preceq x \preceq t.
 $$
 
-where the right-hand form splits each $\lvert x_k \rvert$ into linear inequalities, making it a QP in $(x, t)$. Compressed sensing rests on the same object. Under a technical condition on the measurement matrix — restricted isometry, which says the matrix nearly preserves the lengths of sparse vectors — this convex problem provably returns the answer to the intractable subset-selection problem it was standing in for. Convex relaxation at its most spectacular.
-
-### Model predictive control has to finish before the next tick
-
-The last example is the one with a stopwatch on it. Rather than react to where a vehicle is now, model predictive control plans the next second or two of actuator commands, applies only the first of them, and re-plans from scratch on the next tick. Every 10–100 ms, then, a self-driving car or a drone solves a fresh convex program over a horizon of $T$ steps:
+### Model predictive control
 
 $$
 \begin{aligned}
-\min_{u_0, \dots, u_{T-1},\, x_1, \dots, x_T} \quad & \sum_{k=0}^{T-1} \big( x_k^T Q x_k + u_k^T R u_k \big) + x_T^T Q_f x_T \\
-\text{s.t.} \quad & x_{k+1} = A x_k + B u_k, \quad k = 0, \dots, T-1 && \text{(dynamics — affine equality!)} \\
-& u_{\min} \preceq u_k \preceq u_{\max} && \text{(actuator limits)} \\
-& F x_k \preceq g && \text{(state/safety constraints)}.
+\min \quad & \sum_{k=0}^{T-1} \big( x_k^T Q x_k + u_k^T R u_k \big) + x_T^T Q_f x_T \\
+\text{s.t.} \quad & x_{k+1} = A x_k + B u_k, \quad u_{\min} \preceq u_k \preceq u_{\max}, \quad F x_k \preceq g.
 \end{aligned}
 $$
 
-Note how the physics enters as **affine equality constraints** — exactly the form @sec-formulation demands — because linear(ized) dynamics $x_{k+1} = Ax_k + Bu_k$ are affine in the decision variables. MPC is arguably the most demanding customer of interior point methods: the solve must finish, with a certified answer, before the next control tick.
+Dynamics enter as affine equalities (@sec-formulation). Solves must finish within control tick (10–100 ms).
 
-Five problems, one shape. What none of them has yet is a way to recognize the answer when a solver hands it over — and that is where the constraints stop being obstacles and start being useful.
+## Duality {#sec-duality}
 
-## Every constraint has a price, and the prices are the proof {#sec-duality}
-
-### Turning each constraint into a force you can measure
-
-Constraints are usually treated as fences: the solver stays inside them and that is the end of it. The more productive view is that a constraint has a price. Suppose you could relax one — one more unit of budget, one more amp of current — and ask what the objective would improve by. That number says how hard the constraint is pushing back at the optimum, and it turns out to be exactly what a solver needs to prove it has finished.
-
-Making this concrete means writing the constraints into the objective instead of enforcing them separately: charge a per-unit price for violating each one and let the objective absorb the bill. That combination is the **Lagrangian** of the standard problem,
+### Lagrangian
 
 $$
-L(x, \lambda, \nu) \;=\; f(x) \;+\; \sum_{i=1}^m \lambda_i\, g_i(x) \;+\; \sum_{j=1}^p \nu_j\, h_j(x),
+L(x, \lambda, \nu) = f(x) + \sum_{i=1}^m \lambda_i\, g_i(x) + \sum_{j=1}^p \nu_j\, h_j(x),
 $$
 
-The prices $\lambda \in \mathbb{R}^m$ and $\nu \in \mathbb{R}^p$ are the *multipliers*, one per constraint. The inequality prices must be non-negative, $\lambda \succeq 0$ — an inequality can only charge you for crossing it, never reward you. The equality prices are sign-free, because an equality can be violated in either direction.
+with $\lambda \succeq 0$ for inequalities, unconstrained $\nu$ for equalities.
 
-::: {.callout-tip title="Physical intuition: constraint forces and shadow prices"}
-Two equivalent mental models:
-
-- **Mechanics.** Think of a ball rolling down the bowl $f$ and coming to rest against a wall $g_i(x) = 0$. At equilibrium the gravity force $-\nabla f$ is exactly balanced by a *normal force* from the wall, pointing inward along $-\nabla g_i$, with magnitude $\lambda_i$. Stationarity, $\nabla f + \sum_i \lambda_i \nabla g_i = 0$, is literally a force-balance equation. Walls the ball isn't touching exert zero force — that will become complementary slackness.
-- **Economics.** $\lambda_i$ is the **shadow price** of constraint $i$: if the constraint is relaxed to $g_i(x) \le u_i$, the optimal value $p^\star(u)$ satisfies $\lambda_i^\star = -\partial p^\star / \partial u_i$ (where differentiable). It answers "how much would I pay for one more unit of this resource?" A slack constraint has price zero — you don't pay for what you're not using.
+::: {.callout-tip title="Interpretations"}
+- **Mechanics:** $\nabla f + \sum_i \lambda_i \nabla g_i = 0$ is force balance at a wall.
+- **Economics:** $\lambda_i$ is shadow price — marginal value of relaxing constraint $i$.
 :::
 
-### Any set of prices gives you a lower bound for free
-
-Fix the prices and the constraints have vanished: what is left is an unconstrained function of $x$, and its minimum is some number. That number is a floor under the original problem, because at the true optimum the constraint charges are either zero or in your favor. Minimizing away the freedom you cannot control, and keeping the prices as the thing you can, gives the **dual function**
+### Dual function and problem
 
 $$
-q(\lambda, \nu) \;=\; \inf_{x} \, L(x, \lambda, \nu).
+q(\lambda, \nu) = \inf_{x} L(x, \lambda, \nu).
 $$
 
-For each fixed $x$, $L(x, \lambda, \nu)$ is *affine* in $(\lambda, \nu)$; hence $q$, a pointwise infimum of affine functions, is **concave** — always, even if the original problem were nonconvex. The **dual problem** maximizes this lower bound:
+$q$ is concave (pointwise infimum of affine functions). Dual problem:
 
 $$
-\max_{\lambda \succeq 0,\ \nu} \;\; q(\lambda, \nu).
+\max_{\lambda \succeq 0,\ \nu} q(\lambda, \nu).
 $$
 
-::: {.callout-note title="Weak duality (with proof)"}
-For every dual-feasible $(\lambda, \nu)$ with $\lambda \succeq 0$ and every primal-feasible $\tilde{x}$:
+::: {.callout-note title="Weak duality"}
+For dual-feasible $(\lambda,\nu)$ and primal-feasible $\tilde x$:
 
 $$
-q(\lambda, \nu)
-= \inf_x L(x, \lambda, \nu)
-\le L(\tilde{x}, \lambda, \nu)
-= f(\tilde{x}) + \underbrace{\sum_i \lambda_i\, g_i(\tilde{x})}_{\le\, 0} + \underbrace{\sum_j \nu_j\, h_j(\tilde{x})}_{=\, 0}
-\le f(\tilde{x}).
+q(\lambda,\nu) \le f(\tilde x).
 $$
 
-The first brace is $\le 0$ because each $\lambda_i \ge 0$ multiplies each $g_i(\tilde{x}) \le 0$; the second vanishes because $\tilde{x}$ satisfies the equalities. Taking the infimum over feasible $\tilde{x}$ gives $d^\star \le p^\star$: **every dual point certifies a lower bound on the primal optimum.** This holds for *any* problem, convex or not.
+Hence $d^\star \le p^\star$. Duality gap: $p^\star - d^\star \ge 0$.
 :::
-
-The difference $p^\star - d^\star \ge 0$ is the **duality gap**. When it closes — $d^\star = p^\star$ — we have **strong duality**, and the dual is not merely a bound but an exact certificate of optimality. Convexity alone doesn't quite guarantee it; a mild regularity condition does:
 
 ::: {.callout-note title="Slater's condition"}
-For a convex problem, if there exists a **strictly feasible** point $\tilde{x}$ — one with $g_i(\tilde{x}) < 0$ for all non-affine $g_i$ (affine inequalities need only hold non-strictly) and $A\tilde{x} = b$ — then strong duality holds: $d^\star = p^\star$, and the dual optimum is attained.
-
-Plain English: if the feasible region has genuine interior volume (it isn't a degenerate sliver where some inequality is forced to be exactly tight everywhere), primal and dual meet. Nearly every practical problem satisfies this.
+If a strictly feasible point exists ($g_i(\tilde x)<0$ for non-affine $g_i$, $A\tilde x=b$), then strong duality holds: $d^\star = p^\star$.
 :::
 
-This certificate is what a solver means when it reports an answer *with proof*: it returns $x^\star$ and $(\lambda^\star, \nu^\star)$ whose objective values match to tolerance — a checkable, self-contained proof of global optimality. Squeezing that gap to zero also pins down what an optimal point must look like.
+Solver certificates match primal and dual objectives to tolerance.
 
-### Four conditions replace the optimization problem entirely
+## KKT conditions
 
-The argument is a squeeze. Weak duality strung a chain of inequalities between the dual value and the primal value; strong duality says the two ends of that chain are the same number. An inequality with equal ends has no slack anywhere in the middle, so every step in it collapses to an equality — and each collapsed step turns out to say something concrete about the optimal point.
-
-Assume strong duality holds and both optima are attained. Chain the weak-duality inequalities at the optimum:
+Chain weak-duality inequalities at optimum; equality of endpoints forces each step tight:
 
 $$
-f(x^\star) \;=\; q(\lambda^\star, \nu^\star)
-\;=\; \inf_x L(x, \lambda^\star, \nu^\star)
-\;\overset{(a)}{\le}\; L(x^\star, \lambda^\star, \nu^\star)
-\;\overset{(b)}{=}\; f(x^\star) + \sum_i \lambda_i^\star g_i(x^\star)
-\;\overset{(c)}{\le}\; f(x^\star).
+f(x^\star) = q(\lambda^\star,\nu^\star) = \inf_x L(x,\lambda^\star,\nu^\star) \le L(x^\star,\lambda^\star,\nu^\star) \le f(x^\star).
 $$
 
-The chain starts and ends at $f(x^\star)$, so *every* inequality is forced to be an equality:
+::: {.callout-important title="Karush–Kuhn–Tucker conditions"}
+For convex problems with strong duality, $(x^\star,\lambda^\star,\nu^\star)$ optimal iff:
 
-- $(a)$ tight $\Rightarrow$ $x^\star$ minimizes $L(\cdot, \lambda^\star, \nu^\star)$ over all $x$ $\Rightarrow$ its gradient vanishes there → **stationarity**;
-- $(c)$ tight $\Rightarrow$ $\sum_i \lambda_i^\star g_i(x^\star) = 0$; a sum of non-positive terms is zero only if each term is zero → **complementary slackness**.
+**1. Stationarity**
 
-That derivation *is* the KKT theorem. Collecting the pieces:
-
-::: {.callout-important title="The four Karush–Kuhn–Tucker conditions"}
-$x^\star$, $(\lambda^\star, \nu^\star)$ are primal/dual optimal for a convex problem with strong duality **iff**:
-
-**1. Stationarity** — the forces balance:
 $$
 \nabla f(x^\star) + \sum_{i=1}^m \lambda_i^\star\, \nabla g_i(x^\star) + \sum_{j=1}^p \nu_j^\star\, a_j = 0.
 $$
-*The objective's downhill pull is exactly canceled by the normal forces of the walls currently being touched.*
 
-**2. Primal feasibility** — the point obeys the rules:
+**2. Primal feasibility**
+
 $$
 g_i(x^\star) \le 0 \;\; \forall i, \qquad A x^\star = b.
 $$
 
-**3. Dual feasibility** — walls can only push, never pull:
+**3. Dual feasibility**
+
 $$
 \lambda_i^\star \ge 0 \;\; \forall i.
 $$
-*An inequality constraint is a barrier, not a magnet: its force points into the feasible region or is absent.*
 
-**4. Complementary slackness** — you only pay for what binds:
+**4. Complementary slackness**
+
 $$
 \lambda_i^\star \, g_i(x^\star) = 0 \;\; \forall i.
 $$
-*Either the constraint is tight ($g_i = 0$, wall touched, force allowed) or its multiplier is zero ($\lambda_i = 0$, wall irrelevant, zero shadow price). Never both slack and priced.*
 :::
 
-For convex problems satisfying Slater's condition, KKT is **necessary and sufficient**: solving the optimization problem is *equivalent* to solving this system of equations and inequalities. That reframing is the pivot to algorithms — and the one genuinely nasty component is condition 4, a *combinatorial* on/off switch per constraint. Interior point methods exist precisely to melt that switch into something smooth.
+Condition 4 is combinatorial (active-set selection). IPMs relax it smoothly.
 
-## Interior point methods melt the switch into a dial {#sec-ipm}
+## Interior point methods {#sec-ipm}
 
-### A hard wall is invisible until you have already hit it
-
-The natural first attempt is to make the constraints part of the objective, charging nothing while you obey them and infinity the moment you do not. That is exactly what the problem says, and it is useless to an algorithm: a function that is flat everywhere it is finite offers no direction to move in, and the only information it ever gives is that you have already gone too far. Written out with the indicator function — equalities, being affine, are easy to carry along, so set them aside for clarity:
+### Indicator function formulation
 
 $$
-\min_x \;\; f(x) + \sum_{i=1}^m I_-\big(g_i(x)\big),
+\min_x f(x) + \sum_{i=1}^m I_-\big(g_i(x)\big),
 \qquad
 I_-(u) =
 \begin{cases}
@@ -389,23 +269,25 @@ I_-(u) =
 \end{cases}
 $$
 
-Exact, and computationally hopeless. $I_-$ is discontinuous with zero gradient everywhere it is finite, so a derivative-based method sees a flat plain ending in an invisible cliff.
+$I_-$ is discontinuous with zero gradient on its domain — unusable for Newton methods.
 
-### Replacing each wall with a forcefield makes the problem smooth
+### Logarithmic barrier
 
-What an algorithm can work with is a wall that announces itself in advance. Instead of charging nothing until the boundary and infinity past it, charge a small amount well inside the feasible region and let the charge grow without limit as the boundary approaches. A point pushed by such a forcefield can never leave: the cost of getting there is already infinite by the time it arrives. The natural function with that shape is the negative logarithm of the distance to the wall,
-
-$$
-I_-(u) \;\approx\; -\mu \ln(-u), \qquad \mu > 0,
-$$
-
-known as the **logarithmic barrier**, with $\mu$ the dial controlling how far into the region the wall's influence reaches. Adding one per constraint gives the **barrier problem**
+Approximation:
 
 $$
-\min_x \;\; B_\mu(x) \;=\; f(x) \;-\; \mu \sum_{i=1}^m \ln\big(-g_i(x)\big),
+I_-(u) \approx -\mu \ln(-u), \qquad \mu > 0.
 $$
 
-which has no constraints left in it at all. The barrier term is convex (it is a convex, decreasing function $-\ln(\cdot)$ composed with concave $-g_i$), smooth, and finite only in the **strict interior** $\{x : g_i(x) < 0\ \forall i\}$ — an iterate can never leave the feasible region because the objective blows up first. As $\mu \to 0$, the forcefield hugs the walls ever more tightly and $B_\mu \to f + \sum_i I_-(g_i)$ pointwise on the interior.
+Barrier problem:
+
+$$
+\min_x B_\mu(x) = f(x) - \mu \sum_{i=1}^m \ln\big(-g_i(x)\big).
+$$
+
+- Finite only on strict interior $\{x: g_i(x)<0\ \forall i\}$.
+- Convex: $-\ln$ composed with concave $-g_i$.
+- As $\mu\to0$, barrier hugs hard constraints.
 
 ```{python}
 #| label: fig-barrier-1d
@@ -446,60 +328,49 @@ plt.tight_layout()
 plt.show()
 ```
 
-### Turning the dial down traces a curve to the answer
+## Central path
 
-Each setting of the dial is a different problem with a different answer, and the plot above shows why: at $\mu = 1$ the forcefield is felt across the whole region, at $\mu = 0.01$ only in a thin skin near the wall. Solve at one $\mu$ and you get a point sitting well clear of the boundary. Solve at a smaller one and the point moves closer in. Sweep the dial from large to small and those answers trace out a curve.
-
-For each $\mu > 0$, the barrier problem is smooth, strictly convex near its solution, and unconstrained on the interior — so it has a unique minimizer $x^\star(\mu)$. The curve
+For each $\mu>0$, unique minimizer $x^\star(\mu)$ of $B_\mu$. The set
 
 $$
 \{\, x^\star(\mu) : \mu > 0 \,\}
 $$
 
-is the **central path**: a smooth trajectory through the strict interior of the feasible region that starts (for large $\mu$) near the *analytic center* — the point maximally distant, in barrier terms, from all walls — and converges to the constrained optimum $x^\star$ as $\mu \to 0$.
+is the **central path**: from analytic center (large $\mu$) to constrained optimum ($\mu\to0$).
 
-The central path is not just a heuristic; it carries exact duality information. Setting the gradient of $B_\mu$ to zero at $x^\star(\mu)$:
+Stationarity at $x^\star(\mu)$:
 
 $$
 \nabla f\big(x^\star(\mu)\big) + \sum_{i=1}^m \underbrace{\frac{\mu}{-g_i\big(x^\star(\mu)\big)}}_{=:\ \lambda_i(\mu)\ >\ 0} \nabla g_i\big(x^\star(\mu)\big) = 0.
 $$
 
-Compare with KKT: this is **exactly stationarity**, with a specific positive multiplier estimate $\lambda_i(\mu) = \mu / (-g_i)$ attached to each constraint. Multiply through:
+Relaxed complementary slackness:
 
 $$
 \lambda_i(\mu)\,\big(\!-g_i(x^\star(\mu))\big) = \mu
-\qquad\text{vs. KKT's}\qquad
+\qquad\text{vs KKT:}\qquad
 \lambda_i^\star\,\big(\!-g_i(x^\star)\big) = 0.
 $$
 
-::: {.callout-note title="The key insight: a homotopy on complementary slackness"}
-The central path satisfies the KKT conditions **exactly**, except that complementary slackness $\lambda_i \cdot (-g_i) = 0$ is relaxed to $\lambda_i \cdot (-g_i) = \mu$. The brutal combinatorial switch ("which constraints are active?") becomes a smooth equation with a dial. Interior point methods never *decide* which constraints bind — they turn the dial $\mu \to 0$ and let the active set reveal itself continuously: for binding constraints $-g_i \to 0$ so $\lambda_i(\mu)$ converges to a positive force; for slack constraints $-g_i$ stays bounded away from zero so $\lambda_i(\mu) = \mu/(-g_i) \to 0$.
+::: {.callout-note title="Homotopy on complementary slackness"}
+Active constraints: $-g_i\to0$, $\lambda_i(\mu)\to\lambda_i^\star>0$. Slack constraints: $-g_i$ bounded away from zero, $\lambda_i(\mu)=\mu/(-g_i)\to0$.
 :::
 
-Better still, the path comes with a built-in **optimality certificate**. Since $x^\star(\mu)$ minimizes the convex Lagrangian $L(\cdot, \lambda(\mu))$ (that is what the stationarity display says), the dual function evaluates exactly there:
+Duality gap on the path:
 
 $$
-q\big(\lambda(\mu)\big) = f\big(x^\star(\mu)\big) + \sum_{i=1}^m \lambda_i(\mu)\, g_i\big(x^\star(\mu)\big)
-= f\big(x^\star(\mu)\big) - m\mu.
+q\big(\lambda(\mu)\big) = f\big(x^\star(\mu)\big) - m\mu,
+\qquad
+f\big(x^\star(\mu)\big) - p^\star \le m\mu.
 $$
 
-By weak duality $q(\lambda(\mu)) \le p^\star$, so
+Certify $\varepsilon$-optimality when $\mu < \varepsilon/m$.
 
-$$
-f\big(x^\star(\mu)\big) - p^\star \;\le\; m\,\mu.
-$$
-
-**On the central path, the duality gap is at most $m\mu$** — the solver knows, at every moment, exactly how suboptimal it is. To certify accuracy $\varepsilon$, drive $\mu$ below $\varepsilon / m$. This is the equation that turns "iterate until it looks converged" into "iterate until *provably* within $\varepsilon$."
-
-### The dial has to be turned down gradually, not all at once
-
-If small $\mu$ means an accurate answer, the obvious move is to set $\mu = 10^{-10}$ and minimize once. It does not work, and the reason is worth understanding, because it dictates the shape of every solver in this family.
-
-::: {.callout-warning title="The barrier is a deliberately ill-conditioned forcefield"}
-The barrier's Hessian contains terms $\dfrac{\mu}{g_i(x)^2}\, \nabla g_i \nabla g_i^T$. Near a wall that will be active at the optimum, $-g_i \approx \mu / \lambda_i^\star$, so these terms scale like $\lambda_i^{\star 2}/\mu \to \infty$: the landscape becomes a canyon — astronomically steep across the wall, gently sloped along it. Newton's method handles a canyon *if started near its floor*, but from a distant point the pure barrier problem at tiny $\mu$ is numerically hopeless. The cure is to never solve a hard problem cold. Solve for a moderate $\mu$, shrink $\mu$ a little, and re-solve starting from the previous solution — which, because the path is continuous, is already close to the new one. Deforming an easy problem into a hard one through a family of intermediates is a **homotopy**, and starting each solve from the last answer is a **warm start**.
+::: {.callout-warning title="Ill-conditioning at small $\mu$"}
+Hessian terms scale as $\mu/g_i(x)^2$. Near active walls, $\mu/g_i^2\to\infty$. Solve at moderate $\mu$, then warm-start after $\mu\leftarrow\sigma\mu$.
 :::
 
-Nesting the two moves — shrink the dial, then re-solve — gives the architecture every barrier solver has. The outer loop owns $\mu$ and the accuracy guarantee; the inner loop owns the actual arithmetic and knows nothing about the dial except its current value:
+## Barrier method algorithm
 
 ```{mermaid}
 flowchart TB
@@ -516,38 +387,22 @@ flowchart TB
     O --> C
 ```
 
-- **Outer loop** — reduce $\mu \leftarrow \sigma \mu$ (typically $\sigma \in [0.1, 0.5]$, or even $\mu/10$). Each reduction shrinks the certified duality gap by the same factor, so the gap decays *geometrically*: $\mathcal{O}(\log(1/\varepsilon))$ outer iterations.
-- **Inner loop** — at fixed $\mu$, run **Newton's method** to re-center on the path: fit a quadratic to the barrier objective at the current point using its first and second derivatives, jump to that quadratic's minimum, repeat. Each step solves the linear system
+- **Outer loop:** $\mu \leftarrow \sigma\mu$ ($\sigma\in[0.1,0.5]$); gap decays geometrically — $\mathcal{O}(\log(1/\varepsilon))$ outer iterations.
+- **Inner loop:** Newton on $B_\mu$:
 
 $$
 \nabla^2 B_\mu(x)\, \Delta x = -\nabla B_\mu(x),
-\qquad
-\begin{aligned}
-\nabla B_\mu &= \nabla f + \sum_i \frac{\mu}{-g_i} \nabla g_i, \\
-\nabla^2 B_\mu &= \nabla^2 f + \sum_i \frac{\mu}{g_i^2} \nabla g_i \nabla g_i^T + \sum_i \frac{\mu}{-g_i} \nabla^2 g_i,
-\end{aligned}
 $$
 
-followed by a backtracking line search that (i) rejects any step leaving the strict interior and (ii) enforces sufficient decrease. With equality constraints $Ax = b$ present, the Newton step instead solves the saddle-point **KKT system**
+with backtracking line search staying strictly interior. With equalities $Ax=b$, solve KKT saddle system instead.
 
-$$
-\begin{bmatrix} \nabla^2 B_\mu(x) & A^T \\ A & 0 \end{bmatrix}
-\begin{bmatrix} \Delta x \\ \nu \end{bmatrix}
-=
-\begin{bmatrix} -\nabla B_\mu(x) \\ 0 \end{bmatrix},
-$$
-
-which keeps every iterate on the affine subspace while minimizing the barrier over it — the same linear algebra, one block bigger.
-
-::: {.callout-tip title="Why this is provably fast"}
-The reason the inner loop needs only a handful of Newton steps — regardless of how nonlinear the constraints are — is **self-concordance** (Nesterov & Nemirovski, 1994): the log barrier's third derivative is controlled by its second, which makes Newton's method's convergence analysis *affine-invariant and constant-free*. The headline result: following the central path to $\varepsilon$-accuracy needs $\mathcal{O}\!\big(\sqrt{m}\, \log(1/\varepsilon)\big)$ Newton steps in total. In practice it's even better — production solvers (which use a *primal–dual* variant with Mehrotra's predictor–corrector, treating $\lambda$ as an independent variable rather than the estimate $\mu/(-g_i)$) routinely finish in 10–50 Newton iterations almost independent of problem size. Each iteration is one linear solve — which is why sparse linear algebra, not iteration count, dominates solver engineering.
+::: {.callout-tip title="Complexity"}
+Self-concordance (Nesterov & Nemirovski, 1994): $\mathcal{O}(\sqrt{m}\log(1/\varepsilon))$ Newton steps to $\varepsilon$-accuracy. Primal–dual Mehrotra variants often need 10–50 iterations in practice.
 :::
 
-### Watching the path on a problem you can solve by hand
+## Two-dimensional example
 
-All of that is a claim about what happens between iterations, and claims like that are best checked against a case where the right answer is already known. So the example below is invented rather than measured: two variables, a quadratic objective, and three linear inequalities that fence off a triangle. Two variables because the central path is a curve and this is the only dimension in which you can actually look at it; invented because the KKT conditions solve this instance exactly in three lines of algebra, which turns "the solver converged" into a statement that can be checked digit by digit.
-
-The shape stands in for the smallest interesting real problem: an ideal operating point you would like to sit at, two quantities that cannot go negative, and a shared budget they must sum under — with the ideal point placed deliberately outside the budget, so the constraint has to bite. Take a 2D quadratic objective with three linear inequality constraints:
+Synthetic problem (analytic KKT solution):
 
 $$
 \begin{aligned}
@@ -556,15 +411,11 @@ $$
 \end{aligned}
 $$
 
-The unconstrained minimum $(1.5, 1.25)$ violates $g_3$ (its coordinates sum to $2.75 > 2$), so the optimum must press against the wall $x_1 + x_2 = 2$. Solving stationarity with only $g_3$ active gives, by hand:
+Unconstrained minimum $(1.5,1.25)$ violates $g_3$. Active constraint $g_3$ gives:
 
 $$
-2(x_1 - 1.5) + \lambda_3 = 0, \quad 4(x_2 - 1.25) + \lambda_3 = 0, \quad x_1 + x_2 = 2
-\;\;\Longrightarrow\;\;
-x^\star = (1, 1), \;\; \lambda^\star = (0, 0, 1).
+x^\star = (1, 1), \quad \lambda^\star = (0, 0, 1).
 $$
-
-That is the target to check against: the solver should converge to $(1,1)$, with a shadow price of exactly $1$ on the budget wall it presses against and $0$ on the two positivity walls it never touches. The implementation below is complete — outer loop, inner Newton loop, line search — in about fifty lines:
 
 ```{python}
 #| label: barrier-solver
@@ -622,8 +473,6 @@ x_opt, stages = barrier_method(x0=np.array([0.25, 0.50]))
 print(f"solution: x = ({x_opt[0]:.8f}, {x_opt[1]:.8f})   [analytic: (1, 1)]")
 ```
 
-Every piece of the theory above appears in the numbers. The table below tracks the outer loop: the central-path point $x^\star(\mu)$, the dual estimates $\lambda_i(\mu) = \mu / (-g_i)$, and the certified duality gap $m\mu$:
-
 ```{python}
 #| label: convergence-table
 print(f"{'mu':>10} | {'x1(mu)':>9} {'x2(mu)':>9} | "
@@ -635,7 +484,7 @@ for mu, xc, _ in stages:
           f"{lam[0]:8.5f} {lam[1]:8.5f} {lam[2]:8.5f} | {3*mu:11.2e}")
 ```
 
-Read the price columns against the KKT conditions. The two positivity walls end up slack, and their prices $\lambda_1, \lambda_2$ go to zero — you are not charged for a wall you never touch. The budget wall binds, and $\lambda_3$ converges to $1$, the force the hand calculation predicted. Every row, meanwhile, satisfies the relaxed complementary slackness $\lambda_i \cdot (-g_i) = \mu$ by construction; the solver never had to guess which of the three would bind. Now the picture — the feasible triangle, the objective's contours, the central path gliding through the interior, and the orange Newton steps of the first re-centerings:
+$\lambda_1,\lambda_2\to0$ (slack walls); $\lambda_3\to1$ (binding budget wall).
 
 ```{python}
 #| label: fig-central-path
@@ -690,8 +539,6 @@ plt.tight_layout()
 plt.show()
 ```
 
-The geometry tells the whole story. For large $\mu$ the barrier dominates and the minimizer sits near the triangle's analytic center, pushed away from all three walls. As the outer loop turns the dial down, the objective takes over and the path bends toward the unconstrained minimum — until the capacity wall's forcefield stops it, and the path slides *along* the incipient active constraint into $x^\star = (1,1)$. Finally, the certificate in action — the duality gap bound $m\mu$ and the true errors, per outer iteration:
-
 ```{python}
 #| label: fig-gap-convergence
 #| fig-cap: "Geometric (linear-on-log-scale) convergence of the outer loop: each reduction of $\\mu$ shrinks the certified gap $m\\mu$ by the same factor $\\sigma$. The true suboptimality $f(x^\\star(\\mu)) - p^\\star$ tracks the certificate from below, exactly as the bound promises."
@@ -716,54 +563,47 @@ plt.tight_layout()
 plt.show()
 ```
 
-Straight lines on a log scale mean geometric convergence, and the certified bound $m\mu$ sits above the true suboptimality at every iteration, exactly as weak duality promised it would. The point is not the speed. It is that the solver could have been stopped at any iteration and would still have reported an honest worst case for the answer it had — which is what separates this from a method that merely stops improving.
+Certified bound $m\mu$ upper-bounds true suboptimality at every outer iteration.
 
-That guarantee has a price, and it is worth knowing when not to pay it.
+## Method comparison
 
-## Interior point is the right default, not the only tool
-
-Certified accuracy is not free. Every Newton step costs a full linear solve, and a solver that has just finished is oddly bad at restarting on a nearly identical problem, because the answer it is holding sits jammed against the walls — the worst possible starting point for a fresh barrier solve at large $\mu$. The two main alternatives make the opposite trades. Boundary methods — the simplex method and its active-set cousins — do the thing interior point refuses to do and reason directly about which constraints are tight, which makes them superb at re-solving a problem they have seen before. First-order methods such as ADMM and proximal gradient give up the linear solve entirely and take many cheap steps instead of a few expensive ones, trading digits of accuracy for scale.
-
-::: {.callout-important title="Interior point vs. the alternatives"}
+::: {.callout-important title="Interior point vs. alternatives"}
 | | **Interior point** | **Simplex / active set** | **First-order (ADMM, prox-grad)** |
 |---|---|---|---|
-| Strategy | glide through the interior along the central path | walk the boundary, vertex to vertex / swap active constraints | cheap gradient-like steps |
-| Iterations | ~10–50, nearly size-independent | can be exponential (worst case); great in practice on LPs | thousands, but each is trivial |
-| Cost per iteration | one linear solve (Newton KKT system) | one basis update (cheap) | matrix–vector products |
-| Complexity | polynomial: $\mathcal{O}(\sqrt{m}\log(1/\varepsilon))$ Newton steps | exponential worst case | dimension-free but $\mathcal{O}(1/\varepsilon)$-ish accuracy |
-| Warm starts | weak — the path restarts | excellent — ideal for re-solving similar problems | good |
-| Accuracy | high (8+ digits, with certificate) | exact (vertex solutions) | low–moderate (2–4 digits) |
-| Sweet spot | medium–large smooth problems, cones (LP/QP/SOCP/SDP) | LPs, small QPs, sequences of related problems | huge-scale ML problems where 3 digits suffice |
-
-Rule of thumb: interior point when you need *certified* accuracy on problems up to millions of variables with sparse structure; simplex/active-set when re-solving many nearby LPs; first-order methods when the problem is enormous and modest accuracy is fine.
+| Strategy | central path through interior | boundary walk | cheap gradient steps |
+| Iterations | ~10–50, nearly size-independent | exponential worst case; good on LPs | thousands, cheap each |
+| Cost per iteration | Newton KKT linear solve | basis update | matrix–vector products |
+| Complexity | $\mathcal{O}(\sqrt{m}\log(1/\varepsilon))$ Newton steps | exponential worst case | $\mathcal{O}(1/\varepsilon)$-ish |
+| Warm starts | weak | excellent | good |
+| Accuracy | high + certificate | exact (vertices) | low–moderate |
+| Sweet spot | medium–large smooth cones | LPs, related sequences | huge-scale, low accuracy |
 :::
 
-## Most of the work is recognizing the problem in the first place
+Rule of thumb:
 
-Choosing among those columns only matters once the problem is in the standard form, and that is where the real difficulty sits. Nothing arrives labeled as a convex program. The skill is spotting that a cost function is built from pieces that are already convex, or that a nonlinear balance equation can be relaxed into an inequality, or that a discrete choice has a standard relaxation waiting for it.
+- IPM when certified accuracy on sparse LP/QP/SOCP/SDP is required.
+- Simplex/active-set for sequences of related LPs.
+- First-order when scale dominates and 2–4 digits suffice.
 
-::: {.callout-tip title="Cheat sheet: framing an engineering problem as convex optimization"}
-**Recognize it.** Ask, in order:
+## Convex modeling checklist
 
-1. **Decision variables** — what vector $x$ do I control?
-2. **Objective** — is my cost built from convex atoms? (norms $\lVert \cdot \rVert$, max, log-sum-exp, quadratics $x^TQx$ with $Q \succeq 0$, negative log of concave) combined by convexity-preserving rules (nonnegative sums, pointwise max, composition with affine maps)?
-3. **Inequalities** — can each be written $g_i(x) \le 0$ with $g_i$ convex?
-4. **Equalities** — are they all *affine*? If a physics/balance equation is nonlinear, can it be linearized, relaxed to an inequality, or is the problem genuinely nonconvex?
-5. **Hidden nonconvexity** — integer variables, products of decision variables, ratios, "either/or" logic? Then look for the standard convex relaxation ($\ell_1$ for sparsity, SDP lifting for quadratics) before reaching for heuristics.
+::: {.callout-tip title="Framing a problem as convex optimization"}
+1. **Decision variables** — vector $x$ to optimize.
+2. **Objective** — convex atoms (norms, max, log-sum-exp, $x^TQx$ with $Q\succeq0$) under convexity-preserving rules.
+3. **Inequalities** — each $g_i(x)\le0$ with $g_i$ convex.
+4. **Equalities** — all affine; relax or linearize nonlinear balance equations if needed.
+5. **Hidden nonconvexity** — integers, products, ratios, either/or logic → seek standard relaxations ($\ell_1$, SDP lifting).
 
-**Then trust the guarantees.** If all checks pass: any local optimum is global, KKT certifies it, strong duality gives you shadow prices for free, and an interior point solver will deliver a certified answer in polynomial time. Prototype with a modeling layer (`cvxpy` — it verifies convexity by construction and dispatches to IPM solvers like Clarabel, ECOS, MOSEK); deploy with a structure-exploiting solver (OSQP for embedded MPC, LIBLINEAR-style duals for SVMs).
-
-**The one-line summary.** Convexity buys the guarantee, duality prices the constraints, the log barrier melts the combinatorics of complementary slackness into a smooth dial, and Newton's method turns the dial to zero — that is the whole machine.
+Prototype with `cvxpy`; deploy with structure-exploiting solvers (OSQP, Clarabel, MOSEK, ECOS).
 :::
 
-## The asterisks really are gone
+Nonconvexity sources that void guarantees:
 
-The claim at the top was that convex optimization is where the asterisks disappear, and every piece of that is now on the table. Convexity is what makes a local answer global, so an algorithm that can only see its own neighborhood is entitled to speak for the whole landscape. Duality is what makes the answer checkable, because any set of constraint prices hands you a floor and the right prices make the floor meet the ceiling. And the log barrier is what makes the combinatorial part go away, by never asking which constraints are active and letting the dial reveal them instead.
+- Non-affine equality constraints.
+- Integer or binary variables without valid relaxation.
 
-That last move is the one to keep. The genuinely hard part of a constrained problem is not the geometry but the on-off switch buried in complementary slackness, and interior point methods do not solve it — they refuse to pose it, replacing an exponential question with a continuous one and taking a certified answer out the other side. Where the trick stops holding is written into the same conditions: curve an equality constraint, or introduce a variable that must be an integer, and the feasible set stops being convex, the local-implies-global theorem lapses, and every guarantee here goes with it.
+## References
 
-## Further reading
-
-- Boyd & Vandenberghe, [*Convex Optimization*](https://web.stanford.edu/~boyd/cvxbook/) — the canonical text; Chapter 11 covers barrier methods in full.
-- Nesterov & Nemirovski, *Interior-Point Polynomial Algorithms in Convex Programming* — the self-concordance theory behind the $\mathcal{O}(\sqrt{m})$ bound.
-- Wright, *Primal-Dual Interior-Point Methods* — the algorithms production LP/QP solvers actually implement.
+- Boyd & Vandenberghe, [*Convex Optimization*](https://web.stanford.edu/~boyd/cvxbook/) — Chapter 11 on barrier methods.
+- Nesterov & Nemirovski, *Interior-Point Polynomial Algorithms in Convex Programming* — self-concordance and $\mathcal{O}(\sqrt{m})$ bound.
+- Wright, *Primal-Dual Interior-Point Methods* — production LP/QP solvers.

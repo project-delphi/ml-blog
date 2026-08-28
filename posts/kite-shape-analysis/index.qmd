@@ -12,59 +12,36 @@ format:
     toc: true
     toc-depth: 2
     code-fold: show
+    number-sections: true
 ---
 
 ![Five Photos of One Kite, Five Different Shapes](./cover.png)
 
-I photographed the same kite five times in nine seconds. It is a rigid object made of ripstop
-nylon over two spars, and nothing happened to it between the first frame and the last. Line up
-the five outlines and they should sit on top of one another exactly.
+## Problem statement
 
-They do not. The angle at the kite's nose reads 81 degrees in one frame and 113 degrees in
-another. Run the standard shape-analysis pipeline over them and it reports the five photographs
-as five different shapes, with distances of up to 0.33 between them in the space it measures
-shape in.
+Kendall shape analysis quotients out translation, scale, and rotation (the **similarity** group). Field photographs of a rigid object introduce **perspective**, which similarity cannot remove.
 
-That is not noise, and it is not a bug in the pipeline. It is the pipeline being asked to remove
-something it was never built to remove. Kendall shape analysis subtracts position, size and
-angle — and a camera does not add position, size and angle. It adds perspective. The repair
-belongs upstream of Procrustes, not inside it.
+**Test case:** five iPhone photographs of one kite, nine seconds apart. Correct shape difference = 0. Standard GPA reports up to 0.33 Riemannian separation.
 
-## Five frames of one kite, nine seconds apart
+Method background: [Kendall shape analysis on synthetic pencils and optic nerve heads](../kendall-shape-analysis/index.qmd).
 
-The data is five photographs I took at the kite festival at Villa de Leyva, in Boyacá, Colombia,
-on 15 August 2026. They are iPhone HEIC frames, 3024 wide by 4032 tall, timestamped 13:26:12 through 13:26:21 — so
-the whole sample spans nine seconds. I have committed them here at half resolution, 1512 × 2016,
-and every coordinate in this post lives in that pixel grid.
+## Photograph data
 
-There was no protocol. I stood in a field and pointed a phone at the sky, handheld, with no
-tripod, no scale bar, no fixed distance and no attempt to keep the camera still between frames.
-That is the point of using them. This is what field photography actually looks like, and the
-question I want to ask of these five frames is the one nobody asks out loud: *does one rigid
-object photographed five times give one shape?*
+**Provenance:** author photographs, Villa de Leyva kite festival, Boyacá, Colombia, 15 August 2026.
 
-If the answer is no, then any study that photographs two specimens and reports a shape difference
-between them has a problem, because some of that difference is the photographer. In morphometrics
-this is the calibration step that decides whether a published finding is about the organism or
-about where somebody was standing. Getting it wrong means reporting a camera artefact as biology.
+**Format:** iPhone HEIC, committed at 1512 × 2016 (half of 3024 × 4032). Timestamps 13:26:12–13:26:21 (9 s span).
 
-Kendall shape analysis is the right tool to point at this, because it is the tool that claims to
-delete exactly the nuisances a camera introduces. Testing it where the true answer is known in
-advance — five photographs of one unchanging object, so the correct shape difference is zero — is
-the only way to find out which nuisances it really deletes and which it silently leaves behind.
+**Collection:** handheld, no tripod, scale bar, or fixed distance.
 
-If you want the method itself rather than its failure modes, I wrote it up on synthetic pencils
-and a real dataset of monkey optic nerve heads in
-[an earlier post](../kendall-shape-analysis/index.qmd). This one is the field test.
+**Objective:** does one rigid object photographed five times yield one shape under similarity quotient?
 
-## A photograph is a matrix, and this one is mostly cloud
+**Downstream impact:** morphometric studies comparing photographed specimens may confound biology with viewpoint if the nuisance group is wrong.
 
-Before any geometry, the photograph has to become numbers. An image is a grid of pixels, and each
-pixel is a triple of intensities — how much red, green and blue it carries — so a colour
-photograph is a stack of three matrices. Everything downstream is arithmetic on that stack.
+**Why this dataset:** ground truth is known (one unchanged kite); failure isolates the nuisance group, not landmark error.
 
-It helps to actually look at the numbers once. Here is a frame, the same frame as a single
-brightness matrix, and a ten-by-ten patch of sky with its raw values printed on it.
+## Image representation
+
+A colour photograph is a $H \times W \times 3$ array of RGB intensities.
 
 ```{python}
 #| label: fig-matrix
@@ -94,18 +71,13 @@ for ax in axes:
 plt.show()
 ```
 
-The patch is the useful part. Those numbers are all close together and all fairly large: overcast
-sky is bright and grey. Grey means the three channels are nearly equal, and that is what
-separates the sky from what is flying in it. The kite is dyed in saturated dye and the cloud is
-not, so the quantity that tells them apart is not brightness but **saturation** — how far a
-pixel's colour is from grey, computed as the spread between its largest and smallest channel
-divided by the largest.
+Cloud patch: high brightness, low colour spread.
 
-## Saturation separates a rainbow kite from a grey sky
+## Saturation segmentation
 
-Saturation turns out to do the whole job on its own. Every pixel of cloud is near zero, every
-pixel of kite fabric is near one, and there is nothing in between to argue about. One threshold
-and a connected-components pass isolates the kite in all five frames.
+**Saturation** = $(\max R,G,B - \min R,G,B) / \max R,G,B$. Kite fabric: high saturation. Sky: near zero.
+
+Threshold 0.30 + largest connected component isolates the kite in all five frames. Streamers occupy ~half each mask and move independently — excluded from landmarks.
 
 ```{python}
 #| label: fig-segment
@@ -140,53 +112,27 @@ for ax in axes.ravel():
 plt.show()
 ```
 
-Look at the top row rather than the bottom one. The same kite, nine seconds apart, appears as a
-wide shallow triangle in frame 1 and as a sharp narrow chevron in frame 4. Nothing about the kite
-changed. What changed is where it was pointing relative to the lens.
+Same kite appears as wide triangle (frame 1) vs narrow chevron (frame 4). Viewpoint changed; kite did not.
 
-The masks also show the other problem. Roughly half of every mask is streamers — the long ribbons
-trailing off the back edge — and they move independently in the wind.
+## Landmark correspondence
 
-## Correspondence is the part you cannot skip
+Procrustes requires **landmarks**: labelled points with the same anatomical meaning in every frame.
 
-A mask is not yet something Procrustes can use. Procrustes compares two configurations of
-*labelled* points, and the labels have to mean the same thing in both: point 3 must be the same
-physical spot on the kite in every photograph. That correspondence is what makes two specimens
-comparable at all, and it is the part that no amount of clever alignment can supply after the
-fact. Points chosen this way are called **landmarks**.
+- Streamers excluded (non-rigid, no stable correspondence).
+- Six sail landmarks on the rigid colour-chevron block:
 
-Sample points off the outline instead and you get configurations of the right size and no
-correspondence whatsoever — point 3 lands somewhere different on every kite, and Procrustes
-faithfully rotates one meaningless list onto another. That is the first way this analysis goes
-wrong, and it is worth ruling out before blaming anything subtler.
+| Label | Location |
+|---|---|
+| `nose` | Outer apex of leading edges |
+| `armA_out`, `armB_out` | Far ends of leading edges |
+| `armA_in`, `armB_in` | Inner boundary ends on each arm |
+| `apex_in` | Inner apex where inner boundaries meet |
 
-So the streamers are out. They flap, so a point on one means a different thing in each frame. The
-landmarks go on the **sail** — the rigid block of nested colour chevrons — and there is a nice
-accident there: the sail's bands are ordered by colour, and colour identity is the anatomical
-label. Six points, all corners of the band stack:
+**Bilateral symmetry:** no single image determines which wing is `armA` vs `armB`. Fixed by consistent traversal order; frame 5 labels swapped relative to the photograph.
 
-- `nose`, the outer apex where the two dark navy leading edges meet;
-- `armA_out` and `armB_out`, the far ends of those two leading edges;
-- `armA_in` and `armB_in`, the far ends of the band stack's inner boundary on each arm;
-- `apex_in`, the inner apex where those two inner boundaries meet.
+**Reflection:** Procrustes allows reflections (forbid → SS 0.855 vs 0.111 with allow). Affine ladder fits per frame separately and is not reflection-invariant.
 
-One of these labels is not determined by the photograph, and it is worth being blunt about it.
-The sail is bilaterally symmetric and so are its colour bands, so nothing in a single image says
-which physical wing is `armA` and which is `armB`. I fixed the choice by making every frame's
-traversal run the same way round the sail, which meant swapping the two labels in frame 5
-relative to how that photograph reads. That is a free choice about labelling, not a measurement —
-but it is a free choice that would set the headline number if the analysis were sensitive to it,
-so the Procrustes alignment below is built not to care, by allowing reflections. Forbid
-reflection and these same landmarks report a Procrustes sum of squares of 0.855 instead of 0.111;
-allow it, and the two labellings differ by under 6%. The model ladder further down fits each
-frame separately rather than to a common mean, so it is not insensitive in the same clean way —
-relabelling permutes points rather than exactly mirroring them, so even a six-parameter affine
-fit shifts a little under it.
-
-I placed these by hand off the committed photographs, the way a morphometrician places them in
-tpsDig, and checked them against the overlay below. Placement is good to about ±5 pixels on a
-sail 160 pixels across. Hold on to that number — it decides what this analysis can and cannot
-conclude, and it comes back at the end.
+**Digitisation:** hand-placed from committed photos, ±5 px on ~160 px sail width.
 
 ![The six sail landmarks in each frame. Nothing sits on a streamer.](./fig-landmarks.png)
 
@@ -207,16 +153,9 @@ print(f"{X.shape[0]} configurations of {X.shape[1]} landmarks in {X.shape[2]}D")
 print(f"mean centroid size: {np.mean([np.linalg.norm(c - c.mean(0)) for c in X]):.0f} px")
 ```
 
-## The nose angle changes by thirty degrees, so these are not similar figures
+## Nose-angle test
 
-There is a way to settle the central question before fitting anything at all, and it takes one
-measurement.
-
-Kendall shape analysis quotients out the **similarity** group: translations, rotations, and
-uniform rescalings. Every one of those preserves angles. A triangle that has been moved, turned
-and enlarged has exactly the angles it started with. So if the five frames really were related by
-similarity — if the camera only ever moved, turned and zoomed — the angle at the kite's nose
-would be the same number five times.
+Similarity transformations preserve angles. If frames differ only by similarity, nose angle is invariant.
 
 ```{python}
 #| label: nose-angle
@@ -233,26 +172,11 @@ for frame, angle in enumerate(angles, start=1):
 print(f"\nspread: {angles.max() - angles.min():.1f} degrees")
 ```
 
-Thirty-one degrees of spread on a quantity that similarity cannot touch. Jittering the landmarks
-by 5 pixels and remeasuring puts the standard deviation of this angle between 3.6 and 6.3 degrees
-depending on the frame — so my digitising is worth a few degrees, nowhere near enough to
-manufacture thirty. Whatever maps one frame onto another, it is not a similarity, and that is settled without
-running Procrustes once.
+Nose-angle spread: 31°. ±5 px jitter: 3.6–6.3° SD. Inter-frame map is not similarity.
 
-The interesting question is no longer *whether* the pipeline will struggle. It is what the
-struggle looks like, and what the right group turns out to be.
+## Generalised Procrustes analysis
 
-## Procrustes cannot remove what it was not built to remove
-
-The standard pipeline is three deletions, and none of them involve fitting anything. Translation
-comes off by moving each configuration so its landmarks average to the origin. Size comes off by
-dividing by the spread of the landmarks around that centre — the Frobenius norm — so every
-configuration ends up at size one. Rotation comes off by turning each configuration until it sits
-as close as least squares allows to a target, which falls out of a singular value decomposition.
-
-Rotation needs something to rotate *onto*, and there is no target to start from. The way out is
-to guess and refine: take one configuration as a provisional mean, rotate everything onto it,
-average, and repeat until the mean stops moving. That loop is generalised Procrustes analysis.
+Standard pipeline: centre, scale to unit Frobenius norm, iterate rotation-to-mean (GPA).
 
 ```{python}
 #| label: gpa
@@ -294,10 +218,7 @@ print(f"Procrustes sum of squares: {similarity_ss:.5f}")
 print(f"RMS residual: {residual.mean():.4f}  ({100 * residual.mean():.1f}% of centroid size)")
 ```
 
-Every configuration has size one, so a residual of 0.15 means each frame sits about 15% of its
-own extent away from the average frame. For five photographs of one rigid object taken over nine
-seconds, that is enormous. Plotted, the five aligned sails do not agree on anything except
-roughly where the nose is.
+RMS residual ≈ 0.15 at unit size. Procrustes SS = 0.111.
 
 ```{python}
 #| label: fig-gpa-raw
@@ -318,24 +239,17 @@ ax.set_title("After GPA: five frames of one rigid kite")
 plt.show()
 ```
 
-This is the failure, reproduced honestly, and note *when* it happens: after the landmarks were
-placed properly, with real correspondence, on the rigid part of the kite only. Fixing the
-correspondence was necessary. It was not sufficient.
+## Transformation model ladder
 
-## Fit similarity, affine and projective, and read off which one the camera used
+Candidate groups (nested):
 
-If similarity is too small a group, the obvious move is to ask how much bigger the right one is.
-There is a natural ladder of candidates, each containing the last.
+| Model | DOF | Preserves | Use case |
+|---|---|---|---|
+| Similarity | 4 | Angles | Lab bench, square camera |
+| Affine | 6 | Parallel lines | Weak perspective (distant camera) |
+| Projective | 8 | Straight lines | General plane photograph |
 
-**Similarity** has four degrees of freedom — translate, rotate, scale — and preserves angles.
-**Affine** has six: it adds shear and lets the two axes scale differently, so it no longer
-preserves angles but still maps parallel lines to parallel lines. This is the model you get from
-a flat object photographed from far enough away that the near edge and the far edge are
-effectively the same distance from the lens, which is called weak perspective. **Projective**
-has eight, adds genuine perspective, and is what a plane photographed from any viewpoint actually
-undergoes: parallel lines converge, and only straight lines are guaranteed to stay straight.
-
-Fit each of the three to each frame and see which one explains the photographs.
+Fit each model mapping frames 2–5 onto frame 1; compare RMS pixel error.
 
 ```{python}
 #| label: ladder
@@ -417,16 +331,7 @@ for j in range(1, 5):
 print(f"\n{'mean':>14}" + "".join(f"{np.mean(v):15.2f}" for v in totals.values()) + "   px")
 ```
 
-The ladder comes out monotone, which is what should happen: each model contains the one before
-it, so a fit that truly attains its group's optimum cannot do worse than the group inside it.
-Worth saying that this is a property of the answers rather than a guarantee from the code —
-`fit_projective` is a local refinement from a DLT seed with no global optimality promise, which
-is exactly why its unrefined version scored *worse* than affine.
-
-These numbers mean nothing on their own, because every extra parameter buys some fit even against
-pure noise. Each model needs its own floor, and the floor is not "±5 pixels" — it is whatever
-that model scores between two independently jittered copies of one frame, where the true
-difference is zero by construction.
+**Noise floor:** RMS between two independent ±5 px jittered copies of the same frame (true difference = 0).
 
 ```{python}
 #| label: ladder-floor
@@ -444,45 +349,27 @@ for name, _, fit in MODELS:
     print(f"{name:12}{seen:10.2f}{floor:13.2f}{seen / floor:7.1f}x")
 ```
 
-That reframes the ladder. Similarity leaves 12.5 pixels against a floor of 7.9 — clearly above
-its own noise, and the quantitative version of what the nose angle already said. Affine drops to
-8.2 against a floor of 6.7, barely above it, and projective to 6.7 against 5.8, the same ratio
-again.
+Ladder results (observed / noise floor):
 
-So affine does not merely beat similarity: it brings the residual **down to roughly what my own
-digitising manufactures**, which is as far as this data can take it. There is nothing measurable
-left for the projective term to explain, and its extra 1.5 pixels are bought with two more
-parameters on six landmarks. The reading is that the camera was far enough away for weak
-perspective to hold, and **affine is the smallest model that does the job** — a claim about these
-photographs, not about cameras. With more landmarks, or a kite closer to the lens, the projective
-step would separate.
+- Similarity: 12.5 / 7.9 px — above floor (confirms nose-angle test).
+- Affine: 8.2 / 6.7 px — near floor.
+- Projective: 6.7 / 5.8 px — no improvement over affine on six landmarks.
 
-## Quotient out the affine group and most of the shape difference disappears
+**Reading:** weak perspective holds; affine is the smallest adequate model for these photographs.
 
-If affine is the nuisance group, the fix is to quotient by it rather than by similarity — to
-compare configurations only up to affine maps, so the parts of the difference an affine map could
-have produced stop counting.
+## Affine quotient
 
-There is a trap here, and it cost me a wrong answer before I noticed. The obvious approach is to
-reuse the Procrustes loop with the rotation step swapped for a least-squares affine fit. It runs,
-it converges, and it reports a beautifully small residual — because the affine group can squash a
-configuration flat onto a line and leave it at size one while doing so. My first run drove all
-five sails to an aspect ratio of 0.0002 and announced that 74% of the shape variation was
-viewpoint. It was measuring the collapse.
+Compare shapes up to affine maps, not similarity.
+
+**Trap:** swapping GPA rotation for iterative affine fit collapses configurations (aspect ratio → 0.0002; false 74% viewpoint share).
 
 ::: {.callout-warning}
 ## Iterating affine fits to a mean is not affine Procrustes
 
-Normalising to unit centroid size stops the configurations shrinking to a point. It does not stop
-them flattening to a line, which has unit size too. If you swap the rotation step of a GPA loop
-for an affine fit, check the aspect ratio of what comes out before believing the residual.
+Unit centroid size prevents shrink-to-point but not flatten-to-line. Check aspect ratio before trusting the residual.
 :::
 
-The way that works is to remove the affine part in closed form instead of searching for it.
-Centre a configuration and rescale its two principal axes to be equal, so its second moment
-becomes isotropic. Any affine image of a configuration lands on the same canonical form, so what
-survives is exactly the non-affine part of its shape — and nothing can collapse, because the
-answer is isotropic by construction.
+**Closed-form fix:** centre, SVD-whiten to isotropic second moment (`remove_affine`). Any affine image shares the same canonical form.
 
 ```{python}
 #| label: whiten
@@ -504,31 +391,13 @@ print(f"Procrustes SS, affine quotient    : {affine_ss:.5f}")
 print(f"share of shape variation the viewpoint explains: {100 * (1 - affine_ss / similarity_ss):.1f}%")
 ```
 
-Quotienting by the affine group removes 38% of the measured shape variation. That is a real
-number rather than a collapse — the aligned configurations keep an aspect ratio of 1.0, as the
-construction guarantees.
+Affine quotient removes 38% of similarity SS. Aspect ratio stays 1.0 (no collapse).
 
-It is also a lot less than the 74% the broken version reported, and less than the ladder above
-might have led you to expect. Which raises the obvious question about the 62% still sitting
-there.
+## Digitisation noise floor
 
-## Caveat: most of what is left is my own hand
+Simulate zero true shape difference: replicate one frame five times, jitter landmarks ($\sigma$ px), measure Procrustes SS.
 
-The remaining variation has two plausible sources, and they are not equally interesting. One is
-the kite: a delta sail is not a rigid plane. It billows into a dihedral under wind load, so it is
-really two curved panels hinged at the spine, and no two-dimensional map of any kind can align a
-shape that is genuinely bending in three dimensions. The other is me, placing six landmarks by
-eye to about ±5 pixels.
-
-These are easy to tell apart, because the second one can be simulated. Take a frame, replicate it
-five times so the true shape difference is exactly zero, jitter every landmark, and measure the
-Procrustes sum of squares that digitising error alone manufactures.
-
-One wrinkle before the numbers. The jitter below is Gaussian with standard deviation sigma, while
-my ±5 pixels was meant as a rough bound — and a Gaussian at sigma = 5 puts about a third of its
-points beyond 5 pixels, with an RMS displacement nearer 7. So the simulated floor at sigma = 5 is
-if anything a little pessimistic about my hand. That cuts against the conclusion I want, which is
-the right direction for a check to err in.
+Gaussian $\sigma = 5$ is slightly pessimistic vs ±5 px bound (RMS displacement ≈ 7 px).
 
 ```{python}
 #| label: noise-floor
@@ -557,44 +426,22 @@ for sigma in [2, 3, 5, 8]:
 print(f"\n{'observed':>7}{similarity_ss:14.4f}{'':15}{affine_ss:14.4f}")
 ```
 
-This table decides how much of the post survives, and it is worth reading the brackets rather
-than the means. The spread across base frames is wide, because whitening a nearly flat
-configuration amplifies whatever jitter you put into it — frames 1 and 2 are the most
-foreshortened sails, and they generate roughly three times the affine floor that frame 4 does.
-A simulation run off a single base frame would have hidden that entirely.
+Results ($\sigma = 5$):
 
-The similarity result holds. Observed SS is 0.111 against a sigma = 5 floor of 0.032 on average,
-so about three and a half times the noise — and still 2.7 times it even against the most
-pessimistic base frame. The similarity quotient fails for reasons that are not my handwriting.
+- Similarity: observed 0.111 vs floor 0.032 (3.5×) — failure not explained by digitisation.
+- Affine: observed 0.068 vs floor 0.042 (1.6×); worst base frame 1.1×; at $\sigma = 8$ floor exceeds observed.
 
-The affine result does not hold. After quotienting out the affine group the residual is 0.068
-against a floor of 0.042, which is 1.6 times the noise on average and only 1.1 times against the
-worst base frame. At sigma = 8 the floor passes the observed value outright. There is no residual
-here I can claim, and in particular I cannot claim the sail's billow, which is the answer I went
-looking for. Measuring that would need more landmarks, placed more precisely, on a kite filling
-more of the frame.
+**Conclusion:**
 
-So the defensible summary is narrower than the one I set out to write. Similarity is decisively
-the wrong group to quotient by, and moving to the affine group removes a large and real chunk of
-the disagreement between these photographs. Whether *anything at all* is left after that — the
-kite's own bending, or any other departure from a flat plane under an affine camera — is below
-what six hand-placed landmarks can resolve, and this analysis should not be read as evidence
-either way.
+- Similarity quotient is wrong for these photographs.
+- Affine quotient removes real viewpoint variation.
+- Residual after affine is within digitisation noise; sail billow cannot be resolved with six hand-placed landmarks.
 
-## The same pipeline in R's shapes package
+## R shapes package cross-check
 
-Everything above is hand-rolled, which makes it worth checking against an implementation nobody
-wrote for this post. Ian Dryden's [`shapes`](https://cran.r-project.org/package=shapes) package
-is the reference implementation of this material in R — it ships `procGPA` for generalised
-Procrustes, `riemdist` for Riemannian distance in shape space, `tpsgrid` for thin-plate spline
-deformation grids, and `shapepca` for principal components of shape. What it does not do is touch
-the photographs: `tpsgrid` draws a deformation, it does not apply one to pixels. That comes in the
-next section, and needs a little more machinery.
+Ian Dryden's [`shapes`](https://cran.r-project.org/package=shapes): `procGPA`, `riemdist`, `tpsgrid`, `shapepca`.
 
-The R script reads the same `landmarks.csv` and runs the same two analyses. It is not executed by
-the render — it runs ahead of time and commits its figures, so this post builds on a machine with
-no R at all — and it lives at
-[`src/shapes_analysis.R`](https://github.com/project-delphi/ml-blog/blob/main/posts/kite-shape-analysis/src/shapes_analysis.R).
+R script (pre-run, committed figures): [`src/shapes_analysis.R`](https://github.com/project-delphi/ml-blog/blob/main/posts/kite-shape-analysis/src/shapes_analysis.R).
 
 ```{r}
 #| eval: false
@@ -644,44 +491,19 @@ print(f"\nlargest: {riem.max():.3f} between frames "
       f"{np.unravel_index(riem.argmax(), riem.shape)[1] + 1}")
 ```
 
-The two pipelines agree to five decimal places, which is the point of running both.
-
-The Riemannian distances are worth reading on their own. They measure separation along the curved
-shape space rather than straight through it, and the largest is 0.33 — between two photographs of
-one rigid object, nine seconds apart. That single number is the whole problem in one line.
-
-Before the grids, the plainest view `shapes` offers. `plotshapes` draws configurations on one
-set of axes: on the left the five frames as digitised, scattered across the photograph in raw
-pixel coordinates, and on the right the same five after `procGPA` has removed position, size and
-rotation.
+Python and R agree to five decimal places. Maximum pairwise Riemannian distance: 0.33.
 
 ![`plotshapes` on the raw landmarks and after `procGPA`. Removing position, size and rotation
 brings the five configurations onto one another — and the scatter still visible on the right is
 the 0.111 the post has been quoting all along.](./fig-r-plotshapes.png)
 
-The deformation grids show the same story pictorially. `tpsgrid` draws the thin-plate spline that
-carries the mean shape onto one frame: a grid drawn on the average kite, then bent so its
-landmarks land on that frame's.
-
 ![Thin-plate splines carrying the mean shape onto each frame, after quotienting out **similarity** only. The grids have to absorb the entire viewpoint change, so they shear and bow across their whole width.](./fig-r-tps-raw.png)
 
 ![The same splines after quotienting out **affine** maps. The global shear is gone and what remains is local and much milder — though, per the caveat above, most of it is digitising noise rather than the kite.](./fig-r-tps-rectified.png)
 
-This is what "the thin-plate splines were not good" looks like when you diagnose it rather than
-tune it. TPS was never the problem. It was faithfully drawing a deformation that was mostly
-camera.
+## Photograph warping
 
-## Warping the photographs themselves shows the size of what was fixed
-
-Everything so far has been six points per frame. The grids above deform an abstract mean, and a
-reader has to take on trust that this corresponds to anything in the sky. The thin-plate spline
-that bends a grid will just as happily bend an image, so the honest way to finish is to send the
-photographs through the same pipeline and look at them.
-
-Each frame gets transported into one shared panel twice — once by the best similarity map, once
-by the best affine map — and then the animation morphs between consecutive frames, interpolating
-the landmarks linearly and bending both photographs onto the intermediate shape before
-cross-dissolving. That last part is the spline doing the work that `tpsgrid` only illustrates.
+Thin-plate spline (TPS) warps images using the same landmark maps as `tpsgrid`. Each frame transported to a shared panel by similarity and by affine map.
 
 ```{r}
 #| eval: false
@@ -719,28 +541,15 @@ pixels every time, centred on the kite so it stays in frame — orientation and 
 untouched. Middle: transported into a shared frame by the best similarity map. Bottom: by the best
 affine map.](./fig-r-warped-stack.png)
 
-The top-to-middle step is the dramatic one, and it is worth being clear that this is *not* the
-post's argument — it is just Procrustes doing the job it has always been able to do. Size and
-rotation come off, and five wildly different views become five broadly comparable ones. Position
-is already gone in the top row, since a window that did not follow the kite would lose it
-entirely.
+- Top row: cropped source windows.
+- Middle: similarity transport.
+- Bottom: affine transport. Middle-to-bottom change is small visually despite 38% SS reduction.
 
-The middle-to-bottom step is the post's argument, and it is small. That is the correct size. A
-38% reduction in Procrustes sum of squares does not look like much when you paint it onto
-pixels, and pretending otherwise would be the wrong lesson to take from this.
+### TPS extrapolation limits
 
-### Caveat: outside six landmarks the spline is guessing
+Streamers smear outside the six-landmark hull. TPS interpolates inside; extrapolates (unreliably) outside. Streamers are non-rigid and lack correspondence.
 
-The streamers tear, smear and swirl in both warped rows, and that is not a bug to be tuned out.
-A thin-plate spline is pinned only where you pin it. Inside the hull of the six sail landmarks it
-interpolates between constraints; outside, it extrapolates from none, and the ribbons trailing off
-the back edge are entirely outside. They are also genuinely non-rigid, so there is no
-correspondence out there to get right in the first place.
-
-Read that way the smearing is informative: it marks exactly where this analysis has something to
-say and where it does not.
-
-### The animation, and what it can and cannot show
+### Morph animation
 
 ![Five photographs morphing through a common frame, aligned by similarity (left) and by affine
 (right). The white dashed hexagon is the mean shape, fixed in both panels. Spikes run from each
@@ -748,41 +557,18 @@ mean landmark to where that frame's landmark actually lands, **drawn at three ti
 `tpsgrid` has a `mag` argument for the same reason. Shorter spikes on the right are the affine
 map's 28% improvement in landmark registration.](./fig-r-morph.gif)
 
-The magnification is not showmanship, and the reason is worth stating because it is a result in
-itself. Measured on the pixels alone, the two panels are indistinguishable. Averaged over the
-landmarks' bounding box — the sail itself, rather than the empty sky around it — the standard
-deviation across the five aligned frames is 0.127 per pixel under similarity and 0.128 under
-affine. Taken over the whole panel it is 0.072 and 0.074. Whichever region you pick, the affine
-version comes out a hair *worse*. Nothing to see.
+Pixel SD across aligned frames: 0.127 (similarity) vs 0.128 (affine) on sail bounding box — visually indistinguishable. Landmark registration improves 7.0 → 5.1 px (25%); too small to see without magnification.
 
-That is not because the affine map fails. It is because pixel disagreement between these
-photographs is dominated by things no two-dimensional alignment can touch — which colour bands a
-given viewpoint exposes, how the light falls, and the streamers, which are not in correspondence
-at all. The affine map improves landmark registration from 7.0 to 5.1 panel pixels, roughly a
-quarter, and on a 220-pixel panel a two-pixel improvement is invisible without help.
+## Summary
 
-So the animation shows two true things at once. The kite really does settle into a common frame,
-which is what alignment is for. And the improvement this post spent its length establishing is
-real, reproducible, and far too small to see unless you draw it. Both are worth knowing before
-trusting an alignment because the overlay looked convincing.
+Kendall shape analysis removes only the nuisance group specified.
 
-## Shape analysis only subtracts what you tell it to
+- Similarity (translation, scale, rotation) is insufficient for field photographs with perspective.
+- Diagnostic checks: invariant angles, model ladder with noise floors, digitisation simulation, pixel warping.
+- Affine quotient fits these data; residual after affine is within ±5 px landmark noise.
 
-The five photographs are of one rigid kite over nine seconds, and the pipeline reports them as
-five shapes up to 0.33 apart. Nothing in that is a defect of Kendall shape analysis. It removes
-translation, size and rotation, exactly as advertised, and it removed them here — the failure is
-that those three were not the whole nuisance.
+## References
 
-That is the part worth carrying away. On a lab bench the similarity group usually *is* the whole
-nuisance: the specimen is flat, the camera is square to it, and moving the ruler is the only
-thing that varies. Point a lens at something in the air and the nuisance group grows, silently.
-Procrustes will not tell you this has happened. It will converge, return a mean shape, and hand
-you a number.
-
-Three cheap habits catch it. Measure something the group you are quotienting by cannot change —
-an angle, for similarity — and check whether it holds still. Simulate your own measurement error
-before believing any residual, because the number that decided how much of this post I could
-defend was not the Procrustes sum of squares; it was ±5 pixels. And do not let a picture settle
-it either way: warping the photographs into register made a real 38% improvement look like
-nothing at all, and a convincing overlay would have hidden the same gap just as easily in the
-other direction.
+- Dryden, I. L., and Mardia, K. V. (2016). *Statistical Shape Analysis, with Applications in R*, 2nd ed. Wiley.
+- [`shapes` R package](https://cran.r-project.org/package=shapes) (Ian Dryden).
+- Kalia, R. [Kendall shape analysis](../kendall-shape-analysis/index.qmd) — method background on synthetic pencils and optic nerve heads.

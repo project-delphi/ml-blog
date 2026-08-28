@@ -1,6 +1,6 @@
 ---
 title: "Training vs. Calibrating Epidemiological Models: A First-Principles Guide"
-subtitle: "Why fitting curves isn't enough when forecasting disease dynamics"
+subtitle: "SIR training (MSE) versus calibration (likelihood) on synthetic epidemic counts."
 author: "Ravi Kalia"
 date: "2026-07-23"
 categories: [Epidemiology, Machine Learning, Mathematical Modeling, SIR Models, Calibration, Python]
@@ -23,14 +23,14 @@ execute:
 
 ![Training vs. Calibrating Epidemiological Models](./cover.png)
 
-If you come from machine learning, "fit the model to the data" is second nature: pick a loss, run an optimizer, check the validation score. The score comes back good and the job is done.
+**Training:** minimize prediction error (e.g. MSE) for dynamical parameters.
 
-Epidemic modelling quietly breaks that reflex. Here you can fit a curve of case counts almost perfectly and still produce a forecast that is not merely inaccurate but *wrong about the underlying disease* — wrong reproduction number, wrong peak, wrong final size — while reporting no uncertainty at all. The fit is not lying about the data. It is silent about the process that made the data, and the process is what you were trying to forecast.
+**Calibration:** fit the full generative model (dynamics + observation + noise) by maximum likelihood; output predictive distributions.
 
-Epidemiologists keep two words for those two jobs: **training** and **calibration**. Below, both are built from first principles on the simplest epidemic model there is — the Susceptible–Infected–Recovered, or SIR, model — and then run against a synthetic outbreak whose true parameters we know, so the gap between them can be measured rather than asserted. Everything runs top to bottom; the only dependencies are `numpy`, `scipy`, `pandas`, `matplotlib`, and `seaborn`.
+This post compares both on a synthetic SIR outbreak with known truth. Dependencies: `numpy`, `scipy`, `pandas`, `matplotlib`, `seaborn`.
 
 ::: {.callout-note}
-## The five claims this post has to earn
+## Claims
 
 - Parameter estimation ("training") is *not* enough for reliable epidemic forecasting.
 - **Calibration** of a mechanistic model is a different task, not a fancier fit.
@@ -39,9 +39,7 @@ Epidemiologists keep two words for those two jobs: **training** and **calibratio
 - Training and calibration **complement** each other rather than compete.
 :::
 
-One setup cell first: the libraries, a single seeded random generator so every stochastic
-step below reproduces exactly, and a fixed colour for each actor in the story — the hidden
-epidemic, the data we get to see, the trained model, the calibrated one.
+Setup: seeded RNG and fixed colours for truth, observations, trained, and calibrated series.
 
 ```{python}
 #| label: setup
@@ -75,34 +73,25 @@ C_TRAIN = "#D1495B"      # trained (MSE) model
 C_CALIB = "#2A9D8F"      # calibrated (MLE) model
 ```
 
-# Why "good fit" doesn't mean good forecasts
+## Good fit versus forecast
 
-Imagine two teams handed the same 35 days of case counts from a new outbreak. Team A fits a flexible curve — a spline, a gradient-boosted regressor, whatever minimizes error. Team B fits a mechanistic SIR model. Both match the historical data beautifully. Then you ask the only question that matters: *when does this peak, and how big does it get?*
-
-The two forecasts diverge wildly. Worse, **two mechanistic fits can agree on the past and still disagree on the future**. Early epidemic data is dominated by exponential growth, and during exponential growth many different disease parameters produce nearly identical curves. The data you have simply doesn't pin down the parameters you need.
-
-That is the crux. Fitting is about *reproducing observed data*. Forecasting a mechanistic system is about *recovering the process that generated it* — including the messy layer of how cases get counted, and how much you should trust any single number. Those are different jobs, and this post keeps different names for them:
+Curve fits can match observed counts while mis-estimating $R_0$, peak timing, and final size. Early growth leaves $(\beta,\gamma)$ poorly identified.
 
 - **Training** means finding point estimates of the dynamical parameters that minimize a prediction error (here, mean squared error). It answers "*what curve fits?*"
 - **Calibration** means fitting the *full generative model* — the dynamics *and* the observation process *and* its noise — by maximum likelihood, so predictions arrive as **distributions** with quantifiable uncertainty. It answers "*what process, with what plausible variation, could have produced this?*"
 
 ::: {.callout-note}
-## The difference, at three lengths
+## Training versus calibration (summary)
 
-**Paragraph.** Both are loops that adjust numbers until a model matches data. They differ in how much of the data-generating story you build in before the loop starts. Calibration commits to the SIR equations up front, on epidemiological grounds, and then estimates a handful of interpretable quantities — β, γ, maybe I₀, plus how cases get reported and how noisy the counts are — by solving the equations over and over and comparing each solve to the observations. Success there means plausible, identifiable parameters *with honest uncertainty*, and because the mechanism is real you can push it past the last day you have data for. Training is the machine-learning reflex pointed at the same data: pick a loss, minimize prediction error, guard against overfitting with validation splits, judge by out-of-sample accuracy. At its purest it learns the functional form itself. Even aimed squarely at the SIR parameters, it skips the reporting model and the uncertainty and just fits the curve.
-
-**Sentence.** Calibration tunes a few meaningful knobs on a data-generating process you've already committed to; training minimizes prediction error and lets accuracy be the judge.
-
-**Word.** *Generative.*
+- **Calibration:** commit to SIR dynamics; estimate $\beta$, $\gamma$, $I_0$, $\rho$, $k$; output distributions.
+- **Training:** minimize prediction error (MSE); often omits observation model and uncertainty.
 :::
 
-Both of those are still definitions. The rest of the post makes them concrete on one epidemic, and the epidemic has to come first — you cannot see a fit miss the mechanism until you have written the mechanism down.
+Definitions below are instantiated on one simulated outbreak.
 
-# An epidemic is three buckets and two rates
+## SIR model
 
-Start with the crudest possible bookkeeping. At any moment, every person in a population is in one of three states with respect to this disease: they can still catch it, they have it and can pass it on, or they are done with it and cannot do either. Track how many people are in each state, and write down the rate at which people move between states, and you have a working description of an epidemic without following a single individual.
-
-Models built this way are called **compartmental** models — a population split into buckets, with flows between them. The SIR model is the simplest useful one, and its three buckets are the three states above: **S**usceptible, **I**nfected, **R**ecovered (immune, or otherwise removed).
+**Compartmental SIR model:** populations $S$, $I$, $R$ with flows S→I at rate $\beta SI/N$ and I→R at rate $\gamma I$.
 
 ```{python}
 #| label: fig-compartments
@@ -134,9 +123,7 @@ ax.text(6.0, 1.72, "recovery", ha="center", fontsize=9, color="#666666")
 plt.show()
 ```
 
-**Intuition first.** New infections happen when a susceptible person meets an infected one. The number of such encounters per day scales with how many susceptibles are around ($S$) times the fraction of everyone's contacts who are infectious ($I/N$), tuned by a transmission rate $\beta$. Infected people meanwhile recover at a steady per-person rate $\gamma$, so a fraction $\gamma$ of the infected pool leaves for $R$ each day. Everything that leaves $S$ arrives in $I$, everything that leaves $I$ arrives in $R$, and nobody is created or destroyed.
-
-**Now the equations.** Writing those two flows as differential equations — rates of change of each bucket:
+Flow equations:
 
 $$
 \frac{dS}{dt} = -\beta \frac{S I}{N}, \qquad
@@ -154,17 +141,15 @@ $$
 | $\gamma$ | Recovery rate (per day) | $1/\gamma$ is the average infectious period |
 | $R_0 = \beta/\gamma$ | Basic reproduction number | Expected secondary cases from one case in a fully susceptible population |
 
-One derived quantity carries most of the weight: $R_0 = \beta/\gamma$, how many people one infectious person infects on average in a population where nobody is immune yet. If $R_0 > 1$ the epidemic grows; if $R_0 < 1$ it fizzles. The turnover — the peak — happens exactly when the susceptible fraction has fallen to $S/N = 1/R_0$, the point at which susceptibles are too scarce to sustain growth.
+$R_0=\beta/\gamma$. Peak at $S/N=1/R_0$. Wrong $R_0$ mis-forecasts future dynamics even when past counts fit.
 
-So $R_0$ sets both the height and the timing of everything that has not happened yet. Get it wrong and you get the entire shape of the future wrong, *even if you nailed the past*. That is the failure this post is about, and to catch a method making it you need an epidemic whose $R_0$ you already know.
+## Synthetic data
 
-# Only a synthetic outbreak comes with an answer key
+**Synthetic SIR:** $N=10{,}000$, $\beta=0.30$, $\gamma=0.10$ ($R_0=3.0$), $I_0=10$, 100 days.
 
-There is no dataset to download here, and that is deliberate. Every epidemic curve you can obtain — a national COVID-19 dashboard, a ministry-of-health line list, a weekly influenza surveillance bulletin — was collected by a public-health agency to answer an operational question, and none of them ships with the true $R_0$, the true infectious period, or the true fraction of infections that were ever recorded. Those quantities are exactly what a method claims to recover. Grading a method against a real outbreak means grading it against another estimate.
+**Observation layer:** reporting rate $\rho=0.65$; counts $\sim\text{NB}(\mu=\rho\cdot\text{incidence}, k=10)$.
 
-So the epidemic below is simulated, and I chose its parameters. The generating process is the SIR system just written down, integrated on a daily grid for a population of $N = 10{,}000$ with a transmission rate $\beta = 0.30$, a recovery rate $\gamma = 0.10$ (a ten-day infectious period, giving $R_0 = 3.0$), and ten infected people on day zero. That trajectory is then pushed through a deliberately imperfect observation layer, described in a moment, to produce the noisy daily counts we will actually fit.
-
-It stands in for a mid-sized city facing a new respiratory pathogen in its first weeks: the surveillance system is counting some but not all cases, the outbreak is still climbing, and someone has to decide how many hospital beds to hold. Getting $R_0$ wrong in that position is not an academic miss. Under-estimate it and you plan for a peak that arrives earlier and hits twice as hard as you were told; over-estimate it and you spend capacity and public patience on a surge that never comes. Simulating beats a real dataset here because the whole argument is a comparison to truth: every parameter the estimators are hunting is one I wrote down, so a miss can be measured rather than argued about.
+Simulated because real surveillance lacks ground-truth $\beta,\gamma,\rho$. Stands in for early-outbreak bed planning where $R_0$ errors change capacity decisions.
 
 ```{python}
 #| label: constants
@@ -204,7 +189,7 @@ def daily_incidence(beta: float, gamma: float, I0: float) -> np.ndarray:
     return beta * S * I / N
 ```
 
-Now the modelling choice that the rest of the post turns on: **what does anyone actually observe?** Nobody sees $S$, $I$ and $R$. A surveillance system sees *reported new cases* — a count, per day, of people who tested positive and got written down. The quantity that count is chasing is the daily **incidence**, the number of people who newly became infected that day, which is the S→I flow in the equations above. Two things sit between the two, and both go into the simulation explicitly.
+Observed quantity: daily reported cases, not latent $(S,I,R)$. Incidence is the S→I flow.
 
 1. **Under-reporting.** Only a fraction $\rho = 0.65$ of new infections are ever recorded. People without symptoms never present, tests are scarce, and results arrive late or not at all.
 2. **Over-dispersed noise.** Real case counts bounce around more than pure chance would explain — weekend effects, batches of results dumped on one day, clusters in a single workplace. Statisticians call that extra bounce **over-dispersion**, measured against the Poisson distribution, the standard model for counts of independent rare events. The **Negative Binomial** distribution adds a dial for it: for a mean $\mu$ and dispersion parameter $k$, its variance is $\mu + \mu^2/k$, which is always larger than the Poisson variance $\mu$, and gets closer to it as $k$ grows.
@@ -249,11 +234,9 @@ axR.legend()
 plt.show()
 ```
 
-The gap between the black curve and the purple dots is the whole problem in one picture. Fit a model *as if the dots were the epidemic* and you will systematically misread its scale — and, as we'll see, its $R_0$.
+Fitting counts without an observation model confounds reporting and severity.
 
-Before fitting anything, though, there is a question of which days a model is allowed to look at, and the machine-learning default answer is wrong here.
-
-# Shuffled splits cheat when the data is a trajectory
+## Temporal validation
 
 In ordinary supervised learning we shuffle the rows and split at random, or run k-fold cross-validation — carve the data into k parts, hold each out in turn, average the scores. For a **forecasting** problem driven by an ODE, both are quietly invalid.
 
@@ -288,15 +271,11 @@ ax.legend(loc="upper right")
 plt.show()
 ```
 
-At training time you'd have only the blue block — the early, exponential-looking growth. The peak sits at the far edge of the yellow block, and the long tail, where the epidemic burns out because susceptibles have run low, is the red block. A model that looks flawless on blue can still be lost on red, which is exactly what happens next.
+Train: days 0–35; validation: 36–65 (peak region); test: 66–100 (future).
 
-# A perfect fit to the counts, a wrong epidemic underneath
+## MSE training
 
-Train the way an ML engineer would: pick a loss, minimize it over the parameters, using **only** the training window. The natural default is **mean squared error** — the average squared gap between the model's predicted daily cases and the observed counts.
-
-One thing in that setup is doing quiet damage. A plain curve-fitter has no notion of a reporting rate, so it compares model incidence directly to reported cases, which amounts to assuming every infection was counted ($\rho = 1$). The observation layer we just built is simply absent from the model doing the fitting.
-
-Two mechanical choices below. We optimize over $\log\beta$ and $\log\gamma$ rather than $\beta$ and $\gamma$, which keeps both rates positive no matter where the optimizer wanders. And we use Nelder–Mead, a search that crawls a simplex of trial points downhill using function values only, because each evaluation runs a full ODE solve and gradients are not on offer.
+Minimize MSE on training window for $(\beta,\gamma)$ with $\rho=1$ implicit. Optimizer: Nelder–Mead on $(\log\beta,\log\gamma)$.
 
 ```{python}
 #| label: train-model
@@ -362,15 +341,11 @@ axR.set_ylim(0, 100); axR.legend(loc="center right")
 plt.show()
 ```
 
-Here is the trap in one figure. On the left, the trained model is indistinguishable from a great one — it threads the observed dots across the entire horizon, including the two-thirds of it that it never trained on. On the right is the epidemic that same fit actually implies: $R_0 \approx$ `{python} f"{trained_R0:.2f}"` against a true $3.00$, and only about `{python} f"{trained_attack:.0f}"`% of the population ever infected when the truth is `{python} f"{true_attack:.0f}"`%. Those two panels come from the same five numbers.
+MSE fit matches counts but underestimates $R_0$ and final attack rate when $\rho<1$. Confounds $\rho$ and severity. Delivers a point forecast only.
 
-The reason is the assumption we flagged before fitting: every infection is reported. Confronted with counts that are really only 65% of true incidence, the optimizer has exactly one lever for explaining "fewer cases than a full epidemic would produce" — make the disease milder. A lower $R_0$ reproduces the observed curve while shrinking the implied outbreak from `{python} f"{true_attack:.0f}"`% of the city to `{python} f"{trained_attack:.0f}"`%. Reporting rate and epidemic severity are **confounded**: two different stories, one observed curve. MSE never models reporting, so it resolves that confounding silently, and it resolves it the wrong way.
+## Maximum-likelihood calibration
 
-There is a second failure alongside the first. The output is a single confident line, with **no uncertainty anywhere** — nothing to say when a decision-maker asks how sure it is about the peak, the final size, or whether an intervention would help. Both failures have the same root: parts of the story were left out of the model, so the model cannot report on them.
-
-# Calibration fits the whole story, not just the curve
-
-Calibration is not "training with a better optimizer." It changes the *target*. Instead of minimizing an error against a point prediction, we fit the **entire generative model** by **maximum likelihood** — choosing the parameters that make the data we actually saw as probable as possible — so the output is a *predictive distribution* rather than a line. Concretely, calibration takes on the parts of the problem MSE training left out:
+Calibration maximizes Negative Binomial likelihood over $(\beta,\gamma,I_0,\rho,k)$.
 
 - the **observation model** — the reporting rate $\rho$ that connects true incidence to counted cases,
 - the **initial condition** $I_0$, treated as unknown rather than assumed,
@@ -415,7 +390,7 @@ summary
 
 Modelling how the data were made puts $R_0$ back roughly where it belongs: `{python} f"{calib_R0:.2f}"` against a true $3.00$, off by about seven percent where MSE training was off by half. The reporting rate comes back at `{python} f"{crho:.2f}"` against a true $0.65$ and the dispersion at `{python} f"{ck:.1f}"` against a true $10$ — neither of which the trained model could even represent, which is what the `NaN`s in its column mean. **You cannot calibrate what you refuse to model.**
 
-## MSE assumes a noise model, and it assumes the wrong one
+## MSE loss and count noise
 
 The objective did most of that work, so it is worth seeing why. Compare the two losses for a mean prediction $\mu_t$ and observation $y_t$:
 
@@ -429,7 +404,7 @@ Choosing squared error is not choosing "no noise model". Up to a constant, MSE *
 
 The Negative Binomial log-likelihood scales its expected error with the mean instead, which is the structure counts actually have. Statisticians call unequal variance across observations **heteroscedasticity**; counts are about as heteroscedastic as data gets. **Use MSE when you only need a mean and the noise is roughly constant. Use a likelihood when the noise structure carries information and you need honest intervals.**
 
-## From one best-fit point to a band you can plan around
+## Laplace uncertainty
 
 Maximum likelihood still returns a single point in parameter space, which is not yet the predictive distribution promised earlier. The uncertainty is there, though, in the *shape* of the likelihood around that point: if moving a parameter barely changes how well the data are explained, that parameter is poorly determined, and a sharp drop-off means the opposite. The matrix of second derivatives at the optimum — the Hessian — measures exactly that curvature.
 
@@ -473,7 +448,7 @@ calib_hi = np.percentile(pred_draws, 97.5, axis=0)
 calib_mean_curve = crho * daily_incidence(cb, cg, cI0)   # expected reported cases
 ```
 
-# Point metrics cannot see the difference; probabilistic ones can
+## Probabilistic scoring
 
 Two models now exist, one of which we know is wrong about the epidemic. The interesting question is whether an ordinary scoreboard would catch that.
 
@@ -547,9 +522,9 @@ ax.legend(loc="upper right", framealpha=0.95)
 plt.show()
 ```
 
-Reading the figure rather than the metrics: the red line commits to a single, mechanistically wrong story about the epidemic. The green model recovers the true curve, and — just as importantly — draws a band that is *narrow where it should be confident and wide where it shouldn't*. In a real outbreak, that band is what a public-health team plans around, and the red line is what gets someone fired.
+Calibrated model yields predictive bands; trained model yields one trajectory.
 
-# Training and calibration answer different questions
+## Training versus calibration
 
 Everything so far has been one epidemic and one contrast, so it is worth pulling the differences out of the example and into a form you can carry to the next problem. The two columns below are not two settings of the same dial. They differ in what is estimated, what is optimized, what comes out, and what the answer is even claiming to be.
 
@@ -564,7 +539,7 @@ Everything so far has been one epidemic and one contrast, so it is worth pulling
 
 None of that makes training the villain. The two are **complementary, not competing**: training gives you a fast, cheap point estimate and a sanity check that the dynamics can fit the data at all, which is worth having before you spend an afternoon on likelihoods. Calibration is what makes the forecast *usable* — it corrects the observation model, recovers interpretable quantities like $R_0$, and attaches uncertainty you can act on.
 
-## The two tasks are estimating different things
+## Estimation targets
 
 Strip away the epidemiology and the contrast is not about epidemics at all. It is a statistical difference about what the estimate is *for*.
 
@@ -589,16 +564,14 @@ That framing explains a choice made quietly at the top of this post: both the "t
 
 Fixing the structure buys one more thing the flexible model cannot offer, and it only shows up when you move to a second outbreak.
 
-# Meaningful parameters travel; fitted models don't
+## Parameter transfer
 
-The reason mechanistic models are worth their trouble is that their parameters *mean* something outside the fit. A recovery rate is a fact about the pathogen — how long a person stays infectious. A transmission rate is a fact about a place: how much people mix, how densely they live, how they behaved that month. A spline coefficient is a fact about nothing.
-
-That distinction is what lets a model cross from one outbreak to the next, provided you respect which half is which. Here is the scenario. **Last year** an epidemic ran its full course in a city in **Mexico**, so we have the whole curve and can calibrate it cleanly. **This year** a related pathogen is spreading in **Colombia**, and we are standing on day 22 — still climbing, no peak in sight — with a decision to make about hospital capacity. Can last year's model help this year's decision?
+Mechanistic parameters carry meaning across outbreaks. Scenario: calibrate full epidemic in Mexico; forecast Colombia from day 22 only.
 
 ::: {.callout-note}
-## The data here is synthetic
+## Transfer scenario data
 
-The "Mexico" and "Colombia" epidemics below are **simulated**, by the same SIR-plus-Negative-Binomial recipe as the outbreak above: I picked a population, a $\beta$, a $\gamma$, a reporting rate and a dispersion for each country, integrated the equations, and drew noisy counts. Nothing here describes a real outbreak in either place, and the country names are only there to make "same pathogen, different setting" concrete. The two are given the *same* $\gamma$ and *different* $\beta$ on purpose, because that is the situation the method is for — and, as before, knowing the truth is the only way to grade a forecast made from a partial curve. What is real is the method: which parameters should transfer, and how to combine a prior with local data.
+Mexico and Colombia series are simulated with shared $\gamma$, different $\beta$. Country labels illustrate cross-outbreak transfer only.
 :::
 
 Which parameters travel is not a matter of taste. It follows from what each one is a fact about.
@@ -723,7 +696,7 @@ On day `{python} T_NOW` the Colombian data is all growth — an exponential-look
 2. **Fit Colombia alone** with vague priors — honest, but mid-growth the likelihood is a long $\beta$–$\gamma$ ridge, so the forecast is barely constrained.
 3. **Bayesian calibration** — keep a flexible local $\beta$, but pin $\gamma$ with the Mexican prior, which supplies exactly the information the growth phase lacks.
 
-## Only the third option has a slot for last year's knowledge
+## Bayesian transfer forecast
 
 Training gave a point estimate; the maximum-likelihood calibration earlier added a likelihood and a Laplace-approximated band. Neither has anywhere to *put* the Mexican result. That is the practical case for going fully Bayesian — writing down a prior distribution over the parameters, multiplying it by the likelihood, and sampling from the product instead of approximating it — and it buys three things that matter precisely in a spot like Colombia-on-day-22.
 
@@ -888,7 +861,7 @@ $\beta$ and $\gamma$ pass: they settle quickly and then hover. $\rho$ and $I_0$ 
 
 That is the practitioner's lesson in miniature. Transfer across outbreaks is *not* "reuse the fitted object". It is deciding which parameters are **facts about the disease**, and therefore transfer as priors, and which are **facts about the place**, and therefore have to be re-estimated — then letting Bayesian calibration combine the two with the right amount of confidence in each.
 
-## The three approaches form a ladder
+## Method ladder
 
 All three have now run on the same SIR skeleton, which makes them easy to line up. Each keeps what the one before it had and adds a layer of honesty about what it does not know — at a matching cost in compute and care.
 
@@ -904,7 +877,7 @@ All three have now run on the same SIR skeleton, which makes them easy to line u
 | **Cost** | lowest | low | highest (sampling + convergence checks) |
 | **Reach for it when** | a quick check, with clean and plentiful data | you need honest intervals and the params are identifiable | data is partial or correlated, or you have outside knowledge to inject |
 
-# The heavier machinery is all still calibration
+## Extended calibration methods
 
 Everything above used deterministic equations, simple likelihoods, and posteriors we approximated by hand — first with Laplace, then with a Metropolis sampler written out in full. Production forecasting reaches for heavier tools than these, and it is worth knowing what they are and, more importantly, what they are versions of.
 
@@ -916,12 +889,12 @@ Everything above used deterministic equations, simple likelihoods, and posterior
 
 The through-line is that every item on that list is a richer way to do **calibration** — a better representation of uncertainty and of how the data came to exist — and not one of them is a fancier way to fit a curve.
 
-# What to carry out of this
+## Summary
 
 Six things this post actually demonstrated, rather than asserted, with the numbers that back each one.
 
 ::: {.callout-tip}
-## Six lessons
+## Lessons
 
 1. **A good fit is not a good forecast.** The trained model matched the observed counts across the whole horizon and still recovered $R_0 \approx 1.6$ against a true $3.0$ — a completely different epidemic, and a final size of 62% of the city instead of 94%.
 2. **Calibration is a different task, not a better optimizer.** It fits the observation process and the noise as well as the dynamics, and returns distributions instead of points. Same data, same equations, different target.
@@ -952,13 +925,11 @@ And each has a direct replacement.
 - When adapting a model across regions or seasons, split the parameters into *transferable* (biology) and *local* (place and behaviour). Carry the first as priors, re-fit the second.
 - Treat a point estimate as a starting point and calibration as the finish line.
 
-Which is where we came in. The machine-learning reflex — pick a loss, minimize it, check the score — is not wrong so much as under-specified: it optimizes the fit between a model and some numbers, and stays silent about everything between the numbers and the world. On this outbreak that silence cost an $R_0$ of 1.6 instead of 3.0, a final size of 62% instead of 94%, and a confident line where an interval belonged. Nothing exotic fixed it. Writing down how cases get counted, choosing a noise model that matches how counts actually behave, and reporting a distribution rather than a point were enough — and they were enough because they put into the model the parts of the story the data alone could never supply.
+Include observation and noise models; validate temporally; report predictive distributions.
 
-## Where to go next
+## Extensions
 
-Four natural extensions, each relaxing an assumption made here.
-
-- **SEIR models**, which add an Exposed compartment for people who are infected but not yet infectious — necessary for any disease with a meaningful incubation period.
-- **Bayesian inference in PyMC or Stan**, for full posteriors without hand-rolling a sampler.
-- **Hierarchical models** that pool information across regions or outbreaks at once, the principled version of the Mexico → Colombia transfer we did by hand.
-- **Stochastic epidemic models** — chain-binomial, or Gillespie simulation — for small populations where the randomness in who infects whom, not just the randomness in counting, drives the dynamics.
+- SEIR and other compartment extensions.
+- Stan/PyMC for full Bayesian inference.
+- Hierarchical pooling across regions.
+- Stochastic epidemic simulators for small $N$.

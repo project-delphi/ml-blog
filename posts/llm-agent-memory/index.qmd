@@ -15,17 +15,22 @@ format:
     toc: true
     toc-depth: 2
     code-fold: true
+    number-sections: true
 ---
 
 ![Your LLM Has No Memory. Everything Else Is Engineering.](./cover.png)
 
-You are building a voice assistant. Speech in, transcript to a model, reply out, a text-to-speech engine reads it aloud. During a call it works beautifully — it remembers that the user said "call me Alex" ninety seconds ago and keeps the thread. Then the call ends, Alex phones back next morning, and the assistant has no idea who is speaking or that it was asked yesterday for a calmer voice.
+An LLM is **stateless per call**: each request is independent; no state survives inside the model. "Memory" is external engineering — what goes into the prompt, what is stored outside it, and when it is re-injected.
 
-Nothing broke. **An LLM is stateless per call**: you send a request, it computes a reply, and no state survives inside the model afterwards. Everything anyone calls "memory" is external engineering around that stateless core — what you put in the prompt, what you store outside it, and when you pull it back in.
+This post uses a voice assistant (speech in, transcript to model, text-to-speech out) as the running example.
 
-## Short-term memory is just the context window, replayed every turn
+## Context window
 
-Within one call the assistant appears to remember because you re-send the conversation. The model reads one block of text per request and nothing else, so anything it should still know has to be inside that block. There is a ceiling on how much text fits — that ceiling is the *context window*, and the whole conversation lives underneath it. Turn three is therefore not a lone question; it is the system prompt and every prior turn, shipped again as one request:
+Within one call, the model appears to remember because the full conversation is re-sent each turn.
+
+- The model reads one block of text per request.
+- The **context window** caps how much text fits; the transcript lives under that ceiling.
+- Turn *n* includes the system prompt and all prior turns in one request.
 
 ```{python}
 SYSTEM = "You are a phone assistant. Two sentences max; replies are spoken aloud."
@@ -41,11 +46,9 @@ request += [{"role": r, "content": c} for r, c in turns]
 print(f"{len(request)} messages, {sum(len(m['content']) for m in request)} characters sent")
 ```
 
-Every one of those messages goes over the wire on *this* turn, and again on the next. That transcript is short-term memory, and the call is its lifetime.
+Every message is sent on each turn. Latency and cost grow with transcript length.
 
-That transcript grows every turn, and it is billed and read in full every time, so latency and cost climb with it. The crude answer is to drop the oldest turns once the window fills. It is also the wrong one: the oldest turn is where Alex gave their name, usually the most valuable line in the window.
-
-A better answer keeps the information and throws away the wording. As the window fills, replace the older turns with a short summary of them, or delete content that has already done its job — a long tool result you have acted on and will not consult again. That is compaction, sometimes called context editing. Applied to a call that has run long:
+Compaction (**context editing**) replaces older turns with a summary when the window fills, rather than dropping the oldest turn outright (which often holds the most valuable facts).
 
 ```{python}
 def compact(history, keep=4):
@@ -60,29 +63,43 @@ long_call = turns * 8
 print(f"{len(long_call)} messages -> {len(compact(long_call))} after compaction")
 ```
 
-The salient facts survive because you chose them rather than letting position decide. It is still lossy: that summary cannot answer a question about a number mentioned in turn two. And however carefully you manage it, the window dies when the call does — so anything Alex should still hear tomorrow has to be written down somewhere else. The first place people look is the prompt.
+Compaction is lossy and dies when the call ends. Facts needed across sessions must be stored elsewhere.
 
-## The system and user prompts are injection points, not memory
+## Prompt slots
 
-Two things go into each request. The **system prompt** is the session's fixed frame: persona, rules, constraints. In a voice app it exists largely because the output is spoken — two or three sentences, no markdown, units spelled out, since the engine reads every character aloud and nobody wants to hear "asterisk asterisk". The **user prompt** is the live turn.
+Each request has two injection points, not memory stores:
 
-Neither *is* memory. They are slots. If something must survive the call, no prompt-writing achieves it; the fact has to live elsewhere and be injected back into a slot later. Which raises the real question: stored where?
+- **System prompt** — fixed frame: persona, rules, constraints. In voice apps: short replies, no markdown, units spelled out.
+- **User prompt** — the current turn.
 
-## Long-term memory is a storage choice, and there are four
+Cross-session facts must live outside the prompt and be injected back into a slot on the next call.
 
-Storing the fact outside the call is not one technique but four, and picking between them is an ordinary engineering question: how big is the thing you are keeping, do you know its shape in advance, and how do you find it again. A help-centre article, a user's preferred voice and an offhand remark about tone pull in three different directions; a fourth option, baking the fact into the model's weights, mostly pulls the wrong way.
+## Long-term storage options
 
-### RAG, when the fact lives in a large fuzzy corpus
+Four mechanisms; pick by size, shape, and lookup pattern:
 
-Alex asks whether the training plan syncs with a particular bike computer. The answer sits in a help-centre corpus of a few thousand articles that changes weekly. Nobody can paste a few thousand articles into a prompt, so the trick is to fetch only the handful that bear on the question and paste those. Finding them means turning each chunk of text into a list of numbers positioned so that passages about similar things sit close together — an *embedding* — doing the same to Alex's question at call time, and taking the nearest neighbours. That pattern, retrieval then generation over what you retrieved, is [retrieval-augmented generation](../how-does-rag-work/), or RAG. The match is by meaning rather than by words: Alex says "does it talk to my Garmin", the article says "supported head unit integrations". You pay an embedding call, extra tokens, and the occasional irrelevant chunk.
+### RAG
 
-### A key-value lookup, when the fact is small and discrete
+For facts in a large, fuzzy, changing corpus (e.g., help-centre articles).
 
-Alex's preferred voice is not a fuzzy question. It is one row: `user_id → voice_id`, where the value names a voice pack the speech engine loads. Embedding that and searching by cosine similarity is slower, costlier and less reliable than a lookup by key — same for name, language and timezone. People skip this mechanism because it isn't interesting, and it is right for most per-user facts, not least because the engine needs that voice ID on the latency path, where a vector search does not belong.
+- Embed document chunks; embed the query at call time; retrieve nearest neighbours by meaning.
+- Pattern: [retrieval-augmented generation](../how-does-rag-work/) (RAG).
+- Cost: embedding call, extra tokens, occasional irrelevant chunks.
 
-### A memory tool, when the model should decide what is worth keeping
+### Key-value lookup
 
-Both of those assume you know in advance what is worth storing. Some things you cannot anticipate — a passing complaint about the voice, a habit you never thought to model. So hand the decision to the agent: give it a couple of functions it is allowed to call, one that appends a line to a file and one that reads the file back, and let it judge what deserves writing down. Functions offered to a model this way are its *tools*, and a pair of them pointed at durable storage is a memory tool. Alex mentions the default voice is a bit sharp, and the agent writes itself a note — one tool call, no schema:
+For small, discrete per-user facts (voice ID, name, language, timezone).
+
+- `user_id → voice_id` is faster and more reliable than vector search.
+- Belongs on the latency path (e.g., TTS voice selection).
+
+### Memory tool
+
+For facts the schema did not anticipate.
+
+- Give the agent write/read tools pointed at durable storage.
+- The agent decides what to persist (e.g., tone preferences).
+- Requires curation: files grow, contradict, and go stale.
 
 ```{python}
 import tempfile
@@ -103,23 +120,24 @@ print(memory_write("u_8213", "- Prefers a calm, low-pitched voice; dislikes the 
 print(memory_write("u_8213", "- Usually asks about cycling training."))
 ```
 
-On a new call it reads that back before replying. You get memory for what no schema anticipated; you take on curation, because the file grows, contradicts itself and goes stale unless you prune it.
+### Fine-tuning
 
-### Fine-tuning, which is rarely the answer for personalisation
+Rarely appropriate for personal facts.
 
-The fourth option is to change the model itself — carry on training it on your own examples until the fact is part of its weights. That is fine-tuning, and for personal facts it is almost always the wrong tool. You cannot edit one user's preference back out, you cannot inspect what was stored, and correcting a typo means another training run. Fine-tuning shapes how a model behaves; what it knows about a particular person belongs in storage you can read and delete.
+- Facts become part of model weights; not editable per user, not inspectable, not deletable without retraining.
+- Use for behavior and style, not per-user state.
 
-Three usable mechanisms, then, plus one to avoid. Running them together takes a little more machinery than the four ideas suggest.
+## Compaction and memory tool ordering
 
-## Compaction and a memory tool have to be paired
+Compaction rewrites older turns into a summary. If compaction runs before the memory tool writes durable facts, information is lost.
 
-On a long session the two in-call mechanisms collide. Compaction rewrites older turns into a summary; the memory tool is what makes a fact outlive the call. Run compaction first and the summary eats the sentence where Alex said the voice was too sharp before anything durable was written. So the agent should write out what matters before the summary lands, which makes the pairing an ordering constraint rather than a stylistic choice.
+- Write durable facts **before** compaction lands.
+- RAG needs a vector database for embedded corpus search.
+- **Prompt caching** is a latency/billing optimization over a stable prefix, not memory.
 
-Two supporting pieces sit underneath. RAG needs somewhere to keep the embedded corpus and search it quickly, which is what a vector database is for. And a large fixed prefix — a long system prompt, a stable set of instructions — can be cached by the provider so it is not re-processed on every turn. Prompt caching is not memory: it is a latency and billing optimisation over content you were resending anyway.
+## Session assembly
 
-## The second call is assembled, not remembered
-
-Put the pieces on one timeline and the illusion comes apart. Session one wrote those two lines to the memory file and put the voice ID in a key-value store. Session two is the next morning: new call, empty window, nothing shared with yesterday. Everything the assistant "knows" about Alex, your code assembles before the model sees a single token:
+Session two starts with an empty window. The assistant "knows" the caller because code assembles context before the first token:
 
 ```{python}
 voices = {"u_8213": "bm_george"}  # key-value store: user_id -> Kokoro voice pack
@@ -132,17 +150,17 @@ print("---")
 print(system_prompt)
 ```
 
-That is the whole trick: a key lookup for the voice, a memory file read into the system prompt slot, and an empty window that fills as the call proceeds. Ten turns later the bike computer question arrives and the agent falls back to RAG mid-call.
+- Key-value lookup for voice
+- Memory file read into system prompt
+- Empty window filled turn by turn; RAG may run mid-call for corpus questions
 
-Three of the four storage mechanisms in a single call, alongside the window that fills as it runs, each doing the one thing it is good at. Choosing *between* them is usually the wrong framing; they answer different questions. The cheapest of the three is worth a second look, because of what it is standing in for.
+## Kokoro TTS
 
-## The voice is a model too, and it fits in 82 million parameters
+`bm_george` names a voice pack in [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M): 82M parameters, Apache-2.0, StyleTTS 2 architecture, ISTFTNet vocoder, 54 voices, ~327MB.
 
-`bm_george` is not a product code from a speech vendor. It names a voice pack in [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), a text-to-speech model whose weights are published for anyone to download and run — 82 million parameters under an Apache-2.0 licence, built on the StyleTTS 2 architecture, with the final step from the model's internal representation to an audio waveform handled by an ISTFTNet vocoder rather than a diffusion stack. It ships 54 voices across eight languages in about 327MB.
+Personalizing voice costs one string in a key-value row; the TTS model runs locally.
 
-That size is the point. Personalising the voice costs one short string in a key-value row, and the model that speaks it runs on your own machine, so the lookup stays on the latency path without a network call behind it.
-
-Listen to what the lookup buys. Both clips came out of the same script in this post's `src/` directory, run ahead of the render against Kokoro's own weights; only the name in the greeting and the voice ID differ:
+Audio clips were generated ahead of render by `src/make_audio.py` against Kokoro weights; only greeting text and voice ID differ:
 
 ::: {.widget}
 
@@ -203,11 +221,9 @@ document.querySelectorAll('.tts-play').forEach(function (button) {
 
 :::
 
-The second clip knows two things the first does not, and neither of them came out of the model.
+Session 2 uses name from the memory file and voice from the key-value store; neither came from the LLM.
 
-## Only one of these mechanisms lives inside the model
-
-Laid side by side, the mechanisms sort themselves by a single question: where do the bytes sit when nobody is on the call. The answer is a request you rebuild, a datastore you own, or — in exactly one row — the weights themselves, which is the row you least want to be using for a person's name.
+## Mechanism comparison
 
 | Concept | What it stores | Where it lives | Persists across sessions? | Best for |
 |---|---|---|---|---|
@@ -220,8 +236,15 @@ Laid side by side, the mechanisms sort themselves by a single question: where do
 | Memory tool (agent-managed files) | Whatever the model judged durable | Files it reads and writes via tools | Yes | Preferences no schema anticipated |
 | Fine-tuning | Patterns baked into weights | The model itself | Yes, but not editable | Behaviour and style, not personal facts |
 
-## Memory is a design decision, not a model feature
+## Debugging
 
-The assistant that greeted Alex by name on the second call is not a smarter model than the one that forgot. It is the same stateless function, called with a better-assembled prompt.
+The model never remembers; failures are assembly or storage issues:
 
-Which tells you where to look when it breaks. Forgetting something four turns back is a compaction problem. Forgetting between calls means nothing was stored. Stating something false means retrieval missed, or a stored fact went stale. None of those are the model failing to remember. It was never remembering anything.
+- Forgetting within a call → compaction dropped information
+- Forgetting between calls → nothing was stored
+- False statements → retrieval miss or stale stored fact
+
+## References
+
+- [How Does RAG Work?](../how-does-rag-work/)
+- [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) — text-to-speech model used for demo audio
