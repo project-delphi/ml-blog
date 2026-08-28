@@ -15,7 +15,7 @@ A personal ML/data blog ("Synthetic Musings") built with [Quarto](https://quarto
 - **Preview**: prefer `quarto preview posts/<slug>/index.qmd` — a whole-project preview indexes every post. Or serve the built output: `python -m http.server 8000 --directory docs`.
 - **Checks** (there is no test suite): `make check-posts` runs `scripts/check_posts.py` — stdlib-only, so it works on any interpreter — verifying that code posts pin a kernel + `requirements.txt`, that every pinned kernel appears in `make kernels-stub`, and that no post's frozen output has drifted from its source. Run it before any full render. `.claude/hooks/test-block-main-commit.sh` asserts the commit hook's allow/block matrix; run it after touching that hook.
 - **`make install`**: `uv sync` the base dev/lint toolchain into `.venv` (no per-post ML deps). Installs from the committed `uv.lock` rather than re-resolving, and *prunes* anything not in the lock — hand-installed extras will not survive. `make lock` regenerates the lock without touching `.venv`. `requires-python = ">=3.11"`; raise it rather than lower it, since lowering re-forks the lock across interpreter versions.
-- **Lint**: black, ruff, mypy, pyupgrade, commitizen, codespell are configured in `.pre-commit-config.yaml` and `pyproject.toml`, but hooks aren't installed — run `pre-commit run --all-files` manually.
+- **Lint**: black, ruff, mypy, pyupgrade, commitizen, codespell are configured in `.pre-commit-config.yaml` and `pyproject.toml`, but hooks aren't installed — run them manually, scoped to the files you touched: `pre-commit run --files <paths>`. **Not `--all-files`**: the repo carries years of pre-existing lint debt, so that rewrites ~235 unrelated files into your diff.
 - `.ipynb` posts are never executed by Quarto; their stored cell outputs are used as-is, which is why none of the 8 have a `_freeze/` record.
 
 ## Workflow
@@ -62,7 +62,7 @@ Synthetic data is not exempt: say it is synthetic, give the generating process, 
 
 Posts are dependency-isolated: `pyproject.toml` carries only dev/lint tooling, no numpy/sklearn/torch.
 
-1. **Executes at render** — its own gitignored `.venv-<slug>` at the repo root, a named Jupyter kernel, `jupyter: <kernel-name>` in frontmatter, and a committed `posts/<slug>/requirements.txt`. 27 posts. Venv and kernel names are historical abbreviations and often do **not** match the slug (`convex-optimization-interior-point-methods` → `.venv-ipm`/`ipm-blog`; `sir-training-vs-calibration` → `.venv-sir`/`sir-blog`) — read the post's `jupyter:` field rather than guessing.
+1. **Executes at render** — its own gitignored `.venv-<slug>` at the repo root, a named Jupyter kernel, `jupyter: <kernel-name>` in frontmatter, and a committed `posts/<slug>/requirements.txt`. 37 posts (count them with `ls posts/*/requirements.txt`; this number goes stale). Venv and kernel names are historical abbreviations and often do **not** match the slug (`convex-optimization-interior-point-methods` → `.venv-ipm`/`ipm-blog`; `sir-training-vs-calibration` → `.venv-sir`/`sir-blog`) — read the post's `jupyter:` field rather than guessing.
 2. **Displays code only** — all cells `#| eval: false`. Pins `jupyter: blog-base`, a shared kernel over the base `.venv` (`make install && make kernel`). Four posts, all Claude-API ones: `claude-api-eval-pipeline`, `langgraph-vs-llamaindex`, `messages-api-streaming`, `structured-json-with-claude`. Quarto still needs *some* working kernel to structurally process `{python}` cells even when nothing runs. (`mermaid` and other diagram blocks go through Quarto's own filters and need no kernel.)
 3. **Assets generated ahead of the render** — see § `posts/<slug>/src/` below.
 
@@ -118,9 +118,16 @@ The trade: for these thirteen, `requirements.txt` is a copy of a shared freeze, 
 
 ### `posts/<slug>/src/` — assets built outside the render
 
-Fourteen posts carry a `src/` directory of scripts that run *ahead of* the render, with their output committed. Most hold a `make_cover.py`; some go further — `metagenomics/src/make_figs.py`, `open-source-tts-history/src/make_audio.py` (which writes the committed `audio/*.mp3`), and `bayesian-bootstrap/src/` with a full module set (`bootstrap.py`, `data.py`, `mnist_experiment.py`, `export_widget_data.py`).
+Twenty-seven posts carry a `src/` directory of scripts that run *ahead of* the render, with their output committed. Nearly all hold a `make_cover.py`; some go further — `metagenomics/src/make_figs.py` and `voice-ai-architectures-2026/src/make_figs.py` (figures), `open-source-tts-history/src/make_audio.py` and `llm-agent-memory/src/make_audio.py` (which write the committed `audio/*.mp3`), `kite-shape-analysis/src/` (`prepare_photos.py`, `digitize_landmarks.py`), and full module sets under `bayesian-bootstrap/src/`, `svd-rotate-stretch-rotate/src/` and `explainability-localization/src/`. A `src/export_widget_data.py` writes the JSON behind a post's interactive widget (`bayesian-bootstrap`, `svd-rotate-stretch-rotate`, `correlation-concordance-discordance`).
 
 These scripts are **not** executed by Quarto and are not covered by `_freeze/` or `make check-posts`. Regenerating an asset means running the script yourself and committing the result. They may also carry their own dependency pin (`open-source-tts-history/src/requirements-audio.txt`) and their own venv with no kernel and no post pinning it — `.venv-kokoro` exists solely to run `make_audio.py`, which is why it looks orphaned next to the kernel-backed venvs.
+
+### What `.gitignore` swallows
+
+Two rules bite when adding a post:
+
+- **`data/` is ignored everywhere.** A post that reads a data file at render time needs that path un-ignored, or a clone cannot rebuild it. `posts/volcano-plots/data/` is the one exception already carved out — copy its two-line pattern (un-ignore the directory *and* `/**`; git will not descend into an excluded directory to find a negated file inside it).
+- **Training artefacts are ignored on purpose**: `checkpoints/`, `posts/**/checkpoints/`, `posts/**/results/`, and Quarto's `posts/**/index_files/` and `index_cache/`. A fine-tuning post drops hundreds of MB there relative to the render's cwd. The published copies live in `docs/` and `_freeze/`.
 
 ### Why `_freeze/` is committed
 
