@@ -6,29 +6,56 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A personal ML/data blog ("Synthetic Musings") built with [Quarto](https://quarto.org/) and published to GitHub Pages at https://project-delphi.github.io/ml-blog/. Each post is a self-contained `.qmd` or `.ipynb` under `posts/<slug>/`; the rendered site lives in `docs/` and is served from `main`. There is no CI workflow — `docs/` must be rendered locally and committed *in the same PR* as the source change, or the published site drifts from the source.
 
-## Commands
+The product here is prose. The tooling below exists to get prose onto the web with its numbers intact; it is not the point of the repo.
 
-- **Render one post**: `quarto render posts/<slug>/index.qmd`. Narrow blast radius, but it **always executes that post's code** — `freeze` is honoured only on a *project* render. Needs the post's real venv.
-- **Render the whole site**: `QUARTO_PYTHON="$(pwd)/.venv/bin/python" quarto render .` (`make quatro` runs the bare form). Deletes and rebuilds `docs/`, but *respects* `freeze: auto` — it re-executes only posts whose **source md5 changed** since their `_freeze/` record was written, which today is none. The right tool for anything site-wide: nav, theme, `_quarto.yml`, a stale `search.json`.
-  - `QUARTO_PYTHON` is not optional. A bare `quarto render .` resolves a Python that cannot see `--user`-registered kernelspecs and dies on the first post pinning a named kernel — after it has already deleted `docs/`. Recover with `git checkout -- docs`.
-  - Kernelspecs resolve while Quarto *indexes* the project, before it consults `_freeze/`. A missing kernel fails the whole render, frozen output or not. On a fresh clone run `make kernels-stub` first.
-- **Preview**: prefer `quarto preview posts/<slug>/index.qmd` — a whole-project preview indexes every post. Or serve the built output: `python -m http.server 8000 --directory docs`.
-- **Checks** (there is no test suite): `make check-posts` runs `scripts/check_posts.py` — stdlib-only, so it works on any interpreter — verifying that code posts pin a kernel + `requirements.txt`, that every pinned kernel appears in `make kernels-stub`, and that no post's frozen output has drifted from its source. Run it before any full render. `.claude/hooks/test-block-main-commit.sh` asserts the commit hook's allow/block matrix; run it after touching that hook.
-- **`make install`**: `uv sync` the base dev/lint toolchain into `.venv` (no per-post ML deps). Installs from the committed `uv.lock` rather than re-resolving, and *prunes* anything not in the lock — hand-installed extras will not survive. `make lock` regenerates the lock without touching `.venv`. `requires-python = ">=3.11"`; raise it rather than lower it, since lowering re-forks the lock across interpreter versions.
-- **Lint**: black, ruff, mypy, pyupgrade, commitizen, codespell are configured in `.pre-commit-config.yaml` and `pyproject.toml`, but hooks aren't installed — run them manually, scoped to the files you touched: `pre-commit run --files <paths>`. **Not `--all-files`**: the repo carries years of pre-existing lint debt, so that rewrites ~235 unrelated files into your diff.
-- `.ipynb` posts are never executed by Quarto; their stored cell outputs are used as-is, which is why none of the 8 have a `_freeze/` record.
+## Write in plain English
+
+`STYLE.md` owns the prose rules — read it in full before writing or editing a post. The single rule it all serves: **write so a smart reader who has never met the topic follows every sentence on the first pass.** That is harder than it sounds, and it is the most common thing to get wrong here.
+
+What that means concretely:
+
+- **Explain the idea before you name it.** Describe what the thing does in ordinary words, then attach the technical term to it. Never the reverse.
+- **Warm up before the mechanics.** The first time a section reaches for a new idea, mechanism, or dataset, write 2–4 plain sentences first: what problem this solves, why it matters, what the reader should hold in mind. After that, one sentence either side of a code block carries it. Never open a section with code, a bullet list, or a table.
+- **Everyday words over Latinate ones** — "use" not "utilize", "help" not "facilitate", "about" not "approximately". Active voice by default.
+- **Split the sentence you have to read twice.** Two or more nested subordinate clauses is the usual tell. This is not a ban on the long sentence: an em-dash gloss, or a concrete case hung off an abstract claim, reads as one clear beat. Keep those.
+- **Every piece of jargon gets a plain restatement nearby** the first time it appears.
+- **One idea per paragraph.**
+- **Match the register of the post you are editing.** These rules tighten prose; they do not convert a post to a different voice. Personal essays especially must not drift into guide voice — claims turning into requirements lists, headings into section labels.
+
+`STYLE.md` carries two calibration examples (cross-validation, the bootstrap). Read the tone off those rather than guessing at it.
+
+Above the sentence level, a post is **one argument, not a pile of sections**: headings state claims so the table of contents reconstructs the argument, each section's first sentence links back to the previous result and its last names the gap the next section fills, and the close returns to the opening claim now that it is earned. Caveats go inline where the objection occurs, not in a "Limitations" bin at the end.
+
+### Two failure modes no check catches
+
+- **An artifact that teaches the opposite of the prose.** A widget, worked example, or figure can be internally correct and still contradict the sentence pointing at it. If the post tells the reader to drag a slider to 12 and watch a band rise, drive it to 12 and confirm the band rises. Every automated check passes either way, because they are all per-artifact.
+- **A heading that contradicts its own section.** Read the headings alone, through the post's own metaphor, and ask what argument they reconstruct. In a post about ladders, a heading saying the threshold sits "below" the old one read as *a lower bar* while its section argued the opposite.
+
+### Never invent first-person detail
+
+Personal essays land through specifics, and I do not have the author's. Write the scene in the second person or as a hypothetical someone ("picture being twelve in a house where the rules move without notice") — that carries the concreteness an essay needs while claiming nothing about his life. The same pull produces invented citations: the active-voice rule wants a subject, and the nearest one is often a source the post does not have. Ask for the real specifics instead; it improves the essay more than anything invented, and a fabricated memory published under someone's name is unfixable after the fact.
+
+### Always situate the data
+
+Any post that uses, plots, or even mentions a dataset must say where it came from before doing anything with it — in prose, not a checklist bolted on:
+
+- **Provenance** — what the dataset is, with a link or citation.
+- **Collector and motive** — who gathered it, under what program, and why they went to the trouble. Instrument, survey, scrape, simulation: say which.
+- **Objective** — what is being asked *of this data in this post*, and what the target means in the real world.
+- **Downstream impact** — what a decision made from this analysis would affect (a diagnosis, a loan, a forecast, a research conclusion), and what being wrong costs.
+- **Why this method** — what property of *this* data (sample size, noise, class imbalance, heavy tails, hierarchy, missingness, small-n uncertainty) makes the post's technique the right tool, and which quantity it improves.
+
+Synthetic data is not exempt: say it is synthetic, give the generating process, and explain what real situation it stands in for and why simulating beats a real dataset here.
 
 ## Workflow
 
 **Never commit to `main`.** Every change — new post, edit, one-line typo — goes: feature branch → commit (source *and* re-rendered `docs/` together) → push → PR with a real description → review → merge. The `ship-pr` skill automates this.
 
-This is enforced. `.claude/settings.json` registers a `PreToolUse` hook on `Bash` running `.claude/hooks/block-main-commit.sh`, which denies any command reaching `git commit` while HEAD is on `main`/`master`. Branching first passes; switching onto `main` is not an escape hatch. To override deliberately, commit from your own terminal or disable the hook via `/hooks`.
+This is enforced. `.claude/settings.json` registers a `PreToolUse` hook on `Bash` running `.claude/hooks/block-main-commit.sh`, which denies any command containing a commit while HEAD is on `main`/`master`. It matches on the command text, so a heredoc that merely *mentions* one is denied too — write such files with the Write tool. Branching first passes; switching onto `main` is not an escape hatch. To override deliberately, work from your own terminal or disable the hook via `/hooks`.
 
-**Hand back a localhost preview link whenever a unit of work is complete** — a clickable URL, not just "done": the URL `quarto preview posts/<slug>/index.qmd` prints, or `http://localhost:8000/posts/<slug>/index.html` from the static server above.
+**Hand back a localhost preview link whenever a unit of work is complete** — a clickable URL, not just "done": the URL `quarto preview posts/<slug>/index.qmd` prints, or `http://localhost:8000/posts/<slug>/index.html` from the static server below.
 
-**Put that link last.** It goes at the very end of the reply, after the summary, caveats and any list of what was skipped — the final thing on screen, on its own line, so it is never buried mid-message and never needs scrolling back to find. One link per reply; if several posts changed, link the one the work was about and mention the others by slug.
-
-Once the change is merged the preview server is gone (see below), so there is no localhost link left to give. On that final reply, end with the published URL instead — `https://project-delphi.github.io/ml-blog/posts/<slug>/` — after the confirmation that no server survived. Say that it goes live once Pages rebuilds: the deploy is asynchronous, so that URL 404s for a minute or two after the merge commit lands.
+**Put that link last.** It goes at the very end of the reply, after the summary, caveats and any list of what was skipped — the final thing on screen, on its own line, so it is never buried mid-message. One link per reply; if several posts changed, link the one the work was about and mention the others by slug.
 
 **Kill every preview server once the change is merged**, then confirm nothing survives (`pgrep -fl "quarto preview"` silent; no Python listener rooted in this repo) and say so in the wrap-up:
 
@@ -42,19 +69,18 @@ pgrep -f "http\.server" | while read -r pid; do
 done
 ```
 
-## Writing conventions
+With the server gone there is no localhost link left to give, so that final reply ends with the published URL instead — `https://project-delphi.github.io/ml-blog/posts/<slug>/` — after the confirmation that no server survived. Say that it goes live once Pages rebuilds: the deploy is asynchronous, so that URL 404s for a minute or two after the merge commit lands.
 
-`STYLE.md` owns the prose rules — the spine of a post, section seams, sentence-level style, tone. Read and follow it before writing or editing a post. What follows here is what sits outside prose style: where the data came from, and the frontmatter and assets a post carries.
+## Commands
 
-**Always situate the data.** Any post that uses, plots, or even mentions a dataset must say where it came from before doing anything with it — in prose, not a checklist bolted on:
-
-- **Provenance** — what the dataset is, with a link or citation.
-- **Collector and motive** — who gathered it, under what program, and why they went to the trouble. Instrument, survey, scrape, simulation: say which.
-- **Objective** — what is being asked *of this data in this post*, and what the target means in the real world.
-- **Downstream impact** — what a decision made from this analysis would affect (a diagnosis, a loan, a forecast, a research conclusion), and what being wrong costs.
-- **Why this method** — what property of *this* data (sample size, noise, class imbalance, heavy tails, hierarchy, missingness, small-n uncertainty) makes the post's technique the right tool, and which quantity it improves.
-
-Synthetic data is not exempt: say it is synthetic, give the generating process, and explain what real situation it stands in for and why simulating beats a real dataset here.
+- **Render one post**: `quarto render posts/<slug>/index.qmd`. Narrow blast radius, but it **always executes that post's code** — `freeze` is honoured only on a *project* render. Needs the post's real venv.
+- **Render the whole site**: `QUARTO_PYTHON="$(pwd)/.venv/bin/python" quarto render .` (`make quatro` runs the bare form). Deletes and rebuilds `docs/`, but *respects* `freeze: auto` — it re-executes only posts whose **source md5 changed** since their `_freeze/` record was written, which today is none. The right tool for anything site-wide: nav, theme, `_quarto.yml`, a stale `search.json`.
+  - `QUARTO_PYTHON` is not optional. A bare `quarto render .` resolves a Python that cannot see `--user`-registered kernelspecs and dies on the first post pinning a named kernel — after it has already deleted `docs/`. Recover with `git checkout -- docs`.
+  - Kernelspecs resolve while Quarto *indexes* the project, before it consults `_freeze/`. A missing kernel fails the whole render, frozen output or not. On a fresh clone run `make kernels-stub` first.
+- **Preview**: prefer `quarto preview posts/<slug>/index.qmd` — a whole-project preview indexes every post. Or serve the built output: `python -m http.server 8000 --directory docs`.
+- **Checks** (there is no test suite): `make check-posts` runs `scripts/check_posts.py` — stdlib-only, so it works on any interpreter — verifying that code posts pin a kernel + `requirements.txt`, that every pinned kernel appears in `make kernels-stub`, and that no post's frozen output has drifted from its source. Run it before any full render. `.claude/hooks/test-block-main-commit.sh` asserts the commit hook's allow/block matrix; run it after touching that hook.
+- **`make install`**: `uv sync` the base dev/lint toolchain into `.venv` (no per-post ML deps). Installs from the committed `uv.lock` rather than re-resolving, and *prunes* anything not in the lock — hand-installed extras will not survive. `make lock` regenerates the lock without touching `.venv`. `requires-python = ">=3.11"`; raise it rather than lower it, since lowering re-forks the lock across interpreter versions.
+- **Lint**: black, ruff, mypy, pyupgrade, commitizen, codespell are configured in `.pre-commit-config.yaml` and `pyproject.toml`, but hooks aren't installed — run them manually, scoped to the files you touched: `pre-commit run --files <paths>`. **Not `--all-files`**: the repo carries years of pre-existing lint debt, so that rewrites ~235 unrelated files into your diff.
 
 ## Architecture
 
@@ -65,6 +91,8 @@ Posts are dependency-isolated: `pyproject.toml` carries only dev/lint tooling, n
 1. **Executes at render** — its own gitignored `.venv-<slug>` at the repo root, a named Jupyter kernel, `jupyter: <kernel-name>` in frontmatter, and a committed `posts/<slug>/requirements.txt`. 37 posts (count them with `ls posts/*/requirements.txt`; this number goes stale). Venv and kernel names are historical abbreviations and often do **not** match the slug (`convex-optimization-interior-point-methods` → `.venv-ipm`/`ipm-blog`; `sir-training-vs-calibration` → `.venv-sir`/`sir-blog`) — read the post's `jupyter:` field rather than guessing.
 2. **Displays code only** — all cells `#| eval: false`. Pins `jupyter: blog-base`, a shared kernel over the base `.venv` (`make install && make kernel`). Four posts, all Claude-API ones: `claude-api-eval-pipeline`, `langgraph-vs-llamaindex`, `messages-api-streaming`, `structured-json-with-claude`. Quarto still needs *some* working kernel to structurally process `{python}` cells even when nothing runs. (`mermaid` and other diagram blocks go through Quarto's own filters and need no kernel.)
 3. **Assets generated ahead of the render** — see § `posts/<slug>/src/` below.
+
+`.ipynb` posts are never executed by Quarto; their stored cell outputs are used as-is, which is why none of the 8 have a `_freeze/` record.
 
 ### Building a post venv
 
@@ -135,7 +163,7 @@ Two rules bite when adding a post:
 
 `scripts/check_posts.py` grandfathers exactly those five in `LEGACY_NO_ENV`. **Shrink that set, never grow it.** A second exemption, `STALE_FREEZE_OK` (`pinecone-vs-weaviate`, `pyspark`), covers posts whose frozen output is knowingly stale but inert because they have no code cells at all; the checker cancels the exemption automatically if code cells later appear.
 
-**Editing a legacy post breaks it.** Quarto keys frozen output on an md5 of the source, so *any* edit — even a one-word prose fix — invalidates the record and makes the next project render try to execute a post that cannot execute. If you touch one, build it a venv + kernel + `requirements.txt` first and delete its `LEGACY_NO_ENV` entry. This is not hypothetical: the cover-image commits edited 11 sources without re-rendering and left the freeze cache silently stale for months.
+**Editing a legacy post breaks it.** Quarto keys frozen output on an md5 of the source, so *any* edit — even a one-word prose fix — invalidates the record and makes the next project render try to execute a post that cannot execute. If you touch one, build it a venv + kernel + `requirements.txt` first and delete its `LEGACY_NO_ENV` entry. This is not hypothetical: the cover-image commits edited 11 sources without re-rendering and left the freeze cache silently stale for months. `STYLE.md` therefore does not license a style rewrite of those five.
 
 ### One post calls a live API
 
