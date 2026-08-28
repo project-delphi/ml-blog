@@ -69,13 +69,13 @@ def main() -> int:
             ),
         )
 
-    for index, line in enumerate(["NumPy to JAX", "The Array Learned New Tricks"]):
+    for index, line in enumerate(["NumPy to JAX", "The Array That Learned New Tricks"]):
         axes.text(
             WIDTH / 2,
             446 + index * 74,
             line,
             color=WHITE,
-            fontsize=38 if index == 0 else 32,
+            fontsize=38 if index == 0 else 28,
             fontweight="bold",
             ha="center",
             va="center",
