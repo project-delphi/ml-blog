@@ -11,23 +11,22 @@ format:
         toc: true
         toc-depth: 3
         code-fold: true
+        number-sections: true
 ---
 
 ![Two Ways to Expand the Space: Persistent Homology and Kernel SVMs on the Same Toy Dataset](./cover.png)
 
-Draw a blob of points, then draw a ring of points around it, and try to separate the two groups with a straight line. You cannot. It takes about four seconds to convince yourself: wherever you put the line, the ring wraps around behind it and lands on both sides. The obstruction is not that the line is in the wrong place. It is that the ring encircles the blob, and no straight cut through the plane respects "encircles".
+A disk inside a ring is not linearly separable in $\mathbb{R}^2$. **Persistent homology** (unsupervised) reports the annular hole. A **kernel SVM** (supervised) finds a curved decision boundary. Neither fits a curve in the plane; both lift data into a richer space.
 
-Two tools that look nothing alike deal with this without complaint. **Persistent homology** — the machinery for finding holes — is handed the points with no labels at all and reports that there is one big hole here. A **kernel support vector machine** is handed the same points *with* their labels and draws a curve that separates them perfectly.
+## Toy dataset
 
-Neither of them fits a curved line in the plane. Both do the same thing instead: lift the data into a bigger space where the problem stops being curved, solve the easy version there, and read the answer back. The vocabularies could not be less alike, and the move underneath them is the same one.
+**Data provenance** (synthetic):
 
-## One dataset: a disk inside a ring, built to have exactly one hole
-
-The data is synthetic, and the reason is that the answer has to be known in advance for the comparison to mean anything. There is exactly one hole in this point cloud because I put it there, so any second feature persistent homology reports is noise I can name, and the SVM's boundary can be checked against a circle whose radius I already know.
-
-The generating process is two draws. A hundred points land uniformly inside a disk of radius 0.35 around the origin, labelled class 0. A hundred and forty more land on a circle of radius 1.0, each pushed in or out by Gaussian noise with standard deviation 0.06, labelled class 1. Together they are one point cloud $X \subset \mathbb{R}^2$ of 240 points with two labels, and the empty annulus between radius 0.35 and radius 1.0 is the hole.
-
-What it stands in for is any two-class problem where one class surrounds the other rather than sitting beside it — a normal operating regime ringed by fault conditions in every direction, a healthy range with abnormal values on both sides of it. Those are common, and they are exactly the cases where a linear model fails for a reason that has nothing to do with tuning.
+- 100 points uniform inside disk radius 0.35 (class 0).
+- 140 points on circle radius 1.0 + Gaussian noise $\sigma = 0.06$ (class 1).
+- 240 points total; empty annulus between radii 0.35 and 1.0 = one hole by construction.
+- Stands in for one class surrounding another (e.g. normal regime ringed by fault conditions).
+- Same shape as `make_circles` but one filled blob inside one ring (avoids two-loop bookkeeping).
 
 ```{python}
 import numpy as np
@@ -60,17 +59,15 @@ ax.legend(loc="upper right", fontsize=8)
 plt.show()
 ```
 
-This is the same shape of problem as `sklearn.datasets.make_circles`, deliberately, but framed as one filled blob inside one hollow ring rather than as two thin rings. The filled inner blob is what keeps the hole story clean: with two thin rings there would be two loops to talk about, and the argument would need a paragraph of bookkeeping it does not deserve. Everything from here on uses this exact `X` and `y`. No new dataset appears.
+All later sections use this fixed `X`, `y`.
 
-## Lens 1: persistent homology finds the hole without being told there is one
+## Persistent homology
 
-Forget the labels for this whole section. Persistent homology never sees them. It gets the 240 points and their pairwise distances, and nothing else.
+Labels are not used. Input: 240 points and pairwise distances.
 
-### Growing the space one radius at a time
+### Vietoris-Rips filtration
 
-The trick is to refuse to pick a scale. Fix a radius $\varepsilon \geq 0$ and join every pair of points closer together than $\varepsilon$; now let $\varepsilon$ grow from $0$ upward. Edges only ever get added, never removed, so what you get is not one picture of the data but a nested tower of them — the same 240 points connected up at every scale at once, instead of at one scale somebody had to guess. That tower is the **Vietoris-Rips filtration**, and the objects in it are *simplicial complexes*: graphs that also fill in their triangles and higher patches, so that a closed loop of edges can be distinguished from a loop that something has plugged.
-
-This is the "expanded space" of the post's title, in its first of two forms.
+Join pairs within radius $\varepsilon$; increase $\varepsilon$ from 0. Nested **simplicial complexes** $R_\varepsilon(X)$: edges, filled triangles, higher simplices. Distinguishes hollow loops from filled regions.
 
 ```{python}
 from itertools import combinations
@@ -99,20 +96,18 @@ plt.tight_layout()
 plt.show()
 ```
 
-Two counts describe each panel. $\beta_0$ is the number of separate pieces the points have been knitted into, and $\beta_1$ is the number of independent loops — closed rings of edges with nothing filling them in. Both come from the same `ripser` computation the next section runs, evaluated at these four radii. Reading left to right:
+Betti numbers at four scales (from `ripser`, evaluated at these $\varepsilon$):
 
-- $\varepsilon = 0.05$: almost nothing connects yet — 120 separate components, no loops. Too fine a scale to see any structure.
-- $\varepsilon = 0.15$: local neighborhoods have linked up (12 components), but there are 5 small, short-lived loops — artifacts of exactly which nearby points happened to connect first, not real structure.
-- $\varepsilon = 0.4$: the ring has consolidated into one single loop that closes all the way around ($\beta_1 = 1$), while the disk has become one solid, hole-free blob. Ring and disk are still two separate components ($\beta_0 = 2$) — not yet close enough to touch.
-- $\varepsilon = 0.8$: ring and disk have merged into one component, the gap between them has filled in with edges and triangles, and the loop is gone ($\beta_1 = 0$). The whole thing is now one contractible blob.
+- $\varepsilon = 0.05$: $\beta_0 = 120$, $\beta_1 = 0$ — too fine.
+- $\varepsilon = 0.15$: $\beta_0 = 12$, $\beta_1 = 5$ — transient micro-loops (noise).
+- $\varepsilon = 0.4$: $\beta_0 = 2$, $\beta_1 = 1$ — ring loop + separate disk blob.
+- $\varepsilon = 0.8$: $\beta_0 = 1$, $\beta_1 = 0$ — annulus filled; one component.
 
-The loop present at $\varepsilon = 0.4$ and gone by $\varepsilon = 0.8$ is the empty annulus between the disk and the ring — the hole this dataset was built to have. The five loops at $\varepsilon = 0.15$ are not that hole. They are sampling noise, gaps that happen to close a moment after they open.
+Single-scale snapshots mis-count loops; lifetime separates signal from noise.
 
-So a snapshot at any single radius is not enough: at $\varepsilon = 0.15$ you would count six loops and believe five lies. What separates them is not where they are but how long they last, and that is the one thing a single snapshot cannot report.
+### Persistence diagram
 
-### The one real loop outlives the fakes by a factor of four
-
-Tracking every loop from the radius where it opens to the radius where it closes gives each one a birth, a death, and a lifetime. Plot each as a point at (birth, death) and the picture sorts itself out: everything sits above the diagonal, since nothing closes before it opens, and the vertical distance from the diagonal is exactly the lifetime. Noise clings to the line. Real structure floats. That plot is the **persistence diagram**, and it is where the sweep across all scales gets cashed in.
+Each loop → (birth, death). Vertical distance from diagonal = lifetime.
 
 ```{python}
 from ripser import ripser
@@ -137,17 +132,13 @@ print(f"longest-lived H1 feature: born {top[0]:.3f}, dies {top[1]:.3f}, lifetime
 print(f"next-longest H1 lifetime: {np.sort(lifetimes)[-2]:.3f}")
 ```
 
-One $H_1$ point sits far above the diagonal. Every other one — all the transient micro-loops from the $\varepsilon = 0.15$ panel — hugs it. The real loop lives across a span of radii roughly four times the runner-up's, 0.354 against 0.089, and that ratio is the whole signal. Nobody told persistent homology to look for one hole in the middle. It swept every scale, recorded how long each loop lasted, and the real one outlasted the fakes.
+Longest $H_1$ lifetime ≈ 0.354 vs next-longest ≈ 0.089 (~4×). Labels never entered the computation.
 
-Notice what the computation never touched: the labels. Persistent homology describes the shape of the point cloud on its own terms, with no task attached — which also means it will never tell you which points are which class. For that, we have to start over with a method that does nothing else.
+## Kernel SVM
 
-## Lens 2: the kernel SVM finds a boundary, by making the space bigger
+Same 240 points with labels. Task: find a class separator.
 
-Now bring the labels back. This section drops the persistence machinery entirely and asks a different question of the same 240 points: given the labels, what rule separates the two classes?
-
-### The straight line fails, and not for want of tuning
-
-Start with the classifier that has no curve available to it at all. A linear support vector machine looks for the single straight line that best splits the two classes, so it is the cleanest way to show that the obstruction is structural rather than a matter of fitting harder.
+### Linear SVM failure
 
 ```{python}
 from sklearn.svm import LinearSVC
@@ -157,19 +148,11 @@ linear.fit(X, y)
 print(f"linear SVM training accuracy: {linear.score(X, y):.2f}")
 ```
 
-The linear SVM scores 0.58 on the data it was trained on, and that number is worse than it looks. There are 140 ring points out of 240, so calling every single point "ring" and going home scores 0.583. The fitted line has bought precisely nothing over the do-nothing classifier.
+Training accuracy 0.58 ≈ majority-class rate (140/240 ring points). Structural: ring wraps disk; no line separates classes.
 
-That is structural, not a tuning failure. The ring surrounds the disk symmetrically, so *any* line with some disk points on one side has ring points mixed in on that same side — the ring comes round the back. No slope and no offset fixes it, because the problem is not where the line is.
+### Explicit feature lift
 
-### Expanding the space by hand: one extra coordinate
-
-So change what the classifier is looking at instead of how hard it looks. This is the classic fix and the seed of the whole kernel trick: leave the classifier linear, and give it a space in which a line is enough. Map every point $x = (x_1, x_2)$ to
-
-$$
-\phi(x) = \left(x_1,\ x_2,\ x_1^2 + x_2^2\right) \in \mathbb{R}^3.
-$$
-
-The third coordinate is squared distance from the origin. It is cheap to compute, and it is exactly the quantity that tells disk points ($x_1^2+x_2^2$ small) from ring points ($x_1^2+x_2^2 \approx 1$). Picture the disk points staying put while the ring points get hoisted upward out of the plane: two flat sheets at different heights, with room for a plane between them.
+Map $x = (x_1, x_2) \mapsto \phi(x) = (x_1, x_2, x_1^2 + x_2^2)$. Third coordinate = squared radius; separates inner disk from outer ring.
 
 ```{python}
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
@@ -194,21 +177,17 @@ ax.legend()
 plt.show()
 ```
 
-The lift works, and the fitted plane says why in its coefficients. The weight on $x_1^2+x_2^2$ is 2.53 against 0.016 and 0.020 on $x_1$ and $x_2$, so the plane is barely tilted at all — it is a threshold on squared radius wearing a plane's clothes, dividing "closer than $r$ from the origin" from "farther than $r$". Training accuracy goes to 1.00. A curved boundary in the plane became a flat one in three dimensions, for the price of one well-chosen coordinate.
+Accuracy 1.00. Dominant coefficient on $x_1^2+x_2^2$ (2.53 vs ~0.02 on $x_1, x_2$). Requires prior knowledge of radial structure.
 
-That price is the catch. It was well-chosen because I already knew the data was radially structured, and there is no such coordinate lying around when you do not.
+### RBF kernel
 
-### The kernel trick: get the lift without ever building it
-
-Here is the way out, and it is one of the better ideas in machine learning. A support vector machine, it turns out, never needs the coordinates of the lifted points. Every step of fitting one can be written using only the *inner products* between pairs of lifted points — a number saying how aligned two points are in the new space. So if you can compute that number directly from the original two coordinates, you never have to build the lift at all.
-
-A function that hands you those inner products directly is a **kernel**: $k(x, x') = \langle \phi(x), \phi(x') \rangle$, a similarity score that behaves as if some feature map $\phi$ had been applied first, without $\phi(x)$ ever being computed for a single point. Since nothing is ever materialized, $\phi$ is free to be enormous. The RBF kernel,
+**Kernel** $k(x, x') = \langle \phi(x), \phi(x') \rangle$ without materializing $\phi$. RBF:
 
 $$
-k(x, x') = \exp\!\left(-\gamma \lVert x - x' \rVert^2\right),
+k(x, x') = \exp\!\left(-\gamma \lVert x - x' \rVert^2\right).
 $$
 
-corresponds to a $\phi$ with infinitely many coordinates — "RBF" for radial basis function, since it depends on the two points only through the distance between them. Fitting the SVM needs $k(x_i, x_j)$ for pairs of training points and nothing more, so the infinite dimension costs nothing. It is never written down.
+Corresponds to infinite-dimensional $\phi$; SVM uses only pairwise $k(x_i, x_j)$.
 
 ```{python}
 from sklearn.svm import SVC
@@ -234,68 +213,44 @@ ax.legend(loc="upper right", fontsize=8)
 plt.show()
 ```
 
-The RBF SVM was given the raw two coordinates and nothing else — no squared radius, no hint that the origin mattered — and it still lands on a boundary tracing almost exactly the circle the hand-built $\phi$ predicted, at 1.00 training accuracy, using 17 of the 240 points as support vectors. The kernel reproduced the useful part of that feature map from pairwise similarities alone.
+RBF boundary ≈ circular (matches hand-built $\phi$); 17 support vectors; no radial feature supplied.
 
-So both lenses have now been run, and both found the circle. That agreement is worth being suspicious of.
-
-## The agreement is a property of this dataset, not of the two methods
-
-The two methods reached the same place by routes with almost nothing in common, and the differences are easier to see side by side than in prose.
+## Method comparison
 
 | | Persistent homology | Kernel SVM |
 |---|---|---|
-| Uses the labels `y`? | No — entirely unsupervised | Yes — the boundary is fit to separate the two classes |
-| Object of study | The whole point cloud's shape | One decision surface |
-| Scale | Every $\varepsilon$ at once, kept in the diagram | One fixed, implicit scale (set by $\gamma$) |
-| "Expanded space" | A growing sequence of simplicial complexes $R_\varepsilon(X)$ | A single (implicit) feature space $\phi(X)$ |
-| Output | A multiset of (birth, death) pairs | A function $f(x) = \text{sign}(\sum_i \alpha_i y_i\, k(x, x_i) + b)$ |
-| What "the hole" becomes | An $H_1$ generator, born $\approx 0.29$, dies $\approx 0.65$ | Never named — just the region where $f(x)$ changes sign |
-| Guarantee | The diagram is provably stable to small perturbations of the points | The boundary provably maximizes margin on the training labels |
+| Uses labels `y`? | No | Yes |
+| Object of study | Whole point cloud shape | One decision surface |
+| Scale | Every $\varepsilon$ in diagram | One implicit scale ($\gamma$) |
+| Expanded space | Filtration $R_\varepsilon(X)$ | Implicit $\phi(X)$ |
+| Output | (birth, death) pairs | $f(x) = \text{sign}(\sum_i \alpha_i y_i k(x,x_i)+b)$ |
+| Hole in output | $H_1$ interval | Sign change of $f$ (unnamed) |
+| Stability | Stable to small point perturbations | Boundary sensitive to support vectors |
 
-The two answers coincide here for one reason: I labelled the points to straddle the topological feature. Class 0 is inside the hole and class 1 is on its rim, so the boundary that separates the labels and the loop that bounds the hole are forced to live in almost the same place — both roughly tracing the circle $x_1^2+x_2^2 = r^2$ for some $r$ between 0.35 and 1.0.
+Agreement on this dataset: class 0 inside hole, class 1 on rim → boundary and loop both ≈ circle $x_1^2+x_2^2 = r^2$, $r \in (0.35, 1.0)$.
 
-Break that arrangement and the agreement goes. Shuffle the 240 labels at random and the RBF SVM will still find a boundary at high training accuracy, memorizing the noise through its support vectors, with no relationship to the disk-and-ring geometry whatsoever. The persistence diagram computed on those same points would not move by a single coordinate, because it never looked at a label in the first place.
+Shuffle labels: SVM still fits training data; persistence diagram unchanged.
 
-That is the deeper divergence. Persistent homology asks what shapes are in this data, at every scale — a question about the data alone. The SVM asks what one rule separates these two groups — a question about the data *and* a task. TDA would still describe the hole if there were no classification problem at all. The SVM has nothing whatsoever to say without labels to fit.
+Persistent homology: unsupervised structure at all scales. SVM: supervised separation; undefined without labels.
 
-## Both are the same move: stop fixing the model, fix the coordinates
+## Coordinate expansion
 
-Strip the vocabularies away and one instinct is left in both. The data is tangled in the coordinates it arrived in, so do not fight the tangle — move to a richer space where it comes apart. Connectivity falls out in one case, a straight boundary in the other.
+Both methods enrich coordinates instead of fighting curvature in the input space.
 
-**TDA's expansion** is parameterized by a single scalar, $\varepsilon$:
+**TDA**:
 
 $$
 X \;\longmapsto\; R_\varepsilon(X), \qquad \varepsilon: 0 \to \infty.
 $$
 
-Growing $\varepsilon$ literally adds structure to the space itself — first edges, then triangles, then higher simplices — turning a discrete, structureless point cloud into an actual topological object with holes and components that can be counted. Every value of $\varepsilon$ is kept; the persistence diagram is a record of the entire sweep.
+Adds simplices (edges, triangles, …) across all scales; persistence diagram records the full sweep.
 
-**The SVM's expansion** is parameterized by a choice of kernel (and its hyperparameters, like $\gamma$):
+**Kernel SVM**:
 
 $$
 x \;\longmapsto\; \phi(x) \in \mathcal{H}, \qquad k(x, x') = \langle \phi(x), \phi(x') \rangle.
 $$
 
-Lifting into $\mathcal{H}$ adds coordinates to each individual point — the hand-built $x_1^2+x_2^2$ being the simplest possible example — turning a curved decision problem into a linear one. Only one value of the kernel's hyperparameters is kept; cross-validation picks the single expansion that generalizes best, and everything else is discarded.
+Adds coordinates per point; cross-validation picks one kernel setting; only the boundary is kept.
 
-One instinct — *the data isn't the problem, the coordinates are; go find better coordinates* — pointed at two different goals. TDA expands the space to describe structure and keeps the whole multi-scale answer, because the shape at every scale is what is being studied. The SVM expands the space to draw one boundary and keeps only the boundary, because separating two classes is all that was asked. Each is right about what it discards: a persistence diagram that changed with the task would be a bug, and an SVM that tried to hold every scale at once would be underfit or overfit depending on which scale won.
-
-Which is the answer to the puzzle we opened with. Two tools that share no vocabulary handled the same unseparable ring because neither of them tried to draw a curve. They went up a dimension instead — one by growing simplices until the hole showed itself, the other by adding a coordinate until a plane sufficed — and in the bigger space there was nothing left to curve around.
-
-## Key Takeaways
-
-The short version, for anyone skimming back:
-
-- The disk-and-ring dataset is not linearly separable in $\mathbb{R}^2$, for a topological reason — a ring encircles a disk — that no straight line can respect. The linear SVM's 0.58 is the majority-class rate, not a near miss.
-- Persistent homology, run on the unlabeled points, finds the hole through a Vietoris-Rips filtration: one $H_1$ feature lives about four times longer than any other loop in the diagram.
-- A kernel SVM, run on the labeled points, finds a decision boundary that traces almost the same circle, but does so by implicitly lifting each point into a richer feature space where a *linear* boundary suffices — never using the word "hole" or "loop" anywhere in the computation.
-- Both methods "expand the space" — TDA via a filtration parameter $\varepsilon$ swept over its whole range, kernels via an implicit feature map $\phi$ fixed at a single, chosen setting.
-- They diverge in what they keep: TDA keeps the full multi-scale record because structure is the answer; the SVM keeps a single boundary because classification is the answer.
-
-### Questions for Reflection
-
-Three places where this toy example was doing more work than it looked like:
-
-1. If the labels on this dataset were randomized, the SVM would still find *some* boundary at high training accuracy. What would that reveal about the difference between "a boundary exists" and "a boundary means something"?
-2. The polynomial-kernel feature map $\phi(x) = (x_1, x_2, x_1^2+x_2^2)$ was chosen by hand because we already knew the data was radially structured. What would happen with a kernel mismatched to the data's actual shape — say, a linear kernel on data shaped like two interlocking spirals?
-3. Persistence diagrams are stable under perturbation of the input points; SVM decision boundaries can move a lot if a single support vector is added or removed. Is that difference a fundamental one between unsupervised structure-finding and supervised boundary-fitting, or an artifact of these two specific methods?
+TDA keeps multi-scale structure because shape is the answer. SVM keeps one boundary because classification is the answer.

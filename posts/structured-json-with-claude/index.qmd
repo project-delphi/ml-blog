@@ -11,28 +11,38 @@ format:
   html:
     toc: true
     code-fold: false
+    number-sections: true
 ---
 
 ![Stop Parsing Prose](./cover.png)
 
-## It's 2am and the parser just choked on a sentence
+Asking an LLM for JSON in English often returns JSON wrapped in extra text: a preamble, markdown fences, or a trailing remark. `json.loads()` rejects all of those.
 
-The pager goes off because a `JSONDecodeError` is three stack frames deep in your ingestion job. You pull up the raw response and there it is: `Sure, here's the JSON you requested:` sitting right before the opening brace, cheerful as anything. Your code expected the first character to be `{`. It got `S`. Everything downstream — the queue consumer, the dashboard, the on-call rotation you're now part of — falls over because a language model decided to be polite.
+The failure mode is the default conversational training objective, not a one-off.
 
-This is not a one-off. It's the default failure mode of asking an LLM for structured data the same way you'd ask a person: nicely, in English, and hoping they take the hint.
+## Failure mode
 
-## Prose is a great interface for humans and a terrible one for code
+Typical extra tokens:
 
-A model trained to be a helpful conversationalist will act like one, even when you don't want conversation — you want a payload. Ask for JSON and you get JSON *most* of the time, wrapped in whatever the model felt like adding *some* of the time: a preamble, a closing pleasantry, markdown fences, a stray comment inside what's supposed to be strict JSON. None of it is malformed by the standard of human reading. All of it is malformed by `json.loads()`.
+- preamble (`Sure, here's the JSON you requested:`)
+- markdown fences
+- comments inside supposed JSON
+- trailing pleasantries
 
-The boundary between "text" and "data" is fuzzy by construction, and parsers don't tolerate fuzzy boundaries. So you write regex to strip preambles, retry loops for responses that don't parse, and prompts padded with pleading like "respond with ONLY the JSON, no other text." That's not an integration. That's a bet.
+Workarounds that treat this as a prompting problem:
 
-## The old way: box the model in from both ends
+- regex to strip preambles
+- retry loops on parse failure
+- prompts that say "respond with ONLY the JSON"
 
-Before the API could enforce a shape, you forced one. Two tricks, usually together:
+Those are heuristics. They are not a schema.
 
-1. **Prefill the assistant turn.** Seed the model's own turn with a lone `{` so it has no choice but to continue from inside the object. No room left for a preamble — the preamble slot is already spent.
-2. **Add a stop sequence.** Halt generation the moment a closing `}` appears, so the model can't tack on "let me know if you need anything else."
+## Prefill and stop sequences
+
+Before the API enforced a shape, two tricks were used together:
+
+1. **Prefill** the assistant turn with `{` so generation starts inside the object.
+2. **Stop sequence** on `}` so generation cannot continue after the first close brace.
 
 ```{python}
 #| eval: false
@@ -51,17 +61,17 @@ raw = "{" + response.content[0].text + "}"       # reattach what you clipped
 data = json.loads(raw)                           # ...and hope
 ```
 
-Look at the last two lines. You're manually gluing back the brace you injected and the brace you truncated, then hoping. Nested objects break the stop sequence outright, because the *first* `}` isn't the last one.
+Limits:
 
-It's also running out of road: **prefill now returns a 400 on Sonnet 5, Opus 5, Fable 5, and the 4.6-and-later Opus and Sonnet models.** Haiku 4.5 still accepts it, so it isn't dead everywhere — but "works on the model I happen to call" is a thin foundation to build on.
+- Nested objects break a stop sequence on the first `}`.
+- The caller must reattach the clipped braces.
+- Prefill returns HTTP 400 on Sonnet 5, Opus 5, Fable 5, and Opus/Sonnet 4.6+. Haiku 4.5 still accepts it.
 
-## The new way: make the shape a contract
+## JSON Schema via `output_config`
 
-Both tricks are attempts to describe the shape you want in English and then fence the model in when it wanders. The alternative is to stop describing and start declaring: hand the API a machine-readable specification of the object — which fields exist, what type each one is, which values are allowed, which are required — and let the endpoint refuse to emit anything that does not fit. That specification is a JSON Schema, and it is an ordinary dictionary you write once.
+Pass a JSON Schema through `output_config.format`. The API emits only tokens that conform to that schema.
 
-Pass it through `output_config.format` and the API *guarantees* the response conforms — not "usually," not "if the prompt is worded carefully," but enforced where the tokens are produced. No brace surgery, no stop sequences, no retry loop.
-
-Here's a messy support ticket going in as free text and coming out as a typed object. I invented it for this post, written the way an annoyed customer actually writes; it stands in for the thing a real ingestion job sees, where the routing decision has a cost — a critical bug filed as a billing question sits in the wrong queue until someone notices.
+The ticket below is synthetic, written to stand in for a real ingestion job where mis-routing has a cost.
 
 ```{python}
 #| eval: false
@@ -103,7 +113,7 @@ text = next(b.text for b in response.content if b.type == "text")
 data = json.loads(text)
 ```
 
-I didn't call the API for this post — no key hit, no request made — so the block below is hand-written to show the *shape* a conforming response takes, not a captured transcript. That's the whole point: with a schema attached, this is what you're guaranteed to get back, not what you're hoping for.
+This post did not call the API. The object below is hand-written to show the guaranteed shape, not a captured transcript.
 
 ```json
 {
@@ -115,23 +125,22 @@ I didn't call the API for this post — no key hit, no request made — so the b
 }
 ```
 
-No brace-hunting. No pleasantries to strip. When the turn completes, you get an object matching the schema — not a shape you have to defend against.
+The same contract applies to any output that must become a program value: log lines, resumes, tool-call arguments.
 
-## The ticket was never the point
+## Guarantees
 
-Swap the ticket for a log line, a resume, a tool call your agent needs to act on — anything where the model's output has to become a variable in your code, not a paragraph a human reads. Define the shape once, let the API enforce it, delete the parsing code you used to need.
+A schema guarantees **shape**, not **correctness**.
 
-## Caveat: a schema guarantees shape, not correctness
+- You will not get malformed JSON.
+- You can still get a wrong `category` in valid syntax. Classifications still need spot-checks.
 
-The guarantee is narrower than the relief of it suggests. You will never again get malformed JSON, and you can still get a confidently wrong `category` — a feature request filed as a bug, in perfectly valid syntax. The schema constrains the form of the answer and says nothing about the judgement inside it, so classifications still want spot-checking on edge cases before the pipeline runs unattended.
+The guarantee applies only to a turn that finishes:
 
-The guarantee is also scoped to a turn that finishes. A safety refusal or a `max_tokens` truncation leaves you with an empty or clipped response, and `stop_reason` is what tells you which — that's the check in the snippet above, and the line people skip. Budget generously while you are there: thinking shares `max_tokens` with the response, so a ceiling that fit a toy input can clip a real one.
+- Safety refusal or `max_tokens` truncation yields an empty or clipped body.
+- Check `stop_reason` before `json.loads`.
+- Thinking shares `max_tokens` with the response; budget for both.
 
-## Back to the 2am page
-
-Both of those failures have something the `JSONDecodeError` did not: they announce themselves at the boundary, in a field you can read, before anything downstream acts on them.
-
-That is the whole change. The 2am page happened because the shape of your data lived in a polite request and the model was free to interpret it. Move the shape into a schema and it stops being a request — the preamble has nowhere to go, the fences never appear, and the one line of defensive code left is a `stop_reason` check that tells you plainly when there is no answer at all. You are no longer parsing prose. You are reading a value.
+Those failures surface in `stop_reason` before downstream code acts on the body.
 
 ## References
 

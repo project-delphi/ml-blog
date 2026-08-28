@@ -11,45 +11,42 @@ format:
         toc: true
         toc-depth: 3
         code-fold: true
+        number-sections: true
 ---
 
 ![Uses and Abuses of Topological Data Analysis: A Pragmatic Guide](./cover.png)
 
-Run k-means on a scatter plot and it hands you back cluster centres. Run a kernel density estimate and it hands you back a landscape of peaks. Both are answering the same question — where does the data pile up? — and for most datasets that is the right question to ask.
+Density methods (k-means, KDE, GMM) answer where mass concentrates. **Topological data analysis (TDA)** answers connectivity: gaps, loops, tunnels, voids. A filled disk and an annulus can share uniform local density but differ in topology.
 
-Now picture a dartboard with the bullseye rubbed out: points scattered evenly around a ring, nothing in the middle. Every stretch of that ring has the same local density as every other stretch, so the density tools report one long featureless plateau. What they never report is the thing you saw the instant you looked at the picture. The middle is empty. The ring has a hole in it, and a hole is not a density fact.
+## Density vs shape
 
-Topological data analysis is the machinery for reporting holes. It is worth learning partly because it finds structure that nothing else will, and partly because it will run happily on data that has no holes at all — which is where most of the trouble starts.
+Standard ML tools are density-driven:
 
-## Clustering asks where the mass is; topology asks what the mass is shaped like
+- K-means, KDE, GMM: where points pile up.
+- Random forests: regions where labels concentrate.
 
-Nearly every tool in the standard kit is a *density* tool underneath. K-means asks where points pile up. Kernel density estimation smooths those piles into a landscape. A Gaussian mixture model fits blobs of probability mass. Even a random forest, when it partitions feature space, is chasing regions where the labels concentrate. The implicit question is always the same: **where is the data dense?**
+TDA asks how the point cloud is **connected** across scales, without committing to one distance threshold upfront.
 
-Topological Data Analysis (TDA) asks a stubbornly different question: **what is the data's shape?** Not where the mass concentrates, but how the point cloud is *connected* — does it have gaps, loops, tunnels, voids? A filled disk and an annulus (a ring with a hole punched out of the middle) can have the same average local density everywhere and still be nothing alike. One has a loop; the other does not. Density is blind to that loop. Topology sees it immediately.
+Shape signal appears in periodic dynamics (loops in phase space), cyclic chemistry, seasonal regimes, neural population trajectories — structures no clustering algorithm reports as holes.
 
-That loop matters more often than you'd guess. Periodic behavior in a dynamical system traces a loop in phase space. A cyclic chemical reaction, a recurrent neural trajectory, a seasonal market regime, the coordinated firing of a population of neurons — these leave *holes* in their point clouds, and no clustering algorithm is built to report a hole. TDA's central promise is to detect and quantify that connectivity at every scale at once, without you having to commit to a single distance up front.
+## Vietoris-Rips filtration
 
-Two things have to happen before that promise is worth acting on. The machinery has to stop looking like magic, which takes an example small enough to check by hand. And then the harder question: of the ways TDA actually gets used in published research, which ones earn their cost, and which one is a reflex.
+Fix $\varepsilon \geq 0$. Include a simplex on every subset whose pairwise distances are $\leq \varepsilon$.
 
-## Deciding what "close" means turns a point cloud into an object with parts
+**Simplices**:
 
-A bare point cloud has no shape. It is a finite set of coordinates, and between any two of them there is nothing at all. Shape only appears once you make a decision the data cannot make for you: how near two points have to be before you are willing to call them joined.
+- **0-simplex**: point.
+- **1-simplex**: edge.
+- **2-simplex**: filled triangle.
+- **3-simplex**: solid tetrahedron.
 
-Fix a distance $\varepsilon$ and apply that decision uniformly. Two points within $\varepsilon$ of each other get joined by a segment. Three points that are *all* mutually within $\varepsilon$ get more than three segments — they get the patch of surface they enclose, filled in solid. Four such points get the solid lump they enclose. The rule never changes with size: a set of points becomes one filled piece exactly when every pair inside it is within $\varepsilon$.
+**Simplicial complex**: collection closed under faces (every face of an included simplex is included).
 
-Those filled pieces get a name each, indexed by dimension. A lone point is a **0-simplex**, a joined pair a **1-simplex** (an edge), a filled triangle a **2-simplex**, a solid tetrahedron a **3-simplex**. The whole collection you hold at one value of $\varepsilon$ is a **simplicial complex**, and this particular recipe for building one — fill every pairwise-close set — is the **Vietoris–Rips complex**.
+Sweep $\varepsilon$ from 0 upward → nested **filtration** of complexes. TDA studies the full sweep, not one scale.
 
-If hypergraphs are familiar, there is a shorter way to say all of that. An ordinary graph has only edges, which join *pairs* of vertices; a hypergraph is more permissive, letting a single **hyperedge** join any subset of vertices at all. Every subset of your data points — the entire power set — is a candidate hyperedge, and $\varepsilon$ is the rule that decides which candidates get in:
+### Three-point example
 
-> A subset of points becomes a hyperedge (a *simplex*) exactly when **every pair** of points inside it lies within distance $\varepsilon$ of each other.
-
-One property separates the result from a generic hypergraph. If a filled triangle is present then its three edges and three vertices are present too, automatically, because every subset of a pairwise-close set is itself pairwise close. A collection closed under "every face of a simplex is also present" is what earns the name simplicial complex, and it is why a triangle can be said to *fill* the cycle of its own edges: the cycle is guaranteed to be in there with it.
-
-Nothing obliges you to pick one $\varepsilon$ and live with it. Start it at zero, where no two distinct points are within range and only the singletons qualify, then turn it up. Pairs fall into range and edges appear; mutually close triples snap shut into filled triangles; and so on up the power set. That ordered sequence of complexes — nested, since nothing ever leaves — is a **filtration**, and it is what TDA actually studies. Not the shape at some scale you had to guess, but the whole sweep of scales at once.
-
-### Three points are enough to watch a hole open and close
-
-Abstractions dissolve fast against a concrete example, so take the smallest cloud that still does something interesting: three points, $A$, $B$, and $C$, placed by hand as a loose triangle rather than an equilateral one, so that its three side lengths are distinct and the sweep has three separate events to show. Rather than assert the distances, let the code place the points and report them.
+**Data provenance** (synthetic): three hand-placed points A, B, C forming a loose triangle with distinct side lengths.
 
 ```{python}
 #| label: tbl-toy-distances
@@ -69,7 +66,7 @@ print(np.round(D, 3))
 print(f"\nd(A,B) = {D[0,1]:.3f}   d(B,C) = {D[1,2]:.3f}   d(A,C) = {D[0,2]:.3f}")
 ```
 
-So the three pairwise distances, sorted, are $d(A,B) = 1.000$, then $d(B,C) = 1.360$, then $d(A,C) = 1.432$. Now run the filtration on them: sweep $\varepsilon$ up from $0$ and watch which subsets become simplices. With three points there are only three distances, so only three things can ever happen. The code below draws four frames of the sweep and colors each simplex the moment it is born.
+Sorted distances: $d(A,B) = 1.000$, $d(B,C) = 1.360$, $d(A,C) = 1.432$.
 
 ```{python}
 #| label: fig-toy-filtration
@@ -103,16 +100,16 @@ plt.tight_layout()
 plt.show()
 ```
 
-Read the four frames left to right:
+Frame sequence:
 
-- **$\varepsilon = 0$.** Nothing is within range of anything else — three isolated 0-simplices, the singletons $\{A\}$, $\{B\}$, $\{C\}$. Three separate connected components.
-- **$\varepsilon = 1.000$.** The threshold reaches $d(A,B)$. The pair $\{A,B\}$ becomes a 1-simplex (an edge); $A$ and $B$ merge into one component while $C$ sits alone. Two components.
-- **$\varepsilon = 1.360$.** The threshold reaches $d(B,C)$. The edge $\{B,C\}$ appears, linking all three points into one component — but as a bent *path*, because the edge $\{A,C\}$ is still missing.
-- **$\varepsilon = 1.432$.** The threshold reaches the longest distance $d(A,C)$, closing the triangle. For an instant the three edges enclose an empty region — a 1-dimensional hole. But the Vietoris–Rips rule now also admits the full triple $\{A,B,C\}$ (all its pairs are within $\varepsilon$), so the filled 2-simplex appears the *same instant* and plugs the hole immediately.
+- $\varepsilon = 0$: three isolated components.
+- $\varepsilon = 1.000$: edge A–B; two components.
+- $\varepsilon = 1.360$: edge B–C; one component, open path.
+- $\varepsilon = 1.432$: triangle closes and fills simultaneously; no persistent loop.
 
-### The hole that never was does not appear in the output
+### Persistence output
 
-That reading came off a picture, which is a habit worth checking against the arithmetic. Software will do the sweep exactly: [`ripser`](https://ripser.scikit-tda.org/) takes a point cloud, runs the whole filtration internally, and for every feature it finds reports the threshold at which the feature appeared and the threshold at which it vanished. Those two numbers are the feature's **birth** and **death**. Here are the raw arrays for our three points.
+[`ripser`](https://ripser.scikit-tda.org/) reports (birth, death) per feature.
 
 ```{python}
 #| label: toy-persistence
@@ -126,20 +123,14 @@ print("\nH1 (loops) — [birth, death]:")
 print(dgms[1] if len(dgms[1]) else "(empty — no loop is recorded)")
 ```
 
-Features come sorted by dimension, and the two labels are worth having plainly. $H_0$ collects the separate pieces of the complex — the connected components. $H_1$ collects the loops: cycles of edges that enclose a region nothing has filled in.
+- **$H_0$**: three bars born at 0; deaths at 1.000, 1.360; one immortal component.
+- **$H_1$**: empty — loop born and killed at $\varepsilon = 1.432$ (zero persistence).
 
-- **$H_0$.** Three bars, all born at $\varepsilon = 0$. One dies at $\varepsilon = 1.000$ (the $A$–$B$ merge), one at $\varepsilon = 1.360$ (when $C$ joins via the $B$–$C$ edge), and one has death $= \infty$: once everything is connected, that last component never dies.
-- **$H_1$.** The array is **empty**. The loop that flickered into existence at $\varepsilon = 1.432$ was filled by the triangle at the very same threshold, so its death minus its birth is exactly zero, and `ripser` does not record it at all.
+**Persistence diagram**: (birth, death) per feature; signal far from diagonal; noise near diagonal. **Barcode**: same intervals as horizontal bars.
 
-That empty $H_1$ is the whole discipline in one array: **a hole only counts if it persists.** A feature born and killed at the same scale carries no signal. The quantity that matters is always the *gap* between birth and death — features born early and dying late are real structure, features with birth $\approx$ death are noise. Plot each feature as a point at coordinates (birth, death) and real features sit high above the diagonal while noise clings to it; that scatter is a **persistence diagram**. Plot each instead as a horizontal bar running from birth to death and long bars are the signal; that is a **barcode**. Same information, two pictures.
+### Noisy circle
 
-Three points were never going to hold a hole open. For a loop that survives, the points have to be arranged so the middle stays empty while the rim knits together.
-
-### Eighty points on a ring hold their hole open for most of the sweep
-
-A circle is the smallest arrangement where the gap between birth and death has room to be large, so that is what we sample. The data here is synthetic: 80 angles drawn uniformly around the unit circle, each point then pushed off the ring by Gaussian noise with standard deviation 0.08, from a seeded generator so the figure is the same on every render. It stands in for any measured process that cycles — a rotating machine part sampled at random phases, a periodic signal embedded in a plane — where the instrument adds error but the cycle is real.
-
-Simulating beats a real dataset here because the answer is known in advance. There is exactly one loop, I put it there, and anything else `ripser` reports is noise I can name as such.
+**Data provenance** (synthetic): 80 uniform angles on the unit circle + Gaussian noise ($\sigma = 0.08$), seed 7. Stands in for cyclic processes with measurement error. Ground truth: one loop.
 
 ```{python}
 #| label: fig-circle-persistence
@@ -197,71 +188,69 @@ plt.tight_layout()
 plt.show()
 ```
 
-The barcode makes the story visual. The purple $H_0$ bars all start at $\varepsilon = 0$ (every point is its own component at the outset) and die off quickly as the noisy rim knits together — leaving one immortal component. The single long orange $H_1$ bar is the loop: born once the rim connects into a ring, and not dying until $\varepsilon$ grows large enough to fill the whole disk in. In the persistence diagram, that same loop is the lone orange point sitting high above the diagonal, unmistakably separated from the noise clinging to it. **That one persistent point is the entire topological signal of "this data is a circle."**
+One long $H_1$ bar / off-diagonal point = the ring's topological signal.
 
-## Published TDA falls into four patterns, and only one of them is a reflex
+## Four application patterns
 
-One point sitting high above the diagonal is a satisfying answer to *is this data a circle?* — but almost nobody's real question is that. The diagram is where the work starts, not where it ends, and what happens to it next is where the choices live. Read enough applied papers that use persistent homology and four patterns account for nearly all of them. They differ in what the diagram is *for*: fuel for a learner, a test statistic, a picture for a domain expert, or one end of a comparison.
+Applied persistent homology commonly follows one of four patterns:
 
-Knowing which of the four you are in is most of the difference between using TDA and cargo-culting it — copying the visible moves of a method that worked somewhere else, without the conditions that made it work.
+### Pattern A: diagram → feature vector
 
-### Pattern A: the diagram becomes extra columns in a feature matrix
+Topology as **feature expander**: vectorize diagrams (persistence image, landscape, Betti-curve samples, summary statistics) and concatenate with tabular features for standard classifiers.
 
-This is the workhorse, and the one most ML researchers meet first. Topology is treated as a **feature expander**: something that turns a shape into numbers a model already knows how to read.
+Representative uses:
 
-The obstacle is that a persistence diagram is an unordered set of (birth, death) points, and its size changes from sample to sample — so it is not a fixed-length vector, and no standard model will accept it. Vectorizing means squashing that set into a fixed number of slots: a persistence image, a persistence landscape, a vector of Betti-curve samples, or plain summary statistics like total persistence and longest lifetime. That vector is concatenated with your other features and handed to an SVM, a random forest, gradient boosting, or a neural net. Topology becomes just another block of columns.
+- Zhou & Wang: mixed numeric/categorical tabular data.
+- Bhatia et al.: link prediction via neighbourhood persistence descriptors.
+- Minamitani et al.: amorphous materials structure–property prediction.
+- Ismail et al.; Gidea & Katz: financial time-series crash early warning via delay embedding.
 
-The appeal is that persistence features can encode structure that per-sample features miss entirely — long-range connectivity, cyclic patterns, multi-scale organization. When the underlying phenomenon genuinely has such structure, this can lift accuracy for free. Representative work:
+Most common pattern; also the most often applied without justification.
 
-- **Mixed numeric-and-categorical classification.** Zhou & Wang build topological features from heterogeneous tabular data and feed them to downstream classifiers, with heart-disease prediction as a benchmark — a case where the interactions between categorical and continuous variables have a geometric fingerprint that persistence captures.
-- **Link prediction in graphs.** Bhatia et al. extract persistence-based descriptors of local neighborhood structure and use them as features to predict which edges a graph is missing.
-- **Materials structure–property prediction.** Minamitani et al. derive a persistent-homology descriptor of atomic arrangements in amorphous materials and use it to drive machine-learning potentials — the ring and void statistics of a disordered solid are exactly the kind of thing topology summarizes well.
-- **Financial crash early-warning.** Ismail et al. and, earlier, Gidea & Katz compute persistence on sliding windows of multivariate market time series (embedded via time-delay coordinates) and show that topological summaries spike ahead of major crashes — including Bitcoin — feeding the signal into a detector.
+### Pattern B: diagram as test statistic
 
-If you only remember one pattern, remember this one — and remember that it is also the one that gets reached for without a reason, which is the argument this post ends on. The other three are harder to apply by reflex, starting with the one that trains nothing at all.
+No downstream learner. Diagram or scalar summary (Betti count, total persistence) compared to a null distribution.
 
-### Pattern B: the diagram is a test statistic, and nothing gets trained
+Representative uses:
 
-Here there is **no downstream learner**. The persistence diagram — or a single number derived from it, such as the count of holes at a fixed scale, or persistence summed over all features — is used directly as a *test statistic*: a number you compute from data whose behavior under "nothing interesting is going on" you already know.
+- Pranav et al.; Wilding et al.: cosmic web topology vs $\Lambda$CDM simulations / Gaussian fields.
+- Wright & Zheng: Wikipedia word embeddings vs noise baselines.
 
-So you compute it on the real data, work out its distribution under a theoretical or simulated null model, and ask whether the observed topology is surprising next to what pure noise would produce. This is classical statistical inference wearing a topology costume. The topology is just an unusually shape-aware summary statistic.
+Signature: null model + p-value; no trained predictor.
 
-- **Cosmology.** Pranav et al. describe the Cosmic Microwave Background — the faint leftover radiation from the early universe — and the large-scale structure of matter in terms of persistent Betti numbers, counts of components and holes and voids at each scale. Wilding et al. analyze cosmic voids the same way, comparing the observed topology of the cosmic web against simulations run under $\Lambda$CDM, the standard model of cosmology, and against Gaussian random fields as a null.
-- **Text as point clouds.** Wright & Zheng turn Simple English Wikipedia articles into point clouds, placing each word at its embedding coordinates, and compare their persistent homology against random-noise baselines — asking whether real prose is topologically distinguishable from noise of matched size and dimension.
+### Pattern C: topological object as deliverable
 
-The tell for Pattern B is a null model and a p-value-shaped conclusion, with no trained predictor anywhere. The next pattern drops the null model too, and hands the topology straight to a person.
+No vectorization; human reads the output. **Mapper**: lens function → overlapping bins → local clustering → graph of clusters.
 
-### Pattern C: the topological object itself is the deliverable
+Representative uses:
 
-Here there is **no vectorization and no test**. The shape is the output, and a human reads it.
+- Nicolau, Levine & Carlsson: breast cancer subtyping (Ayasdi lineage).
+- Rizvi et al.: single-cell differentiation trajectories.
+- Xia & Wei; Stolz et al.: protein and DNA topological structure.
 
-The dominant tool is **Mapper**, which compresses a dataset into a small graph you can actually look at. Pick a function that scores every data point — a projection onto one axis, a density, anything that gives a number. Slice the range of that score into overlapping bins, cluster the points inside each bin separately, draw one node per cluster, and join two nodes whenever they share a point. Overlapping bins are what make the joins possible, and the result is a network that keeps the data's connectivity while throwing away its coordinates. The scoring function has a name in this literature: the **lens**, or filter.
+Exploratory; success = domain insight, not held-out accuracy.
 
-- **Cancer subtyping.** Nicolau, Levine & Carlsson used topology-based analysis — the Progression Analysis of Disease methodology, the line of work that later became the company Ayasdi — to identify a previously unrecognized subgroup of breast cancers with distinct, excellent survival. The subgroup fell out of the shape of the gene-expression data, not from any prior labeling.
-- **Single-cell trajectories.** Rizvi et al. apply topological analysis to single-cell RNA-seq data to recover cell-fate differentiation trajectories, reconstructing the branching path cells take through gene-expression space during development.
-- **Molecular structure.** Xia & Wei use persistent homology to characterize protein structure, flexibility, and folding, and Stolz et al. analyze knotting and supercoiling in DNA — the loops and tangles of a molecule *are* topological features, so topology is the natural descriptive language.
+### Pattern D: distance between diagrams
 
-Pattern C is exploratory and interpretive. Success is a scientist learning something, not a held-out metric. What it cannot do is tell you whether two datasets differ, which is the last pattern's whole job.
+Compare whole diagrams via **bottleneck** or **Wasserstein** distance.
 
-### Pattern D: the quantity of interest is the distance between two diagrams
+Representative use:
 
-The final pattern compares *whole objects* instead of classifying points inside one object. To do that you need a way to say how far apart two persistence diagrams are, and there is a natural one: pair up the points of one diagram with the points of the other, and measure how far you had to move them. Points with no partner get matched to the diagonal instead, which is the right punishment because a point on the diagonal is a feature with zero lifetime — a feature that may as well not exist.
+- Hajij et al.: time-varying graphs; diagram distance flags structural change.
 
-Take the largest single move and you have the **bottleneck distance**; add the moves up and you have the **Wasserstein distance**. Either gives a shape-aware answer to "how different are these two things?", which is what change detection and before-and-after comparison need.
+Signature: inter-diagram distance as the quantity of interest.
 
-- **Time-varying graphs.** Hajij et al. track a graph as it evolves, compute a persistence diagram at each timestep, and use the distance between consecutive diagrams to flag structural change — a spike in diagram distance marks a topological event that node- or edge-level metrics might smear over.
+## Iris benchmark
 
-The signature of Pattern D is a *distance between diagrams* as the quantity of interest, rather than a feature vector or a test statistic. Four patterns, described; the question is what they look like when you run three of them on the same data and watch where the payoff runs out.
+**Data provenance**: [UCI Iris](https://archive.ics.uci.edu/dataset/53/iris) — 150 flowers, four measurements (sepal/petal length and width), three species.
 
-## Three of the patterns, run on flowers everybody already knows
+- Collector: Edgar Anderson (botanical variation study).
+- Fisher (1936): introduced linear discriminant analysis on this table.
+- Geometry: Setosa separated; Versicolor and Virginica overlap.
+- Task here: diagnostic — does global/local topology add signal beyond four measurements? Wrong species label has no real-world cost on this teaching set.
+- Topology should be redundant when raw features already separate species; any gain measures marginal value of shape descriptors.
 
-Patterns are easier to trust once you have watched them run end to end on data whose answer you already have. That is the point of using [Iris](https://archive.ics.uci.edu/dataset/53/iris): 150 iris flowers, four measurements each — sepal length and width, petal length and width — across three species, Setosa, Versicolor and Virginica.
-
-The measurements are Edgar Anderson's. He was a botanist, and he was recording flower dimensions as part of a study of variation within and between iris species — the question of where one species stops and the next begins, decided from the plant rather than from a taxonomist's judgement. R. A. Fisher took the table in 1936 and used it to introduce linear discriminant analysis, and it has been a teaching benchmark ever since. Its geometry is famous: Setosa sits well away from the other two, and Versicolor and Virginica overlap.
-
-What is being asked of it here is not "which species is this flower". Nobody needs another Iris classifier, and a wrong answer costs a botanist nothing — that is exactly why it is safe to run diagnostics on. The question is whether the *shape* of the data reproduces what we already know about it, and how much a topological description adds once the four raw measurements are already on the table. Iris is a good test of that precisely because it is a case where topology should be redundant: four measurements that already separate the species is the regime where a shape-based method has the least room to earn its cost. If persistence pays here, it pays cheaply, and the size of "cheaply" is the number worth having.
-
-Three of the four patterns fit on it: **global** persistent homology (the whole cloud's shape, Pattern B/C territory), **Mapper** (a skeleton for the eye, Pattern C), and **local** persistent homology (per-flower features for a classifier, Pattern A). Throughout, the numbers and figures below are computed at render time — nothing is asserted that the code does not produce.
+Patterns exercised: global $H_0$ (B/C), Mapper (C), local persistence landscapes (A).
 
 ```{python}
 #| label: iris-setup
@@ -278,11 +267,9 @@ species = iris.target_names
 print("X shape:", X.shape, "| species:", list(species))
 ```
 
-### Global $H_0$ sees Setosa and nothing finer
+### Global $H_0$
 
-Start with the crudest question the filtration can answer: run the same $\varepsilon$-sweep over all 150 flowers at once and ask how this four-dimensional cloud connects up as the threshold grows. Only $H_0$ is needed — the separate pieces, the clumps.
-
-The useful summary is a single count that changes as the sweep runs: how many separate pieces are still alive at threshold $\varepsilon$. Every point starts as its own piece, and the count falls as pieces merge. Plotted against $\varepsilon$ it is a staircase, and a long flat step means a grouping that survives across a wide band of scales rather than one that appears at a threshold you happened to pick. That count has a name — the **Betti number** $\beta_0(\varepsilon)$, the zero-dimensional one because it counts components; $\beta_1$ would count loops, $\beta_2$ voids.
+Run Vietoris–Rips on all 150 standardized points; track $\beta_0(\varepsilon)$ = components alive at scale $\varepsilon$.
 
 ```{python}
 #| label: fig-iris-global
@@ -323,9 +310,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-The barcode and the $\beta_0$ curve tell one story. As $\varepsilon$ grows the 148 finite components merge away fast, and then the count *lingers* — $\beta_0 = 3$ across a broad band, then $\beta_0 = 2$, before collapsing to a single blob. Those plateaus are the persistent cluster structure.
-
-They do not say which flowers are in which clump, though, and that is the part worth knowing. Merging points into whichever piece is nearest, in the order the distances allow, is exactly what single-linkage hierarchical clustering does — the $H_0$ filtration and the single-linkage tree are the same computation with different bookkeeping. So we can cut that tree at 2 and at 3 components and count species inside each.
+Plateaus: $\beta_0 = 3$ then $\beta_0 = 2$ before collapse to 1. $H_0$ filtration equals single-linkage merge order.
 
 ```{python}
 #| label: iris-linkage
@@ -342,15 +327,14 @@ for k in (2, 3):
         print(f"   cluster {c}: setosa={b[0]:2d}  versicolor={b[1]:2d}  virginica={b[2]:2d}")
 ```
 
-The 2-component cut is clean: one cluster is all 50 Setosa, the other is all 100 Versicolor and Virginica together. The single longest finite bar in the barcode *is* Setosa refusing to merge until the very end.
+- 2 components: all 50 Setosa vs 100 Versicolor+Virginica (clean).
+- 3 components: one stray Setosa outlier; Versicolor and Virginica remain fused (single-linkage chaining).
 
-The 3-component cut is where the caveat lives. Splitting into three does not separate Versicolor from Virginica. It peels off one stray Setosa flower and leaves the 100 overlapping ones fused as a single clump. That is single-linkage chaining: because a piece grows by its nearest point, one outlier sitting slightly apart survives as its own component long after the real structure has settled, and the third "cluster" you get is that outlier rather than a group. Global $H_0$ has said the true thing it is able to see — Setosa is topologically distinct, the other two are not separable by connectivity alone — and it has nothing further. Seeing inside that fused clump needs a tool that does not insist on cutting it.
+Global $H_0$ sees Setosa as topologically distinct; cannot split the overlapping pair.
 
-### Mapper draws the transition that $H_0$ could only call one clump
+### Mapper graph
 
-Mapper is that tool, and it is Pattern C: the graph it produces is the answer, not an input to something else. It does not have to declare a number of clusters, because it never partitions the data — it slices, clusters locally, and then reconnects, so two groups that shade into each other come out as one connected shape rather than as two boxes with a boundary drawn between them.
-
-Here the lens is the first two principal components: the two directions along which the flowers vary most, used only to lay out the overlapping bins. Clustering inside each bin is DBSCAN, which groups points that sit in dense neighborhoods and leaves the rest unassigned. Every node is then colored by the mean species label of the flowers inside it, running 0 for Setosa to 2 for Virginica — the labels are used to color the picture, never to build it.
+Pattern C: lens = first two PCA components; bin clustering = DBSCAN; nodes coloured by mean species label (labels not used in construction).
 
 ```{python}
 #| label: fig-iris-mapper
@@ -409,21 +393,11 @@ plt.show()
 print(f"connected components in Mapper graph: {nx.number_connected_components(G)}")
 ```
 
-The picture reproduces the textbook Iris story from the shape alone. There is an **isolated island** of pure-Setosa nodes, dark purple and joined to nothing — Mapper has rediscovered that Setosa stands apart, never having seen a label. And there is a single **connected, branching structure** whose color grades from teal to yellow: Versicolor and Virginica come out not as two islands but as one shape that blends from one species into the other, because that is what the four-dimensional geometry does.
+Setosa: isolated island. Versicolor–Virginica: one connected graded branch. Small Virginica satellite depends on bin/overlap/DBSCAN settings — exploratory sensitivity, not a p-value.
 
-The third component is the caveat in the picture. It is a small Virginica satellite, a handful of extreme flowers that DBSCAN cut loose, and it exists because of the bin width, the overlap and the DBSCAN radius rather than because of the flowers. Change those knobs and the satellite moves or disappears. That sensitivity is permanent and it is why Mapper is an exploratory instrument rather than an automatic one — you read the graph the way you read a scatter plot, not the way you read a p-value.
+### Local persistence features
 
-With that caveat priced in, the gain over global $H_0$ is real: where $H_0$ could only report "these 100 flowers are one clump," Mapper shows the transition running through it. The deliverable is the graph, read by a person. That is Pattern C exactly — and it is still a statement about the whole dataset, which is no help at all if the thing you want is a decision about one flower.
-
-### Local persistence turns each flower's neighborhood into six numbers
-
-Pattern A needs per-sample features, and global topology has none to give. The move is to shrink the microscope: instead of the shape of the dataset, take the shape of the small patch of data immediately around each flower, and turn that into a fixed-length row you can bolt onto the four raw measurements as extra columns.
-
-Getting a fixed length out of a diagram is the whole trick, and here is one way to do it. Draw each bar as a little tent standing over the interval it spans — the tent's peak height is half the bar's length, so a long-lived feature makes a tall tent and a short-lived one makes a flat bump. Lay all the tents on the same axis and trace the outline over the top of them. Now the diagram is a curve, and a curve can be measured at whatever fixed positions you choose. Read off its height at six chosen values of $\varepsilon$ and every flower, however many bars it happened to produce, hands back six numbers. That curve is a **persistence landscape**. The pipeline, per flower:
-
-1. Find its $k = 15$ nearest neighbors (a 16-point mini-cloud).
-2. Run the Vietoris–Rips filtration on just those points, keeping the finite $H_0$ bars — these encode how tightly and at what scales the local neighborhood knits together.
-3. Turn each bar $[b, d]$ into its tent $\Lambda(t) = \max(0, \min(t-b,\, d-t))$, take the upper envelope $\lambda_1(t) = \max_\text{bars} \Lambda(t)$, and sample $\lambda_1$ on a fixed grid of six $\varepsilon$ values.
+Pattern A: per-flower $k=15$ nearest neighbours → local $H_0$ → first persistence landscape sampled at six fixed $\varepsilon$ values → six extra columns.
 
 ```{python}
 #| label: iris-local-features
@@ -454,7 +428,7 @@ print("Local persistence-landscape features (one row per flower):")
 print(demo.iloc[[0, 50, 100]].to_string(index=True))
 ```
 
-Look at the three example rows, one flower per species. The Setosa row is **all zeros**: its 15 neighbors sit so tightly together that every local $H_0$ bar has died before the sweep reaches the first grid point that could register it, so the tents are flat everywhere the curve is sampled. The Versicolor and Virginica rows carry a **nonzero** height at $\varepsilon = 0.4$ and zeros elsewhere — their neighborhoods are looser, so some of the local merges have not happened yet at 0.4, though all of them are done by 0.8. That is a thin signal, one number wide, and it is still enough to be a difference a classifier can use. Whether it is a difference worth paying for is the next question.
+Setosa rows: all zeros (tight neighbourhood). Versicolor/Virginica: nonzero at $\varepsilon = 0.4$ only.
 
 ```{python}
 #| label: iris-classifier
@@ -472,34 +446,40 @@ print(f"topo landscape only (6) : {acc(topo):.3f}")
 print(f"raw + topo (10 features): {acc(np.hstack([X, topo])):.3f}")
 ```
 
-Both numbers are worth sitting with. The **local-shape features alone**, with the four measurements thrown away entirely, classify the three species at about **0.83**. That is more than it sounds: those six columns know nothing about how big a petal is, only about how the flowers near this flower are spaced. Adding them back to the raw measurements moves accuracy from roughly **0.93** to **0.95** — a real improvement, and a small one.
+Cross-validated accuracy: raw alone ≈ 0.93; topology alone ≈ 0.83; raw + topo ≈ 0.95. Marginal gain when coordinates already separate species.
 
-That small number is the honest result, and it is the argument the rest of this post has been walking toward.
+## When not to use TDA
 
-## Persistence is a hypothesis about your data, not a free block of columns
+**Abuse**: Pattern A without evidence of shape signal — persistence as default feature generator.
 
-The four patterns are TDA used well. Each matches the machinery to a question where shape genuinely carries information: cyclic dynamics, void structure, branching trajectories, structural change. The abuse is not a fifth pattern. It is Pattern A applied without asking whether this dataset has a shape at all — persistent homology as a feature generator you sprinkle on for luck.
+Diagnostic before decorative:
 
-The Iris run is a mild, friendly instance of exactly that. The local landscapes did add signal, 0.93 to 0.95, but the four raw measurements had already solved the problem, so topology earned a rounding error in exchange for a nearest-neighbor filtration per flower. On data whose signal lived in the shape rather than the coordinates, the same pipeline could be decisive. Here it is decoration. The lesson is not that TDA failed — it worked, and it told the truth about the flowers — but that the size of the payoff was set by the data before the method was chosen.
+- Plot the persistence diagram.
+- Is anything far above the diagonal?
+- Can you name the geometric mechanism (periodicity, exclusion zone, void) in this domain?
 
-The expensive version of the same mistake is quiet. Bolt persistence onto tabular data whose signal lives in a handful of marginal effects, or onto a point cloud with no loops or voids in it, and you pay in full — Vietoris–Rips grows combinatorially in the number of points and in the homology dimension — for nothing. Worse, you can *manufacture* signal. Short-lived features hugging the diagonal are noise, but a flexible model handed them as columns will find handles in them and overfit, and the topology lends a look of principled sophistication to what is really the model memorizing the sample.
+If the diagram is diagonal noise and no mechanism is plausible, density methods are cheaper and equally good.
 
-So the discipline is diagnostic before decorative, and it is one question asked before the pipeline is built rather than after. Plot the persistence diagram. Is anything sitting well above the diagonal? And can you name the mechanism that would put it there — a periodicity, a cycle, a spatial exclusion that keeps the middle empty — in *this* domain? If the diagram is noise on the diagonal and you cannot name the geometry you expected, a density method will be cheaper and just as good.
+Costs of misuse:
 
-Which is where we came in. The dartboard with the bullseye rubbed out is the case that justifies all of this: a hole is not a density fact, no clustering algorithm will ever report one, and TDA is the machinery that will. It will also run, uncomplainingly and at full price, on the dartboard with the bullseye still in it. The tool cannot tell you which one you are holding. That part is yours.
+- Vietoris–Rips scales combinatorially in $n$ and homology dimension.
+- Short-lived diagonal features can be overfit if vectorized carelessly.
+
+TDA is justified when holes, cycles, or multi-scale connectivity carry domain signal (e.g. ring without central density). It runs at full cost on data with no such structure.
 
 ## References
 
-1. Zhou, Y. & Wang, B. *Topological Machine Learning for Mixed Numeric and Categorical Data.* arXiv:2003.04584. <https://arxiv.org/abs/2003.04584>
-2. Bhatia, S., Chatterjee, B., Nathani, D. & Kaul, M. *Understanding and Predicting Links in Graphs: A Persistent Homology Perspective.* arXiv:1811.04049. <https://arxiv.org/abs/1811.04049>
-3. Minamitani, E. et al. *Persistent homology-based descriptor for machine-learning potential of amorphous structures.* Journal of Chemical Physics **159**, 084101 (2023). <https://doi.org/10.1063/5.0159349>
-4. Ismail, M. S. et al. *Detecting Early Warning Signals of Major Financial Crashes in Bitcoin Using Persistent Homology.* IEEE Access **8** (2020). <https://doi.org/10.1109/ACCESS.2020.3033701>
-5. Gidea, M. & Katz, Y. *Topological Data Analysis of Financial Time Series: Landscapes of Crashes.* Physica A **491**, 820–834 (2018). <https://doi.org/10.1016/j.physa.2017.09.028>
-6. Pranav, P. et al. *The topology of the Cosmic Web in terms of persistent Betti numbers.* Monthly Notices of the Royal Astronomical Society **465**, 4281–4310 (2017). <https://doi.org/10.1093/mnras/stw2862>
-7. Wilding, G. et al. *Persistent homology of the cosmic web I: Hierarchical topology in ΛCDM cosmologies.* Monthly Notices of the Royal Astronomical Society **507**, 2968–2990 (2021). <https://doi.org/10.1093/mnras/stab2326>
-8. Wright, M. & Zheng, X. *Topological Data Analysis on Simple English Wikipedia Articles.* arXiv:2007.00063. <https://arxiv.org/abs/2007.00063>
-9. Nicolau, M., Levine, A. J. & Carlsson, G. *Topology based data analysis identifies a subgroup of breast cancers with a unique mutational profile and excellent survival.* Proceedings of the National Academy of Sciences **108**, 7265–7270 (2011). <https://doi.org/10.1073/pnas.1102826108>
-10. Rizvi, A. H. et al. *Single-cell topological RNA-seq analysis reveals insights into cellular differentiation and development.* Nature Biotechnology **35**, 551–560 (2017). <https://doi.org/10.1038/nbt.3854>
-11. Xia, K. & Wei, G. W. *Persistent homology analysis of protein structure, flexibility, and folding.* International Journal for Numerical Methods in Biomedical Engineering **30**, 814–844 (2014). <https://doi.org/10.1002/cnm.2655>
-12. Stolz, B. J. et al. *Topological data analysis of knot structures in DNA.* (Analysis of knotting and supercoiling in biological polymers via persistent homology.) <https://doi.org/10.1007/s41468-018-0018-0>
-13. Hajij, M. et al. *Visual Detection of Structural Changes in Time-Varying Graphs Using Persistent Homology.* arXiv:1707.06683. <https://arxiv.org/abs/1707.06683>
+- Zhou, Y. & Wang, B. *Topological Machine Learning for Mixed Numeric and Categorical Data.* arXiv:2003.04584. <https://arxiv.org/abs/2003.04584>
+- Bhatia, S., Chatterjee, B., Nathani, D. & Kaul, M. *Understanding and Predicting Links in Graphs: A Persistent Homology Perspective.* arXiv:1811.04049. <https://arxiv.org/abs/1811.04049>
+- Minamitani, E. et al. *Persistent homology-based descriptor for machine-learning potential of amorphous structures.* Journal of Chemical Physics **159**, 084101 (2023). <https://doi.org/10.1063/5.0159349>
+- Ismail, M. S. et al. *Detecting Early Warning Signals of Major Financial Crashes in Bitcoin Using Persistent Homology.* IEEE Access **8** (2020). <https://doi.org/10.1109/ACCESS.2020.3033701>
+- Gidea, M. & Katz, Y. *Topological Data Analysis of Financial Time Series: Landscapes of Crashes.* Physica A **491**, 820–834 (2018). <https://doi.org/10.1016/j.physa.2017.09.028>
+- Pranav, P. et al. *The topology of the Cosmic Web in terms of persistent Betti numbers.* Monthly Notices of the Royal Astronomical Society **465**, 4281–4310 (2017). <https://doi.org/10.1093/mnras/stw2862>
+- Wilding, G. et al. *Persistent homology of the cosmic web I: Hierarchical topology in ΛCDM cosmologies.* Monthly Notices of the Royal Astronomical Society **507**, 2968–2990 (2021). <https://doi.org/10.1093/mnras/stab2326>
+- Wright, M. & Zheng, X. *Topological Data Analysis on Simple English Wikipedia Articles.* arXiv:2007.00063. <https://arxiv.org/abs/2007.00063>
+- Nicolau, M., Levine, A. J. & Carlsson, G. *Topology based data analysis identifies a subgroup of breast cancers with a unique mutational profile and excellent survival.* Proceedings of the National Academy of Sciences **108**, 7265–7270 (2011). <https://doi.org/10.1073/pnas.1102826108>
+- Rizvi, A. H. et al. *Single-cell topological RNA-seq analysis reveals insights into cellular differentiation and development.* Nature Biotechnology **35**, 551–560 (2017). <https://doi.org/10.1038/nbt.3854>
+- Xia, K. & Wei, G. W. *Persistent homology analysis of protein structure, flexibility, and folding.* International Journal for Numerical Methods in Biomedical Engineering **30**, 814–844 (2014). <https://doi.org/10.1002/cnm.2655>
+- Stolz, B. J. et al. *Topological data analysis of knot structures in DNA.* <https://doi.org/10.1007/s41468-018-0018-0>
+- Hajij, M. et al. *Visual Detection of Structural Changes in Time-Varying Graphs Using Persistent Homology.* arXiv:1707.06683. <https://arxiv.org/abs/1707.06683>
+- Anderson, E. *The irises of the Gaspe Peninsula.* Bulletin of the American Iris Society **59**, 2–5 (1935). [UCI Iris dataset](https://archive.ics.uci.edu/dataset/53/iris)

@@ -8,28 +8,41 @@ A personal ML/data blog ("Synthetic Musings") built with [Quarto](https://quarto
 
 The product here is prose. The tooling below exists to get prose onto the web with its numbers intact; it is not the point of the repo.
 
-## Write in plain English
+## Write to the post's register
 
-`STYLE.md` owns the prose rules — read it in full before writing or editing a post. The single rule it all serves: **write so a smart reader who has never met the topic follows every sentence on the first pass.** That is harder than it sounds, and it is the most common thing to get wrong here.
+`STYLE.md` owns the prose rules — read it in full before writing or editing a post. It has two registers. Pick one and stay in it.
 
-What that means concretely:
+- **Register A — personal / old** (dated before 2025-08-28, plus the personal essays listed in `STYLE.md`): claim headings, narrative spine, 2–4 sentence warm-up before mechanics. Personal essays must not drift into guide voice.
+- **Register B — recent technical** (technical posts dated 2025-08-28 or later): dry, numbered, list-first documentation. Topic headings, `number-sections: true`, lists over prose, one- or two-sentence paragraphs, no narrative closer.
 
-- **Explain the idea before you name it.** Describe what the thing does in ordinary words, then attach the technical term to it. Never the reverse.
-- **Warm up before the mechanics.** The first time a section reaches for a new idea, mechanism, or dataset, write 2–4 plain sentences first: what problem this solves, why it matters, what the reader should hold in mind. After that, one sentence either side of a code block carries it. Never open a section with code, a bullet list, or a table.
-- **Everyday words over Latinate ones** — "use" not "utilize", "help" not "facilitate", "about" not "approximately". Active voice by default.
-- **Split the sentence you have to read twice.** Two or more nested subordinate clauses is the usual tell. This is not a ban on the long sentence: an em-dash gloss, or a concrete case hung off an abstract claim, reads as one clear beat. Keep those.
-- **Every piece of jargon gets a plain restatement nearby** the first time it appears.
-- **One idea per paragraph.**
-- **Match the register of the post you are editing.** These rules tighten prose; they do not convert a post to a different voice. Personal essays especially must not drift into guide voice — claims turning into requirements lists, headings into section labels.
+Do not restyle a Register A post into Register B unless the author asked for that sweep. Do not restyle a Register B post back into claim-heading narrative.
+
+### Register A (summary)
+
+Write so a smart reader who has never met the topic follows every sentence on the first pass.
+
+- Explain the idea before you name it.
+- Warm up before the mechanics; never open a section with code, a bullet list, or a table.
+- Everyday words over Latinate ones; active voice; one idea per paragraph.
+- Headings state claims so the ToC reconstructs the argument. Each section's first sentence links back; its last names the gap the next section fills. Close by returning to the opening claim. Caveats go inline where the objection occurs.
 
 `STYLE.md` carries two calibration examples (cross-validation, the bootstrap). Read the tone off those rather than guessing at it.
 
-Above the sentence level, a post is **one argument, not a pile of sections**: headings state claims so the table of contents reconstructs the argument, each section's first sentence links back to the previous result and its last names the gap the next section fills, and the close returns to the opening claim now that it is earned. Caveats go inline where the objection occurs, not in a "Limitations" bin at the end.
+### Register B (summary)
+
+Optimize for rapid transfer of technical information. Do not try to make the text engaging.
+
+- Start with the definition or procedure. Cut scene-setting and conversational transitions.
+- Topic headings (`## Eigendecomposition`), numbered by Quarto — do not put `1.` in the heading text.
+- Default to bullets or numbered lists for multiple concepts, steps, or trade-offs.
+- Remaining paragraphs: one or two sentences. Isolate code, commands, and display math in fenced blocks.
+- End when the information is delivered.
+- **References last (both registers).** If the post cites papers, books, docs, datasets, or other posts as sources, end with `## References`: a short bulleted list of those sources only. Do not invent citations. Skip the section when there are none. Inline links may stay; the end list is the bibliography.
 
 ### Two failure modes no check catches
 
 - **An artifact that teaches the opposite of the prose.** A widget, worked example, or figure can be internally correct and still contradict the sentence pointing at it. If the post tells the reader to drag a slider to 12 and watch a band rise, drive it to 12 and confirm the band rises. Every automated check passes either way, because they are all per-artifact.
-- **A heading that contradicts its own section.** Read the headings alone, through the post's own metaphor, and ask what argument they reconstruct. In a post about ladders, a heading saying the threshold sits "below" the old one read as *a lower bar* while its section argued the opposite.
+- **A heading that contradicts its own section.** In Register A, read the headings alone as claims. In Register B, read them as a numbered outline and check each label matches the section.
 
 ### Never invent first-person detail
 
@@ -46,6 +59,10 @@ Any post that uses, plots, or even mentions a dataset must say where it came fro
 - **Why this method** — what property of *this* data (sample size, noise, class imbalance, heavy tails, hierarchy, missingness, small-n uncertainty) makes the post's technique the right tool, and which quantity it improves.
 
 Synthetic data is not exempt: say it is synthetic, give the generating process, and explain what real situation it stands in for and why simulating beats a real dataset here.
+
+### References at the end (both registers)
+
+If a post cites papers, books, docs, datasets, or other posts as sources, end with `## References`: a short bulleted list of those sources only. Do not invent citations. Skip the section when there are none. Inline links may stay; the end list is the bibliography. In Register A this heading is an allowed topic label after the narrative close.
 
 ## Workflow
 

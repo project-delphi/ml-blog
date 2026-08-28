@@ -14,38 +14,26 @@ format:
     toc: true
     toc-depth: 2
     code-fold: true
+    number-sections: true
 ---
 
 ![From Formants to Foundation Models](./cover.png)
 
-You already know these voices. The flat buzzing one from an old science-fiction
-film. The satnav that reads a road name in a register it clearly recorded on a
-different day from the rest of the sentence. The customer-service line that sounds
-like a person right up until it reads out a postcode. You can date each of them by
-ear, within a decade, without knowing anything about how it was built.
+Text-to-speech (TTS) progress is audible: each era changed the **unit of generation** — the smallest thing a system produces before assembling speech.
 
-That is an unusual property for a technology to have. Speech synthesis is one of
-the few corners of machine learning where thirty years of progress fits into twenty
-seconds of listening — your ear does the evaluation, and no benchmark is required.
+Abstraction levels, oldest to newest:
 
-Underneath the changing sound is one idea repeating. Every era of text-to-speech
-moved the **unit of generation** down a level of abstraction: from rules about how
-a voice resonates, to recorded fragments of speech, to statistical parameters, to
-raw audio samples, to discrete tokens. Each move down bought naturalness and gave
-up control.
+- Rules (formants)
+- Recorded fragments (diphones, units)
+- Statistical parameters (spectrum, pitch, duration)
+- Raw waveform samples
+- Discrete codec tokens
 
-The old engines still install, so this is no museum tour. Every era below has a
-player, and four of the five clips were made on a laptop while writing this.
+Each step down increases naturalness and reduces direct control. Old engines still run; sections below include audio players. Four of five clips were generated locally for this post.
 
-## Five eras, each defined by what it generates
+## Five eras by generation unit
 
-The tidiest way to tell these decades apart is not by which lab did what, but by
-asking a single question of each system: what is the smallest thing it produces
-before assembling the answer? A rule? A recorded fragment? A number? A raw sample?
-A token? Everything else about an era — how natural it sounds, how much disk it
-needs, whether you can change the voice — follows from that answer.
-
-Five eras, then, and five answers. Click one.
+Classify a system by what it generates: a rule, fragment, parameter set, sample, or token. Sound quality, disk use, and voice controllability follow from that choice.
 
 ```{=html}
 <div class="ttshist">
@@ -192,139 +180,57 @@ Five eras, then, and five answers. Click one.
 </script>
 ```
 
-## The 1990s: you could understand it, but never mistake it for a person
+## 1990s: formant and diphone synthesis
 
-The first era stored no speech at all. Your throat and mouth are a set of
-resonating chambers, and changing their shape boosts some frequency bands while
-damping others — which is the whole difference between "ee" and "ah". Those bands
-are called *formants*. Describe them well enough and you can skip the human
-entirely: drive a bank of oscillators and filters from a table of settings, and
-speech comes out of arithmetic. That is **formant synthesis**. Rules turn letters
-into phonemes, the individual sounds a language distinguishes between, and phonemes
-into filter settings. It is how DECtalk spoke, and why Stephen Hawking's voice
-sounded as it did.
+**Formant synthesis** — no stored speech. Vocal-tract resonances (*formants*) are modeled as filter settings driven by rules: letters → phonemes → oscillator/filter parameters. Used by DECtalk and similar systems.
 
-The alternative was to record a human once and then cut the recording up. The hard
-part of speech is not the steady middle of a sound but the join between two of
-them, so the unit worth storing is the transition — the milliseconds spanning "k"
-into "æ" — rather than the sound itself. Keep one copy of every transition the
-language uses and any sentence can be spliced from them, with the pitch bent to
-fit. That is **diphone concatenation**. Edinburgh's Festival, released in 1996 and
-still the ancestor of most open-source TTS, did exactly this.
+**Diphone concatenation** — record one copy of each sound-to-sound transition; splice and pitch-shift to build sentences. [Festival](https://www.cstr.ed.ac.uk/projects/festival/) (1996, CSTR Edinburgh) is the open-source ancestor.
 
-**What changed:** arbitrary text became speakable on a machine with almost no
-memory. The cost was humanity: every syllable is identical every time, because
-only one copy exists.
+**Trade-off:** arbitrary text on minimal storage; every syllable sounds identical (single copy per unit).
 
-## The 2000s: two opposite fixes for the same robotic seam
+## 2000s: unit selection and parametric synthesis
 
-Both 1990s techniques failed in the same place: the joins. Splice two fragments
-recorded seconds apart and the ear hears the edit. The next decade produced two
-opposite responses to that one problem.
+Both 1990s approaches failed at joins between fragments recorded at different times.
 
-The first was to make the joins rarer by having far more material to work with.
-Record hours of a single speaker rather than one clip of each transition, then at
-synthesis time search that database for the longest contiguous stretch of real
-audio matching what you need to say. Fewer cuts, fewer seams. That is **unit
-selection**, and when the database happens to contain your phrase, the output *is*
-a human recording. When it does not, the voice lurches between registers
-mid-sentence — a rarer failure and a much more startling one.
+**Unit selection** — record hours of one speaker; at synthesis time, pick the longest matching contiguous stretch. Fewer cuts; when a phrase exists in the database, output is real recorded speech. Misses produce register shifts mid-sentence.
 
-The second response was to stop storing waveforms at all. Speech can be described
-compactly by a handful of slowly-changing numbers: which frequencies are loud, how
-high the pitch is, how long each sound lasts. Model how those numbers move, and you
-can generate a fresh set for a new sentence and rebuild audio from them using a
-*vocoder* — a component whose only job is turning that compact description back
-into a waveform. That is **statistical parametric synthesis**. The HTS toolkit did
-it with hidden Markov models, which treat a sequence as a chain of hidden states
-that each emit an observation. The result was tiny and easy to bend: change a
-parameter, change the speaker. It also sounded muffled and buzzy, because averaging
-is what a statistical model does, and the average of many pronunciations is blurrier
-than any one of them.
+**Statistical parametric synthesis** — store no waveforms; model spectrum, pitch, and duration; rebuild audio with a **vocoder**. [HTS](https://hts.sp.nitech.ac.jp/) used hidden Markov models. Small footprint, easy speaker control; muffled output from averaging many pronunciations.
 
-**What changed:** the field split into hoarding real audio versus modelling its
-parameters, and neither got both naturalness and flexibility. The neural era broke
-that deadlock.
+**Trade-off:** hoard audio vs model parameters; neither achieved both naturalness and flexibility until neural methods.
 
-## The 2010s: the hand-built pipeline collapsed into two networks
+## 2010s: neural end-to-end stacks
 
-Both 2000s approaches kept an intermediate description of speech between the text
-and the sound. DeepMind's WaveNet (2016) threw that away. A digital recording is
-ultimately just a long list of amplitude numbers — sixteen thousand or more of them
-for every second of audio — so WaveNet predicted that list directly, one number at
-a time, each conditioned on every number before it. Predicting the next element of
-a sequence from all its predecessors is what makes a model *autoregressive*, in the
-same sense as a language model predicting the next word. At 16,000-odd predictions
-per second of audio it was glacially slow, and it beat everything before it.
+**WaveNet** (2016) — autoregressive prediction of raw waveform samples (~16 kHz per second of audio). Slow; highest quality of its era.
 
-Tacotron (2017) removed the other half of the stack. It used a sequence-to-sequence
-network — the architecture built for translation, which reads one variable-length
-sequence and emits another — to map characters straight to a mel spectrogram: a
-picture of which frequencies are loud at each instant, on a frequency scale spaced
-the way human hearing actually is. Doing that meant learning from data the
-pronunciation and prosody rules people had been hand-writing for decades. Tacotron 2
-then bolted the two halves together, a spectrogram predictor feeding WaveNet as a
-**neural vocoder**, and scored 4.53 on a 5-point naturalness rating — a mean opinion
-score, the average grade a panel of listeners gives a clip — against 4.58 for
-professionally recorded human speech.
+**Tacotron** (2017) — seq2seq maps characters to mel spectrogram; learns pronunciation and prosody from data instead of hand rules.
 
-**What changed:** the linguistic front-end stopped being engineered and started
-being learned. The price was speed. WaveGlow (2018) began clawing it back with a
-flow, an invertible network that turns noise into a whole waveform in one parallel
-pass instead of sample by sample.
+**Tacotron 2 + WaveNet vocoder** — mean opinion score (MOS) 4.53 vs 4.58 for human recordings.
 
-## The early 2020s: dropping autoregression made it fast enough to ship
+**WaveGlow** (2018) — parallel flow-based vocoder; faster than sample-by-sample generation.
 
-Quality was solved; throughput was not, and autoregression was the reason. If every
-output waits on the one before it, nothing can be computed in parallel, and a modern
-accelerator sits mostly idle. Removing that dependency is what this era is about.
+**Trade-off:** linguistic front-end became learned; speed remained the bottleneck.
 
-FastSpeech 2 (2020) predicts each phoneme's duration up front, which frees it to
-emit the entire spectrogram in one parallel pass rather than left to right.
-HiFi-GAN (2020) did the same for the vocoder, training a generator against several
-discriminators — networks whose job is to tell synthesised audio from real, the
-adversarial arrangement a GAN takes its name from — and ran hundreds of times
-faster than real time on a GPU, and, crucially, faster than real time on a laptop
-CPU. VITS (2021) closed the last seam by training both stages end to end, with no
-separate vocoder in between.
+## Early 2020s: non-autoregressive deployment
 
-**What changed:** open-source TTS became deployable rather than demonstrable. The
-limitation was rigidity — a model gave you the voices it was trained on, and a new
-voice meant a new training run.
+Autoregression blocks parallel compute.
 
-## Now: speech is just another token stream
+- **FastSpeech 2** (2020) — predict phoneme durations; emit full spectrogram in parallel.
+- **HiFi-GAN** (2020) — GAN vocoder; hundreds of times faster than real time on GPU; faster than real time on laptop CPU.
+- **VITS** (2021) — end-to-end training; no separate vocoder stage.
 
-Fixed voices were the last thing left to give up, and what gave them up came from
-outside speech research. Text models had spent a decade getting very good at one
-narrow task: predict the next symbol in a sequence drawn from a fixed vocabulary.
-Audio has no such vocabulary, because a waveform is continuous — unless somebody
-builds one. A model that squeezes sound down into a short run of discrete symbols
-and decodes them back to audio does precisely that. The symbols are *codec tokens*
-and the model is a **neural audio codec**: a vocabulary for sound, playing the role
-subword tokens play for text.
+**Trade-off:** deployable open-source TTS; fixed voices per training run.
 
-Once speech is a token sequence, generating speech is a language-modelling problem
-and the whole transformer toolkit transfers unchanged. Chatterbox is explicitly a
-Llama-style backbone — Meta's open-weights transformer architecture — predicting
-speech tokens rather than word ones; CosyVoice 2, OpenAudio S1-mini and IndexTTS-2
-are variations on the theme.
+## Codec tokens and speech LLMs
 
-**What changed:** voice stopped being a property of the weights and became part of
-the prompt. Give one a few seconds of reference audio and it clones a speaker with
-no fine-tuning; ask for an emotion and it obliges. The costs return too:
-autoregression brings back latency and occasional garbled output, and effortless
-cloning is a real misuse risk — which is why models like Chatterbox watermark what
-they emit.
+**Neural audio codec** — compress waveform to discrete **codec tokens**; decode back to audio. Speech becomes a token sequence; transformer tooling applies directly.
 
-## Hear thirty years of the same sentence
+Examples: Chatterbox (Llama-style backbone on speech tokens); CosyVoice 2, OpenAudio S1-mini, IndexTTS-2 (variants on the theme).
 
-Five eras described is a good deal less useful than five eras heard, and the whole
-argument of this post is that your ear is the better instrument. Here is that arc
-as sound. Four of the five clips were generated locally by
-[this post's build script](https://github.com/project-delphi/ml-blog/blob/main/posts/open-source-tts-history/src/make_audio.py),
-all saying one sentence so the only variable is technique. These are living
-descendants, not original binaries — eSpeak NG still synthesises by formant rule,
-and Flite still ships a diphone database and a parametric voice.
+**Trade-off:** voice and emotion via prompt/reference audio; autoregression returns latency and garbling risk; cloning enables misuse (watermarking in models like Chatterbox).
+
+## Audio samples
+
+Five clips, one sentence each (except Tacotron 2 — see note). Four generated locally via [make_audio.py](https://github.com/project-delphi/ml-blog/blob/main/posts/open-source-tts-history/src/make_audio.py). Living descendants of historical engines, not original period binaries.
 
 ```{=html}
 <div class="ttshist-samples">
@@ -393,18 +299,11 @@ and Flite still ships a diphone database and a parametric voice.
 </style>
 ```
 
-The jump from the third clip to the fifth is the entire neural revolution — the one
-place where reading about mean opinion scores tells you less than four seconds of
-listening.
+Clip 3 → clip 5 spans the main neural quality jump.
 
-## What you can actually download today
+## Current open-source models
 
-The eras above are history until you can run one. These five are the current
-generation and all of them are downloadable: each runs locally on ordinary
-hardware, each carries a permissive licence, and each sits either in the codec-token
-era or in the non-autoregressive one just before it. Read the parameter count and
-the underlying tech together — between them they account for most of what each model
-will and will not do for you.
+Five downloadable models (August 2026): local execution, permissive licenses, codec-token or late non-autoregressive era.
 
 | Model | Provider | Parameters | Underlying tech | Licence |
 |---|---|---|---|---|
@@ -416,41 +315,27 @@ will and will not do for you.
 
 : Leading open-source TTS models as of August 2026. IndexTTS-2's parameter count is not stated in its repository, model card or paper, so it is left blank rather than guessed.
 
-## Caveat: parameter count is a poor proxy for quality here
+## Constraints
 
-That table invites a comparison it cannot support. Kokoro is roughly six times
-smaller than the codec models beside it and still ranks near the top of community
-listening arenas — public head-to-head tests where visitors vote on which of two
-clips sounds better — because it does a narrower job — fixed voices, no cloning, no
-emotion prompt. The larger models buy controllability, not better sentences. Pick
-on the axis you need, and treat naturalness scores as noisy — they shift with the
-listener pool, the text, and who ran the evaluation.
+Parameter count does not rank quality here. Kokoro (~6× smaller than neighboring codec models) ranks high in community listening arenas because it does fixed voices only — no cloning or emotion prompts. Larger models buy controllability, not necessarily better sentences. Naturalness scores vary with listener pool, text, and evaluator.
 
-## The next move down removes text-to-speech as a component
+## Direction of travel
 
-The direction of travel is that TTS stops being a separate thing at all. Once
-speech is tokens, there is no principled reason to generate text and then read it
-aloud — one model can emit speech tokens directly, which removes the prosody errors
-that come from a synthesiser guessing at an intent it never saw. Expect streaming by
-default rather than as an optimisation, emotion and style addressed in the prompt
-like everything else, and watermarking to get far more attention, because a
-technology that clones a voice from six seconds of audio has already outrun the
-norms around it.
+TTS as a separate component may disappear: one model can emit speech tokens directly, avoiding text→speech prosody mismatch.
 
-That is the through-line arriving at its logical end. Every era moved the unit of
-generation down — rules, then fragments, then parameters, then samples, then tokens
-— and every move bought naturalness by giving up a handle somebody used to hold.
-The next one gives up the component itself: if the model choosing the words is also
-producing the sound, there is no synthesiser left to hand a sentence to, and no
-seam between intent and voice to intervene at. What almost certainly survives is
-the thing you did at the top of this post. You will still be able to date a voice by
-ear. That has held for thirty years, and nothing about this decade suggests it
-stops now.
+Expected trends:
 
-## Sources
+- Streaming by default
+- Emotion/style in prompt
+- Watermarking (voice cloning from seconds of reference audio)
 
-- WaveNet — [arXiv:1609.03499](https://arxiv.org/abs/1609.03499); Tacotron — [arXiv:1703.10135](https://arxiv.org/abs/1703.10135); Tacotron 2, including the 4.53 vs 4.58 MOS figures — [arXiv:1712.05884](https://arxiv.org/abs/1712.05884); WaveGlow — [arXiv:1811.00002](https://arxiv.org/abs/1811.00002)
+Each era moved generation downward (rules → fragments → parameters → samples → tokens), trading control for naturalness. Next step: no separate synthesizer — same model produces words and sound.
+
+## References
+
+- WaveNet — [arXiv:1609.03499](https://arxiv.org/abs/1609.03499); Tacotron — [arXiv:1703.10135](https://arxiv.org/abs/1703.10135); Tacotron 2 (4.53 vs 4.58 MOS) — [arXiv:1712.05884](https://arxiv.org/abs/1712.05884); WaveGlow — [arXiv:1811.00002](https://arxiv.org/abs/1811.00002)
 - FastSpeech 2 — [arXiv:2006.04558](https://arxiv.org/abs/2006.04558); HiFi-GAN — [arXiv:2010.05646](https://arxiv.org/abs/2010.05646); VITS — [arXiv:2106.06103](https://arxiv.org/abs/2106.06103)
-- [Festival](https://www.cstr.ed.ac.uk/projects/festival/) (CSTR Edinburgh), [Flite](https://github.com/festvox/flite) and [HTS](https://hts.sp.nitech.ac.jp/) for the pre-neural eras; [eSpeak NG](https://github.com/espeak-ng/espeak-ng) for formant synthesis
-- Model cards and repositories linked in the table above; Chatterbox parameter counts and PerTh watermarking from [Resemble AI](https://www.resemble.ai/chatterbox/)
-- Tacotron 2 sample clip mirrored from [Google's demo page](https://google.github.io/tacotron/publications/tacotron2/)
+- [Festival](https://www.cstr.ed.ac.uk/projects/festival/) (CSTR Edinburgh), [Flite](https://github.com/festvox/flite), [HTS](https://hts.sp.nitech.ac.jp/); [eSpeak NG](https://github.com/espeak-ng/espeak-ng)
+- Model cards and repositories in the table above; Chatterbox parameter counts and PerTh watermarking — [Resemble AI](https://www.resemble.ai/chatterbox/)
+- Tacotron 2 sample clip — [Google demo page](https://google.github.io/tacotron/publications/tacotron2/)
+- [Kokoro-TTS Space](https://huggingface.co/spaces/hexgrad/Kokoro-TTS)

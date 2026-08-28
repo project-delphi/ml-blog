@@ -1,6 +1,6 @@
 ---
 title: "The Matrix That Rotates, Stretches, and Rotates Again"
-subtitle: "An intuitive tour of the SVD: start with what a matrix does to a circle, and the factorisation, the condition number, and image compression all fall out of the same picture."
+subtitle: "SVD as rotate–stretch–rotate: geometry, condition number, rank truncation, and applications."
 author: "Ravi Kalia"
 date: "2026-08-19"
 categories: [Linear Algebra, Numerical Methods, Mathematics]
@@ -17,6 +17,7 @@ execute:
 format:
   html:
     toc: true
+    number-sections: true
     toc-depth: 3
     code-fold: true
     theme: [zephyr, theme.scss]
@@ -27,22 +28,14 @@ format:
 
 ![](./cover.png){fig-alt="Cover card reading The Matrix That Rotates, Stretches, and Rotates Again."}
 
-A grayscale photograph is a matrix. One number per pixel, nothing more. The one
-below is 512 rows by 512 columns, so it is 262,144 numbers, and if you stored it
-as raw bytes that is exactly what it would cost you.
+A real matrix maps the unit sphere to an ellipsoid: rotate ($V^\mathsf{T}$), axis-aligned stretch ($\Sigma$), rotate ($U$).
 
-Almost all of those numbers are redundant. Neighbouring rows of pixels look like
-each other, and so do neighbouring columns, and a factorisation finds that
-redundancy knowing nothing about faces, fabric or sky — only the arithmetic. You
-can then throw away most of the matrix and still recognise the picture, and price
-the trade exactly: so many decibels of quality for so many bytes.
+$$A = U\Sigma V^\mathsf{T}$$
 
-That factorisation is the **singular value decomposition**. Most introductions
-write it down first and explain it afterwards, which hides what it actually is.
-This one starts somewhere else: with a question about geometry. What can a
-matrix *do* to space? The answer turns out to be short, and everything else in
-this post — the compression, the condition number, the reason no one computes
-the SVD the obvious way — is a consequence of it.
+- $U, V$: orthogonal (rotations/reflections).
+- $\sigma_i$: singular values (stretch factors), $\sigma_1\ge\cdots\ge 0$.
+
+This post uses that geometry for condition numbers, rank-$k$ approximation, and several application matrices.
 
 ```{python}
 #| label: setup
@@ -76,18 +69,9 @@ WIDGET = json.loads(Path("widget-data/image.json").read_text())
 MOVIES = json.loads(Path("widget-data/movielens.json").read_text())
 ```
 
-## Every matrix turns, stretches, then turns again
+## Rotate, stretch, rotate
 
-Pick any real matrix, square or not, and feed it every vector of length one. In
-two dimensions those vectors trace a circle, and their images trace some new
-shape. The question is which shapes are possible.
-
-The answer is that only one shape is possible: an ellipse. Not usually an
-ellipse, not an ellipse for nice matrices. Always. A matrix can stretch the
-circle unevenly, spin it, flip it, or squash it flat onto a line, but it cannot
-bend it into anything with a corner or a wobble. That constraint is what makes
-the rest of this post possible, and it is easiest to believe by watching the
-circle deform in three moves.
+Unit vectors in $\mathbb{R}^2$ trace a circle; their images under $A$ trace an ellipse (possibly degenerate).
 
 ```{python}
 #| label: fig-three-panel
@@ -129,16 +113,7 @@ plt.show()
 print(f"singular values: sigma1 = {s2[0]:.4f}, sigma2 = {s2[1]:.4f}")
 ```
 
-Read the panels left to right and you have the whole decomposition. The first
-move is a rotation: the circle is unchanged as a set, but the arrows swing onto
-the axes. The second stretches along those axes — by
-`{python} f"{s2[0]:.3f}"` one way and `{python} f"{s2[1]:.3f}"` the other — which
-is what makes it an ellipse. The third rotates that ellipse into its final pose.
-
-Three moves, three matrices, and the formula has somewhere to land. Call the
-first rotation $V^\mathsf{T}$, the stretch $\Sigma$, and the second rotation $U$.
-Applied in order they send $x$ to $U\Sigma V^\mathsf{T} x$, which must equal $Ax$
-for every $x$, so
+Stages: $V^\mathsf{T}$ (rotate), $\Sigma V^\mathsf{T}$ (stretch), $U\Sigma V^\mathsf{T}=A$ (rotate).
 
 $$A = U\Sigma V^\mathsf{T}.$$
 
@@ -163,22 +138,11 @@ That is the same failure the Filip dataset shows later, in eleven dimensions
 instead of two.</div>
 :::
 
-The static figure above is that widget at its default matrix, so with scripts off
-you have already seen the argument; the widget only lets you check it on matrices
-you chose rather than one I chose.
+Static figure matches the widget default matrix.
 
-## The decomposition exists because $A^\mathsf{T}A$ hands you the right basis
+## Existence via $A^\mathsf{T}A$
 
-Watching one matrix behave is not a proof. The claim is that *every* matrix
-factors this way, and the reason is a short piece of algebra that is worth
-seeing, because it also explains where the singular values come from.
-
-Start from a matrix you know is well behaved: $A^\mathsf{T}A$. It is square, and
-it is symmetric, since $(A^\mathsf{T}A)^\mathsf{T} = A^\mathsf{T}A$. The spectral
-theorem says a real symmetric matrix has a full set of orthonormal eigenvectors —
-this is the result the companion post on
-[eigendecomposition](../eigendecomposition/) develops. Call them
-$v_1, \dots, v_n$ with $A^\mathsf{T}A\,v_i = \lambda_i v_i$.
+Eigenvectors $v_i$ of $A^\mathsf{T}A$ give right singular vectors; $\|Av_i\|=\sqrt{\lambda_i}=\sigma_i$.
 
 Now ask what happens to those particular directions under $A$ itself. Take the
 inner product of two of their images:
@@ -264,7 +228,7 @@ closes to an acute angle. So the decomposition always exists, and $\Sigma$ is
 never a free choice — it is fixed by the matrix. The natural next question is
 what those numbers are worth.
 
-## The singular values are the stretch factors, and their ratio is the danger
+## Singular values and condition number
 
 Each $\sigma_i$ is a length: how far the matrix stretches one particular
 direction. The largest, $\sigma_1$, is the most any unit vector can be stretched,
@@ -279,21 +243,7 @@ solving a system in double precision starts with about 16 correct digits and
 loses roughly $\log_{10}\kappa$ of them. At $\kappa = 10^{15}$ there is nothing
 left.
 
-Seeing that happen needs a matrix that is genuinely hard and an answer you
-genuinely know. **Filip** is one of the Statistical Reference Datasets published
-by NIST's Statistical Engineering Division: 82 measured $(x, y)$ pairs
-contributed by A. Filippelli, to be fitted by a degree-10 polynomial. NIST
-assembled the StRD collection to certify statistical software, so these datasets
-exist precisely to break solvers that look healthy on easy problems, and the
-certified coefficients were computed in multiple precision and quoted to 15
-digits. That certification is what makes Filip usable here — a real least-squares
-problem with a real right answer, which no synthetic ill-conditioned matrix
-offers. The stakes are ordinary: a package that quietly returns the wrong
-polynomial here returns the wrong calibration curve in somebody's laboratory, and
-nothing in its output says so.
-
-The design matrix is the one the model implies: 82 rows, and column $j$ holding
-$x^j$ for $j = 0 \dots 10$. Its singular values are the first thing to look at.
+**Filip (NIST StRD):** 82 points, degree-10 polynomial design matrix. Certified coefficients test solver accuracy. Wrong fits imply wrong lab calibrations.
 
 ```{python}
 #| label: fig-filip-spectrum
@@ -364,7 +314,7 @@ describe it, where $x^{10}$ ranges over twelve orders of magnitude while $x^0$
 sits at 1. The singular values are what let you see that before trusting a
 number: a diagnostic, not just a description.
 
-## Rank-$k$ truncation is a storage-versus-quality dial you can price
+## Rank-$k$ truncation
 
 Same decomposition, opposite use. On Filip the small singular values were a
 warning; on a photograph they are an opportunity, because writing
@@ -379,14 +329,7 @@ rank-$k$ matrix can be, in least-squares error — the Eckart–Young theorem, w
 [the companion post on matrix factorisations](../matrix-factorizations/) derives
 as an optimisation problem.
 
-The photograph is `skimage.data.astronaut()`: a NASA photograph of astronaut
-Eileen Collins, taken as mission documentation and in the public domain, shipped
-inside scikit-image so nothing here needs a network. It earns its place by being
-an ordinary photograph rather than a pattern chosen to compress well — a face,
-fabric, hardware and a flat background, with no structure planted in it. In
-grayscale it is one matrix of 512 × 512, or 262,144 bytes raw. How few of those
-does the picture actually need? The answer matters wherever a thumbnail, a
-preview or a slow connection has to decide what to send first.
+**Image:** `skimage.data.astronaut()` (512×512 grayscale, public-domain NASA photo). Rank-$k$ truncation approximates the matrix; storage is $k(m+n+1)$ vs $mn$ bytes.
 
 ```{python}
 #| label: fig-rank-grid
@@ -489,7 +432,7 @@ which is the same trick that makes truncation useful in the first place: the
 generator is far smaller than what it generates.</div>
 :::
 
-### Caveat: this is not JPEG
+## Truncated SVD versus JPEG
 
 Truncated SVD is the best rank-$k$ approximation of a matrix. It is not the best
 *image compressor*, and the gap is not close.
@@ -580,7 +523,7 @@ bias for an answer that does not move when the data twitches, which is why it ha
 a name of its own in the inverse problems literature: truncated SVD
 regularisation.
 
-## Squaring the matrix to compute it throws away half your digits
+## Avoid $A^\mathsf{T}A$
 
 The derivation above reads like a recipe: form $A^\mathsf{T}A$, diagonalise it,
 take square roots. Nobody does this, and Filip shows why in one line of output.
@@ -641,7 +584,7 @@ The bottom two rows are why a recommender on a hundred million ratings is
 tractable at all: nobody needs all 512 layers of the photograph, and nobody needs
 all 943 of MovieLens.
 
-## Everything else people do with an SVD is one of these three questions
+## Three SVD questions
 
 Three matrices have appeared so far — a photograph, a NIST design matrix, a
 table of ratings — and each asked something different of the same spectrum.
@@ -727,7 +670,7 @@ None of them claims that what got discarded is *nothing*. There is one family
 where that stronger claim is close to literally true, and it is the one you can
 hear.
 
-## Voice is where the discarded layers really are noise
+## Hankel denoising
 
 Sound arrives as one long vector, not a matrix — a few thousand samples per
 second and no second axis in sight. To use any of this you have to make a matrix
@@ -867,7 +810,7 @@ the grey noise it came from wanders. Keep too few layers and harmonics go
 missing; keep too many and you are reconstructing noise along with the voice, and
 by rank 40 most of the gain is gone.
 
-### Caveat: real speech is not five sinusoids for a tenth of a second
+## Synthetic vowel limits
 
 The cliff in the left panel is that sharp because the synthetic vowel is exactly
 periodic and exactly stationary for the whole 125 ms. Real speech is neither. The
@@ -907,7 +850,7 @@ of room tone is not. Dereverberation splits the same way, with the direct path
 concentrated in the leading directions and the reflections spread through the
 trailing ones.
 
-### Caveat: deep learning took most of this, except the part about itself
+## Classical vs neural pipelines
 
 For denoising, separation, recognition and verification, end-to-end neural models
 now beat these classical pipelines by margins that are not close, and have for
@@ -925,64 +868,18 @@ way to fine-tune a large model cheaply, are the same observation used for
 training instead of compression. Eckart–Young does not care whether the matrix
 holds pixels, ratings, a vowel or a weight.
 
-## Back to the photograph
+## Photograph summary
 
-Of all the matrices in this post the photograph is the narrowest and the only
-one with a price in bytes attached, which is why it is the one to finish on. The
-claim at the top was that a photograph is mostly redundant, that one
-factorisation finds the redundancy without being told what a face is, and that
-the trade can be priced. All three are now numbers. The elbow of this image's
-spectrum sits at rank
-`{python} str(elbow)` out of 512, and a rank-`{python} str(elbow)` reconstruction
-holds `{python} f"{WIDGET['energy'][elbow - 1] * 100:.1f}"`% of the matrix's
-squared norm and `{python} f"{psnr[elbow - 1]:.1f}"` dB of quality for
-`{python} f"{WIDGET['fracI16'][elbow - 1] * 100:.1f}"`% of the raw bytes, a
-compression ratio of
-`{python} f"{WIDGET['rawBytes'] / im.stored_bytes(512, 512, elbow, im.BYTES_INT16):.1f}"`×
-chosen by nothing but the size of the singular values. Push to rank
-50 and you get `{python} f"{psnr[49]:.1f}"` dB at
-`{python} f"{WIDGET['fracI16'][49] * 100:.0f}"`% of raw, which is where the dial
-stops being generous.
+Rank `{python} str(elbow)`: `{python} f"{WIDGET['energy'][elbow - 1] * 100:.1f}"`% Frobenius energy, `{python} f"{psnr[elbow - 1]:.1f}"` dB, `{python} f"{WIDGET['fracI16'][elbow - 1] * 100:.1f}"`% of raw bytes (int16 storage). Rank 50: `{python} f"{psnr[49]:.1f}"` dB at `{python} f"{WIDGET['fracI16'][49] * 100:.0f}"`% of raw.
 
-The pricing cuts both ways, and that is the honest ending. A lossless PNG of the
-same photograph is `{python} f"{WIDGET['pngBytes'] / WIDGET['rawBytes'] * 100:.0f}"`%
-of raw with *no* quality lost, and JPEG beats every rank on this chart. What the
-SVD gives you is not the smallest file. It is one ordering of a matrix's
-structure, strongest first, that answers three questions with the same
-arithmetic: which layers to keep, which directions a solver will destroy, and how
-many latent factors a taste model supports before it starts memorising. The
-circle became an ellipse; everything after that was reading off the axes.
+Lossless PNG: `{python} f"{WIDGET['pngBytes'] / WIDGET['rawBytes'] * 100:.0f}"`% of raw. JPEG outperforms truncated SVD on bytes/quality for this image.
 
-## Data and attribution
+## References
 
-**Photograph** — `skimage.data.astronaut()`, distributed with
-[scikit-image](https://scikit-image.org/). A NASA photograph of astronaut Eileen
-Collins, in the public domain as a work of the US federal government. Used here
-converted to grayscale at its native 512 × 512.
-
-**Filip** — [NIST Statistical Reference Datasets](https://www.itl.nist.gov/div898/strd/lls/data/Filip.shtml),
-Linear Least Squares collection; data contributed by A. Filippelli, NIST.
-Certified values computed by NIST in multiple precision. A work of the US federal
-government, in the public domain. The 82-observation file is cached in this
-post's `assets/` directory exactly as published.
-
-**Synthetic vowel** — generated by `src/voice.py`, not a recording: five
-harmonics of a 120 Hz fundamental with $1/k$ amplitudes at 8 kHz, plus white
-Gaussian noise at 0 dB from a seeded generator. Synthetic because the whole point
-is scoring a denoiser against a clean reference, which no real recording carries.
-It stands in for a sustained vowel over a narrowband line, and its limits are
-stated where it is used.
-
-**MovieLens 100k** — [GroupLens Research](https://grouplens.org/datasets/movielens/100k/),
-University of Minnesota; F. M. Harper and J. A. Konstan, "The MovieLens
-Datasets: History and Context", *ACM TiiS* 5(4), 2015. GroupLens' terms do not
-permit redistribution, so the raw archive is downloaded on demand into a
-gitignored directory and **is not committed**; only the derived RMSE curve in
-`widget-data/movielens.json` is.
-
-Both widgets, the figures and the prose read the same committed payload, so a
-number here cannot disagree with a number on a slider. Regenerating everything is
-documented in this post's `README.md`.
+- **Photograph** — `skimage.data.astronaut()` ([scikit-image](https://scikit-image.org/)); NASA public-domain image of Eileen Collins, 512×512 grayscale.
+- **Filip** — [NIST StRD](https://www.itl.nist.gov/div898/strd/lls/data/Filip.shtml); A. Filippelli; certified coefficients in multiple precision.
+- **Synthetic vowel** — `src/voice.py`; five harmonics at 120 Hz, 8 kHz, 0 dB SNR (see [Synthetic vowel limits](#synthetic-vowel-limits)).
+- **MovieLens 100k** — [GroupLens Research](https://grouplens.org/datasets/movielens/100k/); Harper and Konstan, *ACM TiiS* 5(4), 2015. Derived RMSE curve in `widget-data/movielens.json` (raw data not redistributed).
 
 ```{python}
 #| label: widget-injection

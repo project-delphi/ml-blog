@@ -12,6 +12,7 @@ format:
     toc: true
     toc-depth: 2
     code-fold: false
+    number-sections: true
 pyodide:
   packages:
     - numpy
@@ -19,19 +20,36 @@ pyodide:
 
 ![NumPy to JAX: The Array That Learned New Tricks](./cover.png)
 
-Python makes numerical code easy to read, but ordinary Python objects make repeated arithmetic slow. NumPy solved that mismatch with one compact object: an array whose operations run in optimized compiled code. JAX keeps the familiar array vocabulary and adds the transformations modern machine learning needs.
+NumPy stores numbers in arrays whose operations run in compiled code. JAX keeps that array API and adds compilation, automatic differentiation, and accelerator backends.
 
-## Where did NumPy actually come from?
+## History
 
-Python had array libraries before NumPy. **Numeric** was fast on small arrays; **Numarray** added features needed for large astronomical images. Their differences split users and library authors between incompatible implementations. Travis Oliphant combined their strengths and released NumPy 1.0 in 2006, a history recorded in his original [*Guide to NumPy*](https://csc.ucdavis.edu/~chaos/courses/nlp/Software/NumPyBook.pdf).
+Python had two earlier array libraries:
 
-That unification mattered beyond convenience. Libraries such as pandas, SciPy, and scikit-learn could exchange the same array type instead of inventing their own. The 2020 Nature paper [“Array programming with NumPy”](https://doi.org/10.1038/s41586-020-2649-2) traces that impact from scientific Python to NumPy-like systems. To see why the array became a common language, start with its small, consistent API.
+- **Numeric** — fast on small arrays.
+- **Numarray** — features needed for large astronomical images.
 
-## What is the smallest useful NumPy toolkit?
+The two APIs were incompatible. Travis Oliphant merged them and released NumPy 1.0 in 2006 ([*Guide to NumPy*](https://csc.ucdavis.edu/~chaos/courses/nlp/Software/NumPyBook.pdf)).
 
-Four moves cover a surprising amount of work: `np.array` turns Python values into an array, `np.arange` creates a regular sequence, `.reshape()` changes its dimensions without changing its values, and arithmetic applies to every element at once.
+That common type is what pandas, SciPy, and scikit-learn exchange. Harris et al. (2020), [“Array programming with NumPy”](https://doi.org/10.1038/s41586-020-2649-2), traces the downstream impact.
 
-Every array also describes itself. `.shape` is a tuple giving the length of each axis, `.ndim` counts those axes, `.size` counts all elements, and `.dtype` records how each value is stored. Run this cell, then change `12` or the shape. The new dimensions must still multiply to `.size`.
+## NumPy primitives
+
+Four constructors and operations cover most work:
+
+- `np.array` — Python values to an array.
+- `np.arange` — regular sequence.
+- `.reshape()` — change dimensions without changing values.
+- elementwise arithmetic — no Python loop.
+
+Array metadata:
+
+- `.shape` — length of each axis.
+- `.ndim` — number of axes.
+- `.size` — total element count.
+- `.dtype` — storage type.
+
+The new dimensions after `reshape` must still multiply to `.size`.
 
 ```{pyodide}
 import numpy as np
@@ -47,13 +65,24 @@ print("dtype:", grid.dtype)
 print("\nshifted:\n", shifted)
 ```
 
-Indexing follows the axes: `grid[1, 2]` selects one value, `grid[1, :]` selects a row, and `grid[:, 2]` selects a column. The multiplication and addition touched all 12 values without a Python loop. This is **vectorized math**: describe the array operation, and NumPy performs the repetitive work in fast compiled routines.
+Indexing:
 
-## How do arrays turn loops into expressions?
+- `grid[1, 2]` — one value.
+- `grid[1, :]` — one row.
+- `grid[:, 2]` — one column.
 
-Suppose five measurements need centering around their mean. A list solution would track a running total and loop over each value. NumPy states the intent directly, while reductions such as `.mean()`, `.sum()`, `.min()`, and `.max()` collapse many values into summaries. On a matrix, an `axis` argument controls the direction: `grid.sum(axis=0)` reduces rows into column totals, while `axis=1` produces row totals.
+**Vectorized math:** state the array operation; NumPy runs it in compiled routines.
 
-Edit a measurement and rerun the cell. Notice that broadcasting subtracts the single mean from every element.
+## Reductions and broadcasting
+
+Reductions collapse many values to summaries: `.mean()`, `.sum()`, `.min()`, `.max()`.
+
+On a matrix, `axis` picks the direction:
+
+- `grid.sum(axis=0)` — column totals.
+- `grid.sum(axis=1)` — row totals.
+
+Broadcasting subtracts a scalar mean from every element.
 
 ```{pyodide}
 import numpy as np
@@ -66,11 +95,13 @@ print("centered:", centered)
 print("check:", centered.sum())
 ```
 
-The check should stay near zero; tiny residue can appear because computers approximate decimal numbers. NumPy is excellent on a CPU, but training a model asks for more than array arithmetic.
+The check should be near zero. Residual is floating-point rounding.
 
-## Why do people call JAX “NumPy on steroids”?
+These values are synthetic: five numbers chosen for a centering demo, not measured.
 
-JAX intentionally mirrors NumPy:
+## JAX
+
+JAX mirrors the NumPy API:
 
 ```python
 import jax.numpy as jnp
@@ -79,9 +110,15 @@ x = jnp.arange(12).reshape(3, 4)
 y = jnp.sin(x) + x**2
 ```
 
-The familiar API lowers the switching cost. The upgrade is that JAX can send compatible work to GPUs or TPUs, `jax.jit` can compile a function for repeated fast execution, and `jax.grad` can build a function that computes derivatives automatically. Frostig, Johnson, and Leary explain the tracing machinery behind that compilation in [“Compiling machine learning programs via high-level tracing”](https://mlsys.org/Conferences/2019/doc/2018/146.pdf).
+Additions relative to NumPy:
 
-Here is the characteristic JAX pattern:
+- GPU / TPU execution for compatible work.
+- `jax.jit` — compile a function for repeated runs.
+- `jax.grad` — return a function that computes derivatives.
+
+Frostig, Johnson, and Leary (2018), [“Compiling machine learning programs via high-level tracing”](https://mlsys.org/Conferences/2019/doc/2018/146.pdf), describes the tracing used for compilation.
+
+Characteristic pattern:
 
 ```python
 import jax
@@ -97,7 +134,7 @@ print(fast_loss(1.0))   # 4.0
 print(loss_slope(1.0))  # -4.0
 ```
 
-JAX itself cannot run in the browser because its compiled `jaxlib` runtime has no Pyodide build. You can still experiment with the same function in the live cell below: change `weight`, run it, and compare the numerical slope with the exact derivative JAX would produce.
+`jaxlib` has no Pyodide build, so JAX cannot run in this page. The live cell below uses a finite-difference slope on the same scalar loss.
 
 ```{pyodide}
 def loss(weight):
@@ -112,14 +149,29 @@ print("numerical slope:", numerical_slope)
 print("exact slope:", 2 * (weight - 3.0))
 ```
 
-`jax.grad(loss)(weight)` gives that exact slope through automatic differentiation, without the finite-step approximation.
+`jax.grad(loss)(weight)` returns the exact slope without a finite step.
 
-## What is the catch?
+## Constraints
 
-JAX transformations work best with **pure functions**: outputs depend only on inputs, and the function does not quietly change outside state. JAX arrays are also immutable. Instead of assigning `x[0] = 10` as in NumPy, write `x = x.at[0].set(10)`.
+JAX transformations assume **pure functions**: output depends only on inputs; no hidden mutation of outside state.
 
-These rules make compilation and differentiation predictable, but they can expose stateful habits hidden in ordinary Python. NumPy remains the simpler default for general analysis; JAX earns its extra rules when gradients, compilation, or accelerators dominate the workload.
+Arrays are immutable. Replace `x[0] = 10` with:
 
-## So which one should I learn first?
+```python
+x = x.at[0].set(10)
+```
 
-Learn NumPy first because its array model is the grammar of numerical Python. Move to JAX when the computation needs transformations that NumPy does not provide. The core idea survives the move: express work as operations over arrays, then let the numerical system decide how to execute it.
+Those rules make compilation and differentiation well-defined.
+
+## Choice of library
+
+- Use **NumPy** for general analysis on CPU.
+- Use **JAX** when gradients, `jit`, or accelerators dominate the workload.
+
+Learn NumPy first. Its array model is the shared grammar; JAX reuses it.
+
+## References
+
+- Oliphant, T. E. [*Guide to NumPy*](https://csc.ucdavis.edu/~chaos/courses/nlp/Software/NumPyBook.pdf) — Numeric/Numarray merger and NumPy 1.0 (2006).
+- Harris, C. R. et al. (2020). [Array programming with NumPy](https://doi.org/10.1038/s41586-020-2649-2). *Nature*.
+- Frostig, R., Johnson, M. J. & Leary, C. (2018). [Compiling machine learning programs via high-level tracing](https://mlsys.org/Conferences/2019/doc/2018/146.pdf). MLSys.

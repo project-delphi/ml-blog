@@ -13,27 +13,36 @@ format:
     toc: true
     toc-depth: 3
     code-fold: true
+    number-sections: true
 ---
 
 ![LangGraph vs LlamaIndex: One Agent, Two Architectures](./cover.png)
 
-One call to a language model is easy. The trouble starts when the job grows around it. Something has to decide *which* prompt to send, fetch the right reference material before sending it, and remember what happened the last time this customer wrote in. None of that is model work — it is ordinary control flow — and once there are more than two or three pieces of it, you reach for a framework to hold the shape.
+Multi-step LLM workflows need control flow beyond a single `chat()` call. [LangGraph](https://langchain-ai.github.io/langgraph/) models agents as **graph traversal over shared state**; [LlamaIndex Workflows](https://docs.llamaindex.ai/en/stable/module_guides/workflow/) models them as **event-driven `@step` functions** whose type signatures define wiring.
 
-The frameworks disagree about what that shape *is*. Two of the most used ones describe the same pile of steps in incompatible vocabularies, and the vocabulary you pick decides which change is a one-line edit six months later and which is a rewrite. So the question worth asking is not which framework is more powerful. It is: **what does each one's core idea make easy, and what does it make hard?**
+This post builds the same customer-support email router in both frameworks, then adds a three-reply cap with human escalation. Full code: [`code/`](./code/).
 
-## One small agent is a better instrument than a big one
+## Task definition
 
-To answer that you want a task small enough to hold in your head completely, so that every difference you see belongs to the framework rather than to the problem. Here is one: an inbound customer-support email router. Classify the email into a department — billing, support, or sales — look up that department's policy notes, and draft a reply that sticks to them.
+Inbound email router:
 
-That middle step has a name. Rather than hoping the model already knows your refund policy, you fetch the relevant few sentences from your own documents and paste them into the prompt alongside the customer's question. Retrieving first and generating second is **retrieval-augmented generation**, universally shortened to RAG.
+1. Classify into `billing`, `support`, or `sales`.
+2. Retrieve top-2 policy snippets from that department's knowledge base (RAG).
+3. Draft a reply grounded only in retrieved context.
 
-The two frameworks describe that little pipeline in completely different terms. [LangGraph](https://langchain-ai.github.io/langgraph/), the agent layer of the LangChain project, models an agent as a **graph traversal over shared state**: nodes are plain functions, edges (some conditional) decide what runs next, and a single mutable state object flows through the whole thing. [LlamaIndex Workflows](https://docs.llamaindex.ai/en/stable/module_guides/workflow/), the equivalent layer in LlamaIndex, models the same agent as **event-driven steps**: functions marked with a `@step` decorator declare in their type signature what kind of event they consume and what they emit, and the framework works out the graph from those annotations rather than being told it.
+**Data:** nine hand-written policy snippets (three per department) — refund window, error-code fix, Team plan price. Stand in for help-center or internal wiki text; small enough for a blog post.
 
-The router gets built twice, once in each vocabulary. Then a second requirement lands on both — a three-reply cap with escalation to a human — and the interesting part is watching where each architecture bends easily and where it doesn't. The full code for all four versions lives in [`code/`](./code/) alongside this post.
+**Embeddings:** `text-embedding-3-small` → in-memory vector store per department.
 
-## The model does almost nothing; the agent is the code around it
+**Model:** `gpt-4o-mini` (architecture comparison, not model comparison).
 
-Before either framework, it's worth being precise about what "agent" means, because the language model itself does surprisingly little of the work. A model is a **stateless function from a message sequence to one new message**: hand it the conversation so far, it returns the next assistant message — which is either a final answer or a request to call a tool. It has no memory of having been called a moment ago, and it never *executes* anything; it only ever emits text.
+**Classification asymmetry:** LangGraph uses `with_structured_output`; LlamaIndex uses free-form text + parse fallback — idiomatic per framework, noted below.
+
+## Agent abstraction
+
+An **LLM** is stateless: messages in → one assistant message out (answer or tool call).
+
+An **agent** wraps it with transcript, extra state, tools, and a max-turn stop condition. Only `llm.chat()` is stochastic.
 
 ```{python}
 #| eval: false
@@ -84,27 +93,13 @@ class Agent:
         return reply.tool_call is None
 ```
 
-Nothing in that sketch is specific to LangGraph or LlamaIndex — every agent framework is selling you some arrangement of those same four ingredients plus that same loop. Where they genuinely differ is in how each ingredient is modeled: is the message sequence one shared mutable list or typed payloads passed between handlers? Is "what happens next" a declared edge in a graph or inferred from type annotations? Is the stop condition a special `END` node or a sentinel event? That's precisely the axis the rest of this post walks through, on one concrete agent — and the reply-cap requirement added halfway down is nothing more than `max_turns` showing up as a business rule.
+Frameworks differ in how transcript, routing, and stop conditions are modeled — not in the loop shape above.
 
-## Holding the task fixed is what makes the comparison mean anything
+## LangGraph: shared state graph
 
-Those four ingredients have to be pinned to something concrete before the two frameworks can be set against each other, because any wobble in the task would show up in the code as if it were a difference between the frameworks. So both versions run the identical three steps:
+Nodes are functions; edges (including conditional) define order. One **State** object flows through the graph.
 
-1. Classify an inbound email into `billing`, `support`, or `sales`.
-2. Retrieve the 2 most relevant policy snippets from that department's knowledge base.
-3. Draft a short reply grounded only in the retrieved context.
-
-Step 2 needs documents to retrieve from, and both scripts carry the same nine: three short policy snippets each for billing, support and sales, written by hand for this post — a refund window, the fix for an error code, the price of the Team plan. They stand in for what a real router would query, which is a company's own help-centre articles or internal policy wiki, and that is precisely the kind of text nobody can ship alongside a blog post. Nine sentences is also enough for the point being made. What matters is that the drafting step quotes a retrieved document instead of whatever the model happens to remember about refunds, because a reply that invents a fourteen-day refund window is one a customer will act on and later hold you to. Each department's snippets are embedded with `text-embedding-3-small` into an in-memory vector store, and each retrieval returns the two nearest.
-
-Both scripts also call the same `gpt-4o-mini`, so what follows is a comparison of architecture, not of model choice. The one deliberate asymmetry is classification itself: LangGraph forces a typed, schema-validated decision via `with_structured_output`; LlamaIndex asks for free-form text and parses it by hand with a string fallback. That's not a fairness gap — it's each framework's idiomatic way of getting a department out of the model, and it's called out again where it appears below.
-
-## LangGraph: every step reads and writes one shared dictionary
-
-Building the router in LangGraph means describing it as something you could draw on a whiteboard: boxes that do work, arrows that say what runs next. What travels along the arrows is one object that every box can see and amend. Get that object declared correctly and everything else in the graph is plain Python functions.
-
-### The state is a single dictionary with its keys written down in advance
-
-That shared object is declared as a `TypedDict` — an ordinary Python dictionary whose permitted keys and their value types are spelled out ahead of time, so an editor or a type checker knows what belongs in it. A node receives the whole dictionary and returns a *partial* update, a small dict holding only the keys it changed, which LangGraph merges back in. Next to it sits a second, stricter schema: a Pydantic model naming the only thing the model is allowed to answer when it classifies an email.
+### State schema
 
 ```{python}
 #| eval: false
@@ -122,7 +117,7 @@ class RouteDecision(BaseModel):
     )
 ```
 
-Every node signature is the same shape: `State in, partial-dict update out`. There's no separate concept of "what does this node need" beyond "which keys of `State` does it read" — the whole graph shares one namespace. The first two nodes, classification and retrieval, are that shape and nothing more:
+Node signature: `State in → partial dict out`. LangGraph merges partial updates.
 
 ```{python}
 #| eval: false
@@ -144,11 +139,9 @@ def make_retrieve_node(dept: str):
     return retrieve
 ```
 
-Notice `make_retrieve_node`: LangGraph's author chose to build **three separate named nodes** (`retrieve_billing`, `retrieve_support`, `retrieve_sales`) via a factory, rather than one node that branches internally on `state["department"]`. Nothing about LangGraph forces that choice, but it's the natural idiom — if you want each branch visible in the graph's topology (useful for logging, tracing, or `graph.get_graph().draw_mermaid()`), you give it a name and an edge. Three named retrieval nodes are only worth having if something picks between them, though, and that choice is a separate declaration.
+Three retrieval nodes (`retrieve_billing`, etc.) via factory — branch visible in graph topology for logging/tracing/`draw_mermaid()`.
 
-### Routing is a table declared up front, not an `if` buried inside a node
-
-The obvious way to send a billing email to the billing retriever would be an `if/else` at the bottom of `classify`. LangGraph asks for it the other way round: you register the branch while the graph is being assembled, naming the node the decision is taken at, a function that returns a label, and a dictionary mapping every possible label to the node it leads to.
+### Conditional routing
 
 ```{python}
 #| eval: false
@@ -159,7 +152,7 @@ builder.add_conditional_edges(
 )
 ```
 
-The dict literal *is* the branch table. Every possible destination is named up front, at graph-construction time — a structural guarantee that a `classify` node can't accidentally route somewhere unwired. Because the wiring is data the framework holds rather than logic hidden in a function, LangGraph can hand you a picture of it. That topology is the diagram below.
+Branch table declared at graph construction; every destination must be wired.
 
 ```{mermaid}
 %%{init: {'theme':'base', 'themeVariables': {'primaryColor':'#ffffff','primaryBorderColor':'#4A3AA7','primaryTextColor':'#1a1a1a','lineColor':'#4A3AA7','edgeLabelBackground':'#ffffff'}}}%%
@@ -174,13 +167,11 @@ flowchart LR
     draft --> END([END])
 ```
 
-## LlamaIndex: the wiring is inferred, never declared
+## LlamaIndex Workflows: inferred wiring
 
-That diagram could be drawn because the graph is a real object at runtime — LangGraph knows the topology because you spelled it out, node by node and edge by edge. LlamaIndex Workflows reaches the same picture from the opposite direction: you never describe the shape at all, and the framework reconstructs it from what each function accepts and returns.
+No explicit graph object. Steps declare consumed/emitted **Event** types; framework infers edges from signatures.
 
-### An event is a typed message, and the type is the wire
-
-The thing that travels between steps is an **event** — a small object carrying whatever one stage of work produced and the next stage needs. You write one class per kind of hand-off, so the payload has a name and a declared set of fields. They are Pydantic models, which means the fields are type-checked the moment an event is constructed rather than whenever someone happens to read the wrong key. The router needs two: one saying which department an email belongs to, and one carrying that plus the policy text retrieved for it.
+### Event types
 
 ```{python}
 #| eval: false
@@ -193,7 +184,7 @@ class ContextReadyEvent(Event):
     context: str
 ```
 
-Work itself goes in methods tagged with a `@step` decorator — a marker that tells the framework "this function is a stage of the workflow." What each step consumes and emits is read straight off its type signature: `classify` takes a `StartEvent` and returns a `RoutedEvent`, so anything returning a `StartEvent` feeds it and anything consuming a `RoutedEvent` follows it. That is the entire wiring mechanism. There is no `builder.add_edge(...)` call anywhere, because the graph is a conclusion the framework draws rather than a structure you hand it.
+`@step` methods: input/output types define wiring. No `add_edge` calls.
 
 ```{python}
 #| eval: false
@@ -223,15 +214,15 @@ class EmailRouterWorkflow(Workflow):
         return ContextReadyEvent(department=ev.department, context=context)
 ```
 
-Compare `retrieve` to what LangGraph did with the same job. Here it is one step serving all three departments, picking the right index with an ordinary dictionary lookup on `ev.department`. LangGraph's author reached for three named nodes and a branch table; this is a line of plain Python inside one function. The work is identical and the visibility is not — the department fan-out happens inside the step body, so nothing in the workflow's static structure hints that three branches exist.
+Single `retrieve` step branches on `ev.department` inside the function — not visible in static workflow structure.
 
-### Caveat: the classification step is not a like-for-like match
+### Classification note
 
-One difference in the step above is mine, not the frameworks'. `classify` asks the model for a bare lowercase word and parses `resp.text` by hand, falling back to `"support"` when the answer isn't a department name, where the LangGraph version demanded a schema-validated object. Nothing in LlamaIndex prevents the stricter approach — this script just didn't reach for it. Read the classification lines as one script's habit rather than a capability gap; everything else on this page is the frameworks talking, including the next thing the workflow has to solve.
+LlamaIndex `classify` uses free-form text + fallback; LangGraph uses structured output. LlamaIndex can use structured output; this script does not.
 
-### Data that isn't an event needs somewhere else to live
+### Context store
 
-Events carry exactly what their fields declare, which is a virtue until some value has to outlive the hand-off that produced it. The customer's email is the case in point: `classify` receives it, `draft` needs it three steps later, and `RoutedEvent` has no field for it. Rather than widening every event on the path to ferry the value through, LlamaIndex offers a side channel — `ctx.store`, an async key-value store scoped to one running workflow, for the "not really an event, just some state I need later" category of data.
+Values not carried on events (e.g. original email) go in `ctx.store` — async key-value scoped to one workflow run.
 
 ```{python}
 #| eval: false
@@ -249,7 +240,7 @@ async def draft(self, ctx: Context, ev: ContextReadyEvent) -> StopEvent:
     return StopEvent(result={"department": ev.department, "draft": resp.text.strip()})
 ```
 
-`StopEvent` is the sentinel that ends the run, so returning one is this framework's way of saying "no further step consumes what I produce." Nobody wrote the chain out anywhere, but the three signatures only fit together one way, and that is the shape they fit into:
+`StopEvent` ends the run.
 
 ```{mermaid}
 %%{init: {'theme':'base', 'themeVariables': {'primaryColor':'#ffffff','primaryBorderColor':'#4A3AA7','primaryTextColor':'#1a1a1a','lineColor':'#4A3AA7','edgeLabelBackground':'#ffffff'}}}%%
@@ -260,25 +251,25 @@ flowchart LR
     draft --> Stop([StopEvent: result])
 ```
 
-## At one email, the two vocabularies buy the same thing
+## v1 comparison
 
-Both routers now run end to end, and the honest verdict on the pair so far is that they are a wash. Neither is meaningfully shorter, neither is harder to follow, and a reader shown one without the other would not feel deprived. What has shown up instead is three small trades, each one a place where a framework spends effort now to save it later, or the reverse.
+Single-email routers are comparable in length and complexity.
 
-- **Branching a known set of routes** is slightly more ceremony in LangGraph (name a node per branch, populate a dict) but the payoff is a topology you can inspect and draw. LlamaIndex folds the same branching into ordinary control flow inside one step — less ceremony, but the branch count is now only discoverable by reading the function body.
-- **Passing incidental state** (`email`, needed three steps later) is implicit in LangGraph — it's just another key in the shared `State` dict, present everywhere. LlamaIndex requires an explicit `ctx.store.set` / `ctx.store.get` pair — more typing, but it's clear at each call site exactly what a step depends on beyond its declared event.
-- **Typed contracts.** LlamaIndex's events are Pydantic models, so `RoutedEvent(department=...)` is validated at construction. LangGraph's `State` is a `TypedDict` — structurally documented, but not validated at runtime; a node returning `{"deprtment": "billing"}` (typo) would silently create a new, unused key rather than raise.
+- **Branching:** LangGraph — named nodes + branch dict (inspectable topology). LlamaIndex — `if` inside one step.
+- **Incidental state:** LangGraph — any `State` key. LlamaIndex — explicit `ctx.store`.
+- **Validation:** LlamaIndex events validated at construction. LangGraph `TypedDict` documented but not runtime-validated (typos create silent new keys).
 
-Three small trades is not much to choose between, and that is the point: nothing so far spans more than one email, so neither architecture has been asked to do the thing architectures are for.
+## Reply cap requirement
 
-## A reply cap is the requirement that pulls them apart
+New rule: max three agent replies per customer thread; fourth inbound email escalates to human inbox.
 
-Here is the requirement that does ask. The agent may reply to a customer thread at most three times; on the fourth inbound email it stops drafting and forwards the whole thread to the department inbox for a person to handle.
+Demands:
 
-That is a small sentence with three demands hiding in it. The router is no longer a function you call once — it is a *thread*, and consecutive emails from the same customer have to land in the same running conversation. It has to remember, between calls, how many replies it has already sent. And it needs a branch that didn't exist before, one that skips drafting entirely and escalates. The `max_turns` cap from the sketch at the top of this post has arrived as a business rule.
+- Thread-scoped state across multiple invocations.
+- Reply counter persistence.
+- New escalation branch skipping draft.
 
-### LangGraph v2: a new node in front of the old one
-
-LangGraph takes all three demands as edits to things it already models. The shared dictionary grows fields for the new data: the full thread of messages, a reply counter, and a pair of escalation fields. `total=False` marks every key optional, so a first invocation can arrive with only the message list filled in.
+### LangGraph v2
 
 ```{python}
 #| eval: false
@@ -291,9 +282,9 @@ class State(TypedDict, total=False):
     forward: str  # the internal forward composed on escalation
 ```
 
-The odd-looking annotation on `messages` is doing real work. By default a node's return value replaces the key it names, which is wrong for a transcript — the third reply would wipe the first two. `Annotated[list[BaseMessage], add_messages]` attaches a merge rule to the field, saying that updates to it are appended rather than substituted. Such a rule is a **reducer**, and declaring it once on the schema means every node can return `{"messages": [new_message]}` without knowing what is already in the list.
+`Annotated[..., add_messages]` — **reducer** appends message updates instead of replacing the list.
 
-The new branch is where the graph shape earns its keep. The reply-cap check becomes its own node, `gate`, wired in *before* the original entry point, with a routing function that reads the counter and picks a destination.
+New `gate` node before `classify`; `route_gate` reads `reply_count`:
 
 ```{python}
 #| eval: false
@@ -308,7 +299,7 @@ def route_gate(state: State) -> str:
     return "classify"
 ```
 
-`gate` returns an empty dict and changes nothing. Its only job is to exist, because a conditional edge has to hang off *some* node, and this one gives `route_gate` a place to attach. The original `classify` is untouched apart from a single guard that stops it re-classifying a thread already routed on an earlier email.
+`gate` returns `{}` — anchor node for conditional edge only. `classify` skips re-routing if `department` already set.
 
 ```{python}
 #| eval: false
@@ -319,7 +310,7 @@ def classify(state: State) -> dict:
     return {"department": decision.department}
 ```
 
-That leaves the hardest of the three demands: the counter and the department have to survive between separate `graph.invoke()` calls, in a process that may have handled a hundred other customers in between. LangGraph treats saving and restoring a conversation as a built-in concern. You compile the graph with a **checkpointer** — a store that writes the whole state object out after every run — and pass a `thread_id`, a string naming which conversation this call belongs to.
+Cross-invocation persistence: **checkpointer** + `thread_id`:
 
 ```{python}
 #| eval: false
@@ -329,7 +320,7 @@ thread = {"configurable": {"thread_id": "customer-4482"}}
 result = graph.invoke({"messages": [HumanMessage(content=email)]}, thread)
 ```
 
-Each call sends only the *new* inbound message. The checkpointer restores everything else from the last checkpoint filed under that `thread_id`, merges the arriving message in through the `add_messages` reducer, and saves the result on the way out. `MemorySaver` keeps those checkpoints in the process's own memory, which is fine for a demonstration and gone the moment the process restarts; swapping it for a database-backed checkpointer is a one-line change at `compile()` and touches no node. The graph that results is the v1 graph with a gate bolted on the front and an escalation branch hanging off it — everything downstream of `classify` is untouched:
+Each invoke sends only the new message; checkpointer restores prior state. `MemorySaver` is in-process; swap for DB-backed checkpointer at `compile()`.
 
 ```{mermaid}
 %%{init: {'theme':'base', 'themeVariables': {'primaryColor':'#ffffff','primaryBorderColor':'#4A3AA7','primaryTextColor':'#1a1a1a','lineColor':'#4A3AA7','edgeLabelBackground':'#ffffff'}}}%%
@@ -347,9 +338,9 @@ flowchart LR
     escalate --> END2([END])
 ```
 
-### LlamaIndex v2: the old step absorbs the new logic
+### LlamaIndex v2
 
-LlamaIndex has to satisfy the same three demands with none of that furniture, and the first one it hits is where to put the gate. There is no graph object to insert a node into, and a workflow's entry point is not a setting — it is simply whichever step consumes `StartEvent`. The router had exactly one of those, `classify`. So the reply-cap logic has nowhere to go in front of the entry step; it goes *inside* it, and the step is renamed `intake` to match what it now does.
+No graph insertion point. Entry step = whichever consumes `StartEvent` → logic folds into renamed `intake`:
 
 ```{python}
 #| eval: false
@@ -381,9 +372,9 @@ class EmailThreadWorkflow(Workflow):
         return RoutedEvent(department=department)
 ```
 
-The branch is declared in the return type. `RoutedEvent | EscalateEvent` is a plain Python union — "this function returns one or the other" — and from it LlamaIndex works out that `intake` can lead either to `retrieve`, which consumes `RoutedEvent`, or to a new `escalate` step consuming `EscalateEvent`. There is no table to populate and no edge to register. The union annotation *is* the branch declaration, which means the branch is checkable by a type checker and invisible to anything that only runs the code.
+Branch via return type union `RoutedEvent | EscalateEvent` — no edge table.
 
-Persistence is the demand LlamaIndex answers most bluntly: it has no checkpointer, and does not need one, because the state is already sitting in an object you own. Hand the same `Context` instance to every call for a given customer and the store inside it carries over.
+Persistence: reuse same `Context` per customer; manual `ctx.store` read/write. No built-in checkpointer; survives only while `Context` reference is held.
 
 ```{python}
 #| eval: false
@@ -393,8 +384,6 @@ ctx = Context(wf)  # ONE context = ONE customer thread; reuse across runs
 for email in inbound:
     result = await wf.run(email=email, ctx=ctx)
 ```
-
-`ctx.store` holds `history`, `reply_count` and `department` because the code put them there by hand; nothing is restored for you the way the checkpointer restores `State`. Every step that wants prior data goes and fetches it with `await ctx.store.get(...)`. That is more typing and less magic, and it lasts exactly as long as you keep a reference to the object — persisting a thread across a process restart is work this version has not done. Draw the result and the new branch is there, but it forks out of a step that was already carrying the classification:
 
 ```{mermaid}
 %%{init: {'theme':'base', 'themeVariables': {'primaryColor':'#ffffff','primaryBorderColor':'#4A3AA7','primaryTextColor':'#1a1a1a','lineColor':'#4A3AA7','edgeLabelBackground':'#ffffff'}}}%%
@@ -407,21 +396,16 @@ flowchart LR
     escalate --> Stop2([StopEvent: escalated])
 ```
 
-## The same requirement went to two different addresses
+## v2 comparison
 
-Both v2 scripts ended up about the same length, so this was never a story about one framework needing less code. What changed is *where* the new logic landed, and each landing site traces straight back to what its framework treats as a first-class thing.
+Similar code length; logic lands in different places:
 
-**Where the new logic went.** LangGraph has an explicit shape to insert into, so `gate` slotted in ahead of `classify` as a named node with its own edge and `classify` needed a one-line guard. LlamaIndex defines its entry point as "whichever step consumes `StartEvent`", and there is only one of those, so the gating logic had nowhere to go but inside it — which is why `intake` is a visibly heavier function than the `classify` it replaced. Insertion versus absorption follows directly from one framework owning an editable graph object and the other not having one at all.
+- **Insertion vs absorption:** LangGraph adds `gate` node; LlamaIndex expands entry `intake` step.
+- **Persistence:** LangGraph checkpointer + `thread_id` (declarative). LlamaIndex manual `Context` reuse (imperative).
+- **Memoization:** Both require hand-written "classify once" guards; neither auto-memoizes per thread.
+- **Branching:** LangGraph branch = runtime dict (drawable). LlamaIndex branch = type union (statically checkable).
 
-**What persistence costs.** LangGraph's checkpointer and `thread_id` are infrastructure chosen once, at `compile()` time; after that every node returns partial updates and trusts the reducer and the checkpointer to merge and restore. LlamaIndex's `Context` is an object you have to remember to create per customer and thread through every `wf.run()` call, with each field read and written by hand. The first is a declarative promise you make to the framework; the second is an imperative promise you keep yourself, and forgetting it fails quietly as a customer whose reply count keeps resetting to zero.
-
-**What memoization costs.** Here the two are level, and neither comes out well. `classify`'s `if state.get("department"): return {}` and `intake`'s `if department is None:` are the same guard, written by hand twice. Neither framework notices that a step's work is worth keeping across invocations of one thread, so "classify once, then stick with it" is your problem in both.
-
-**Branching mechanics.** LangGraph's new branch is a dictionary — a runtime object you can print, inspect at build time, and draw. LlamaIndex's new branch is a type annotation, a contract a static checker enforces before anything runs and no runtime object represents. Both are real declarations; they just live in different places, and only one of them survives into the running program.
-
-## Pick the vocabulary that makes your hard change easy
-
-Those four differences are the whole comparison, and they line up into a table you can read as a choice rather than a scorecard. Each row is one thing a framework decided to make first-class — and making something first-class always means making its opposite a little more awkward.
+## Selection guide
 
 | | LangGraph | LlamaIndex Workflows |
 |---|---|---|
@@ -433,8 +417,14 @@ Those four differences are the whole comparison, and they line up into a table y
 | Topology you can inspect/draw | Yes — `graph.get_graph().draw_mermaid()` | No separate graph object exists |
 | New vocabulary on top of Python | Nodes, edges, conditional edges, reducers, checkpointers | Events, steps — much closer to "just async functions" |
 
-Reach for LangGraph when the agent is genuinely multi-turn and thread-scoped state is the heart of the problem — this router with its reply cap, a human-in-the-loop review queue, anything you want to pause, inspect and resume by conversation ID. The checkpointer earns its keep there, and an actual graph object pays for itself the first time you want to draw a run, replay it, or step back through it. Reach for LlamaIndex Workflows when the job feels less like named states and transitions and more like a handful of async functions reacting to typed messages. There is far less new vocabulary sitting on top of plain Python and `asyncio`, and the bill comes due as persistence you write yourself.
+**LangGraph** — multi-turn agents, thread-scoped state, human-in-the-loop, inspectable/replayable graphs.
 
-The question this started with was not which framework is more powerful, and after two builds of the same router that still looks like the right question to have skipped. Both frameworks hold the same four ingredients — a transcript, some state, some tools, a stop condition — and both routers do the same thing to the same emails. What differed was which of those ingredients each framework made into a noun you can point at. LangGraph turns the control flow into an object, so a new branch is something you add to it and persistence is a setting. LlamaIndex turns the hand-offs into types, so a new branch is something you declare in a signature and persistence is a variable you keep hold of.
+**LlamaIndex Workflows** — async event handlers with minimal framework vocabulary; you own persistence.
 
-That is why the choice is worth making deliberately and early. Neither vocabulary is wrong, but each one quietly decides which future edit is a line and which is a refactor — and you find out which you picked on the day a requirement like the reply cap lands, not on the day you install it.
+Framework choice determines whether a future requirement is a one-line edit or a refactor — e.g. reply cap lands as new node vs expanded entry step.
+
+## References
+
+- [LangGraph documentation](https://langchain-ai.github.io/langgraph/)
+- [LlamaIndex Workflows module guide](https://docs.llamaindex.ai/en/stable/module_guides/workflow/)
+- OpenAI `gpt-4o-mini` and `text-embedding-3-small` (used in post code under [`code/`](./code/))

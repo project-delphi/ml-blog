@@ -196,14 +196,15 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul class="collapse">
-  <li><a href="#short-term-memory-is-just-the-context-window-replayed-every-turn" id="toc-short-term-memory-is-just-the-context-window-replayed-every-turn" class="nav-link active" data-scroll-target="#short-term-memory-is-just-the-context-window-replayed-every-turn">Short-term memory is just the context window, replayed every turn</a></li>
-  <li><a href="#the-system-and-user-prompts-are-injection-points-not-memory" id="toc-the-system-and-user-prompts-are-injection-points-not-memory" class="nav-link" data-scroll-target="#the-system-and-user-prompts-are-injection-points-not-memory">The system and user prompts are injection points, not memory</a></li>
-  <li><a href="#long-term-memory-is-a-storage-choice-and-there-are-four" id="toc-long-term-memory-is-a-storage-choice-and-there-are-four" class="nav-link" data-scroll-target="#long-term-memory-is-a-storage-choice-and-there-are-four">Long-term memory is a storage choice, and there are four</a></li>
-  <li><a href="#compaction-and-a-memory-tool-have-to-be-paired" id="toc-compaction-and-a-memory-tool-have-to-be-paired" class="nav-link" data-scroll-target="#compaction-and-a-memory-tool-have-to-be-paired">Compaction and a memory tool have to be paired</a></li>
-  <li><a href="#the-second-call-is-assembled-not-remembered" id="toc-the-second-call-is-assembled-not-remembered" class="nav-link" data-scroll-target="#the-second-call-is-assembled-not-remembered">The second call is assembled, not remembered</a></li>
-  <li><a href="#the-voice-is-a-model-too-and-it-fits-in-82-million-parameters" id="toc-the-voice-is-a-model-too-and-it-fits-in-82-million-parameters" class="nav-link" data-scroll-target="#the-voice-is-a-model-too-and-it-fits-in-82-million-parameters">The voice is a model too, and it fits in 82 million parameters</a></li>
-  <li><a href="#only-one-of-these-mechanisms-lives-inside-the-model" id="toc-only-one-of-these-mechanisms-lives-inside-the-model" class="nav-link" data-scroll-target="#only-one-of-these-mechanisms-lives-inside-the-model">Only one of these mechanisms lives inside the model</a></li>
-  <li><a href="#memory-is-a-design-decision-not-a-model-feature" id="toc-memory-is-a-design-decision-not-a-model-feature" class="nav-link" data-scroll-target="#memory-is-a-design-decision-not-a-model-feature">Memory is a design decision, not a model feature</a></li>
+  <li><a href="#context-window" id="toc-context-window" class="nav-link active" data-scroll-target="#context-window"><span class="header-section-number">1</span> Context window</a></li>
+  <li><a href="#prompt-slots" id="toc-prompt-slots" class="nav-link" data-scroll-target="#prompt-slots"><span class="header-section-number">2</span> Prompt slots</a></li>
+  <li><a href="#long-term-storage-options" id="toc-long-term-storage-options" class="nav-link" data-scroll-target="#long-term-storage-options"><span class="header-section-number">3</span> Long-term storage options</a></li>
+  <li><a href="#compaction-and-memory-tool-ordering" id="toc-compaction-and-memory-tool-ordering" class="nav-link" data-scroll-target="#compaction-and-memory-tool-ordering"><span class="header-section-number">4</span> Compaction and memory tool ordering</a></li>
+  <li><a href="#session-assembly" id="toc-session-assembly" class="nav-link" data-scroll-target="#session-assembly"><span class="header-section-number">5</span> Session assembly</a></li>
+  <li><a href="#kokoro-tts" id="toc-kokoro-tts" class="nav-link" data-scroll-target="#kokoro-tts"><span class="header-section-number">6</span> Kokoro TTS</a></li>
+  <li><a href="#mechanism-comparison" id="toc-mechanism-comparison" class="nav-link" data-scroll-target="#mechanism-comparison"><span class="header-section-number">7</span> Mechanism comparison</a></li>
+  <li><a href="#debugging" id="toc-debugging" class="nav-link" data-scroll-target="#debugging"><span class="header-section-number">8</span> Debugging</a></li>
+  <li><a href="#references" id="toc-references" class="nav-link" data-scroll-target="#references"><span class="header-section-number">9</span> References</a></li>
   </ul>
 <div class="toc-actions"><ul class="collapse"><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/llm-agent-memory/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></nav>
     </div>
@@ -220,12 +221,17 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <figcaption>Your LLM Has No Memory. Everything Else Is Engineering.</figcaption>
 </figure>
 </div>
-<p>You are building a voice assistant. Speech in, transcript to a model, reply out, a text-to-speech engine reads it aloud. During a call it works beautifully — it remembers that the user said “call me Alex” ninety seconds ago and keeps the thread. Then the call ends, Alex phones back next morning, and the assistant has no idea who is speaking or that it was asked yesterday for a calmer voice.</p>
-<p>Nothing broke. <strong>An LLM is stateless per call</strong>: you send a request, it computes a reply, and no state survives inside the model afterwards. Everything anyone calls “memory” is external engineering around that stateless core — what you put in the prompt, what you store outside it, and when you pull it back in.</p>
-<section id="short-term-memory-is-just-the-context-window-replayed-every-turn" class="level2">
-<h2 class="anchored" data-anchor-id="short-term-memory-is-just-the-context-window-replayed-every-turn">Short-term memory is just the context window, replayed every turn</h2>
-<p>Within one call the assistant appears to remember because you re-send the conversation. The model reads one block of text per request and nothing else, so anything it should still know has to be inside that block. There is a ceiling on how much text fits — that ceiling is the <em>context window</em>, and the whole conversation lives underneath it. Turn three is therefore not a lone question; it is the system prompt and every prior turn, shipped again as one request:</p>
-<div id="048dce10" class="cell" data-execution_count="1">
+<p>An LLM is <strong>stateless per call</strong>: each request is independent; no state survives inside the model. “Memory” is external engineering — what goes into the prompt, what is stored outside it, and when it is re-injected.</p>
+<p>This post uses a voice assistant (speech in, transcript to model, text-to-speech out) as the running example.</p>
+<section id="context-window" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="context-window"><span class="header-section-number">1</span> Context window</h2>
+<p>Within one call, the model appears to remember because the full conversation is re-sent each turn.</p>
+<ul>
+<li>The model reads one block of text per request.</li>
+<li>The <strong>context window</strong> caps how much text fits; the transcript lives under that ceiling.</li>
+<li>Turn <em>n</em> includes the system prompt and all prior turns in one request.</li>
+</ul>
+<div id="7ba9d65e" class="cell" data-execution_count="1">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>SYSTEM <span class="op">=</span> <span class="st">"You are a phone assistant. Two sentences max; replies are spoken aloud."</span></span>
@@ -244,10 +250,9 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <pre><code>4 messages, 145 characters sent</code></pre>
 </div>
 </div>
-<p>Every one of those messages goes over the wire on <em>this</em> turn, and again on the next. That transcript is short-term memory, and the call is its lifetime.</p>
-<p>That transcript grows every turn, and it is billed and read in full every time, so latency and cost climb with it. The crude answer is to drop the oldest turns once the window fills. It is also the wrong one: the oldest turn is where Alex gave their name, usually the most valuable line in the window.</p>
-<p>A better answer keeps the information and throws away the wording. As the window fills, replace the older turns with a short summary of them, or delete content that has already done its job — a long tool result you have acted on and will not consult again. That is compaction, sometimes called context editing. Applied to a call that has run long:</p>
-<div id="be952079" class="cell" data-execution_count="2">
+<p>Every message is sent on each turn. Latency and cost grow with transcript length.</p>
+<p>Compaction (<strong>context editing</strong>) replaces older turns with a summary when the window fills, rather than dropping the oldest turn outright (which often holds the most valuable facts).</p>
+<div id="c6d7220c" class="cell" data-execution_count="2">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> compact(history, keep<span class="op">=</span><span class="dv">4</span>):</span>
@@ -265,28 +270,46 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <pre><code>24 messages -&gt; 5 after compaction</code></pre>
 </div>
 </div>
-<p>The salient facts survive because you chose them rather than letting position decide. It is still lossy: that summary cannot answer a question about a number mentioned in turn two. And however carefully you manage it, the window dies when the call does — so anything Alex should still hear tomorrow has to be written down somewhere else. The first place people look is the prompt.</p>
+<p>Compaction is lossy and dies when the call ends. Facts needed across sessions must be stored elsewhere.</p>
 </section>
-<section id="the-system-and-user-prompts-are-injection-points-not-memory" class="level2">
-<h2 class="anchored" data-anchor-id="the-system-and-user-prompts-are-injection-points-not-memory">The system and user prompts are injection points, not memory</h2>
-<p>Two things go into each request. The <strong>system prompt</strong> is the session’s fixed frame: persona, rules, constraints. In a voice app it exists largely because the output is spoken — two or three sentences, no markdown, units spelled out, since the engine reads every character aloud and nobody wants to hear “asterisk asterisk”. The <strong>user prompt</strong> is the live turn.</p>
-<p>Neither <em>is</em> memory. They are slots. If something must survive the call, no prompt-writing achieves it; the fact has to live elsewhere and be injected back into a slot later. Which raises the real question: stored where?</p>
+<section id="prompt-slots" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="prompt-slots"><span class="header-section-number">2</span> Prompt slots</h2>
+<p>Each request has two injection points, not memory stores:</p>
+<ul>
+<li><strong>System prompt</strong> — fixed frame: persona, rules, constraints. In voice apps: short replies, no markdown, units spelled out.</li>
+<li><strong>User prompt</strong> — the current turn.</li>
+</ul>
+<p>Cross-session facts must live outside the prompt and be injected back into a slot on the next call.</p>
 </section>
-<section id="long-term-memory-is-a-storage-choice-and-there-are-four" class="level2">
-<h2 class="anchored" data-anchor-id="long-term-memory-is-a-storage-choice-and-there-are-four">Long-term memory is a storage choice, and there are four</h2>
-<p>Storing the fact outside the call is not one technique but four, and picking between them is an ordinary engineering question: how big is the thing you are keeping, do you know its shape in advance, and how do you find it again. A help-centre article, a user’s preferred voice and an offhand remark about tone pull in three different directions; a fourth option, baking the fact into the model’s weights, mostly pulls the wrong way.</p>
-<section id="rag-when-the-fact-lives-in-a-large-fuzzy-corpus" class="level3">
-<h3 class="anchored" data-anchor-id="rag-when-the-fact-lives-in-a-large-fuzzy-corpus">RAG, when the fact lives in a large fuzzy corpus</h3>
-<p>Alex asks whether the training plan syncs with a particular bike computer. The answer sits in a help-centre corpus of a few thousand articles that changes weekly. Nobody can paste a few thousand articles into a prompt, so the trick is to fetch only the handful that bear on the question and paste those. Finding them means turning each chunk of text into a list of numbers positioned so that passages about similar things sit close together — an <em>embedding</em> — doing the same to Alex’s question at call time, and taking the nearest neighbours. That pattern, retrieval then generation over what you retrieved, is <a href="../how-does-rag-work/">retrieval-augmented generation</a>, or RAG. The match is by meaning rather than by words: Alex says “does it talk to my Garmin”, the article says “supported head unit integrations”. You pay an embedding call, extra tokens, and the occasional irrelevant chunk.</p>
+<section id="long-term-storage-options" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="long-term-storage-options"><span class="header-section-number">3</span> Long-term storage options</h2>
+<p>Four mechanisms; pick by size, shape, and lookup pattern:</p>
+<section id="rag" class="level3" data-number="3.1">
+<h3 data-number="3.1" class="anchored" data-anchor-id="rag"><span class="header-section-number">3.1</span> RAG</h3>
+<p>For facts in a large, fuzzy, changing corpus (e.g., help-centre articles).</p>
+<ul>
+<li>Embed document chunks; embed the query at call time; retrieve nearest neighbours by meaning.</li>
+<li>Pattern: <a href="../how-does-rag-work/">retrieval-augmented generation</a> (RAG).</li>
+<li>Cost: embedding call, extra tokens, occasional irrelevant chunks.</li>
+</ul>
 </section>
-<section id="a-key-value-lookup-when-the-fact-is-small-and-discrete" class="level3">
-<h3 class="anchored" data-anchor-id="a-key-value-lookup-when-the-fact-is-small-and-discrete">A key-value lookup, when the fact is small and discrete</h3>
-<p>Alex’s preferred voice is not a fuzzy question. It is one row: <code>user_id → voice_id</code>, where the value names a voice pack the speech engine loads. Embedding that and searching by cosine similarity is slower, costlier and less reliable than a lookup by key — same for name, language and timezone. People skip this mechanism because it isn’t interesting, and it is right for most per-user facts, not least because the engine needs that voice ID on the latency path, where a vector search does not belong.</p>
+<section id="key-value-lookup" class="level3" data-number="3.2">
+<h3 data-number="3.2" class="anchored" data-anchor-id="key-value-lookup"><span class="header-section-number">3.2</span> Key-value lookup</h3>
+<p>For small, discrete per-user facts (voice ID, name, language, timezone).</p>
+<ul>
+<li><code>user_id → voice_id</code> is faster and more reliable than vector search.</li>
+<li>Belongs on the latency path (e.g., TTS voice selection).</li>
+</ul>
 </section>
-<section id="a-memory-tool-when-the-model-should-decide-what-is-worth-keeping" class="level3">
-<h3 class="anchored" data-anchor-id="a-memory-tool-when-the-model-should-decide-what-is-worth-keeping">A memory tool, when the model should decide what is worth keeping</h3>
-<p>Both of those assume you know in advance what is worth storing. Some things you cannot anticipate — a passing complaint about the voice, a habit you never thought to model. So hand the decision to the agent: give it a couple of functions it is allowed to call, one that appends a line to a file and one that reads the file back, and let it judge what deserves writing down. Functions offered to a model this way are its <em>tools</em>, and a pair of them pointed at durable storage is a memory tool. Alex mentions the default voice is a bit sharp, and the agent writes itself a note — one tool call, no schema:</p>
-<div id="62333c7b" class="cell" data-execution_count="3">
+<section id="memory-tool" class="level3" data-number="3.3">
+<h3 data-number="3.3" class="anchored" data-anchor-id="memory-tool"><span class="header-section-number">3.3</span> Memory tool</h3>
+<p>For facts the schema did not anticipate.</p>
+<ul>
+<li>Give the agent write/read tools pointed at durable storage.</li>
+<li>The agent decides what to persist (e.g., tone preferences).</li>
+<li>Requires curation: files grow, contradict, and go stale.</li>
+</ul>
+<div id="300f5d63" class="cell" data-execution_count="3">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> tempfile</span>
@@ -311,23 +334,29 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 wrote 38 chars to u_8213.md</code></pre>
 </div>
 </div>
-<p>On a new call it reads that back before replying. You get memory for what no schema anticipated; you take on curation, because the file grows, contradicts itself and goes stale unless you prune it.</p>
 </section>
-<section id="fine-tuning-which-is-rarely-the-answer-for-personalisation" class="level3">
-<h3 class="anchored" data-anchor-id="fine-tuning-which-is-rarely-the-answer-for-personalisation">Fine-tuning, which is rarely the answer for personalisation</h3>
-<p>The fourth option is to change the model itself — carry on training it on your own examples until the fact is part of its weights. That is fine-tuning, and for personal facts it is almost always the wrong tool. You cannot edit one user’s preference back out, you cannot inspect what was stored, and correcting a typo means another training run. Fine-tuning shapes how a model behaves; what it knows about a particular person belongs in storage you can read and delete.</p>
-<p>Three usable mechanisms, then, plus one to avoid. Running them together takes a little more machinery than the four ideas suggest.</p>
+<section id="fine-tuning" class="level3" data-number="3.4">
+<h3 data-number="3.4" class="anchored" data-anchor-id="fine-tuning"><span class="header-section-number">3.4</span> Fine-tuning</h3>
+<p>Rarely appropriate for personal facts.</p>
+<ul>
+<li>Facts become part of model weights; not editable per user, not inspectable, not deletable without retraining.</li>
+<li>Use for behavior and style, not per-user state.</li>
+</ul>
 </section>
 </section>
-<section id="compaction-and-a-memory-tool-have-to-be-paired" class="level2">
-<h2 class="anchored" data-anchor-id="compaction-and-a-memory-tool-have-to-be-paired">Compaction and a memory tool have to be paired</h2>
-<p>On a long session the two in-call mechanisms collide. Compaction rewrites older turns into a summary; the memory tool is what makes a fact outlive the call. Run compaction first and the summary eats the sentence where Alex said the voice was too sharp before anything durable was written. So the agent should write out what matters before the summary lands, which makes the pairing an ordering constraint rather than a stylistic choice.</p>
-<p>Two supporting pieces sit underneath. RAG needs somewhere to keep the embedded corpus and search it quickly, which is what a vector database is for. And a large fixed prefix — a long system prompt, a stable set of instructions — can be cached by the provider so it is not re-processed on every turn. Prompt caching is not memory: it is a latency and billing optimisation over content you were resending anyway.</p>
+<section id="compaction-and-memory-tool-ordering" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="compaction-and-memory-tool-ordering"><span class="header-section-number">4</span> Compaction and memory tool ordering</h2>
+<p>Compaction rewrites older turns into a summary. If compaction runs before the memory tool writes durable facts, information is lost.</p>
+<ul>
+<li>Write durable facts <strong>before</strong> compaction lands.</li>
+<li>RAG needs a vector database for embedded corpus search.</li>
+<li><strong>Prompt caching</strong> is a latency/billing optimization over a stable prefix, not memory.</li>
+</ul>
 </section>
-<section id="the-second-call-is-assembled-not-remembered" class="level2">
-<h2 class="anchored" data-anchor-id="the-second-call-is-assembled-not-remembered">The second call is assembled, not remembered</h2>
-<p>Put the pieces on one timeline and the illusion comes apart. Session one wrote those two lines to the memory file and put the voice ID in a key-value store. Session two is the next morning: new call, empty window, nothing shared with yesterday. Everything the assistant “knows” about Alex, your code assembles before the model sees a single token:</p>
-<div id="59a188fd" class="cell" data-execution_count="4">
+<section id="session-assembly" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="session-assembly"><span class="header-section-number">5</span> Session assembly</h2>
+<p>Session two starts with an empty window. The assistant “knows” the caller because code assembles context before the first token:</p>
+<div id="03437a3f" class="cell" data-execution_count="4">
 <details class="code-fold">
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>voices <span class="op">=</span> {<span class="st">"u_8213"</span>: <span class="st">"bm_george"</span>}  <span class="co"># key-value store: user_id -&gt; Kokoro voice pack</span></span>
@@ -350,14 +379,17 @@ What you know about this caller:
 </code></pre>
 </div>
 </div>
-<p>That is the whole trick: a key lookup for the voice, a memory file read into the system prompt slot, and an empty window that fills as the call proceeds. Ten turns later the bike computer question arrives and the agent falls back to RAG mid-call.</p>
-<p>Three of the four storage mechanisms in a single call, alongside the window that fills as it runs, each doing the one thing it is good at. Choosing <em>between</em> them is usually the wrong framing; they answer different questions. The cheapest of the three is worth a second look, because of what it is standing in for.</p>
+<ul>
+<li>Key-value lookup for voice</li>
+<li>Memory file read into system prompt</li>
+<li>Empty window filled turn by turn; RAG may run mid-call for corpus questions</li>
+</ul>
 </section>
-<section id="the-voice-is-a-model-too-and-it-fits-in-82-million-parameters" class="level2">
-<h2 class="anchored" data-anchor-id="the-voice-is-a-model-too-and-it-fits-in-82-million-parameters">The voice is a model too, and it fits in 82 million parameters</h2>
-<p><code>bm_george</code> is not a product code from a speech vendor. It names a voice pack in <a href="https://huggingface.co/hexgrad/Kokoro-82M">Kokoro-82M</a>, a text-to-speech model whose weights are published for anyone to download and run — 82 million parameters under an Apache-2.0 licence, built on the StyleTTS 2 architecture, with the final step from the model’s internal representation to an audio waveform handled by an ISTFTNet vocoder rather than a diffusion stack. It ships 54 voices across eight languages in about 327MB.</p>
-<p>That size is the point. Personalising the voice costs one short string in a key-value row, and the model that speaks it runs on your own machine, so the lookup stays on the latency path without a network call behind it.</p>
-<p>Listen to what the lookup buys. Both clips came out of the same script in this post’s <code>src/</code> directory, run ahead of the render against Kokoro’s own weights; only the name in the greeting and the voice ID differ:</p>
+<section id="kokoro-tts" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="kokoro-tts"><span class="header-section-number">6</span> Kokoro TTS</h2>
+<p><code>bm_george</code> names a voice pack in <a href="https://huggingface.co/hexgrad/Kokoro-82M">Kokoro-82M</a>: 82M parameters, Apache-2.0, StyleTTS 2 architecture, ISTFTNet vocoder, 54 voices, ~327MB.</p>
+<p>Personalizing voice costs one string in a key-value row; the TTS model runs locally.</p>
+<p>Audio clips were generated ahead of render by <code>src/make_audio.py</code> against Kokoro weights; only greeting text and voice ID differ:</p>
 <div class="widget">
 <div class="tts-demo">
   <div class="tts-row">
@@ -412,11 +444,10 @@ document.querySelectorAll('.tts-play').forEach(function (button) {
 });
 </script>
 </div>
-<p>The second clip knows two things the first does not, and neither of them came out of the model.</p>
+<p>Session 2 uses name from the memory file and voice from the key-value store; neither came from the LLM.</p>
 </section>
-<section id="only-one-of-these-mechanisms-lives-inside-the-model" class="level2">
-<h2 class="anchored" data-anchor-id="only-one-of-these-mechanisms-lives-inside-the-model">Only one of these mechanisms lives inside the model</h2>
-<p>Laid side by side, the mechanisms sort themselves by a single question: where do the bytes sit when nobody is on the call. The answer is a request you rebuild, a datastore you own, or — in exactly one row — the weights themselves, which is the row you least want to be using for a person’s name.</p>
+<section id="mechanism-comparison" class="level2" data-number="7">
+<h2 data-number="7" class="anchored" data-anchor-id="mechanism-comparison"><span class="header-section-number">7</span> Mechanism comparison</h2>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 20%">
@@ -494,10 +525,21 @@ document.querySelectorAll('.tts-play').forEach(function (button) {
 </tbody>
 </table>
 </section>
-<section id="memory-is-a-design-decision-not-a-model-feature" class="level2">
-<h2 class="anchored" data-anchor-id="memory-is-a-design-decision-not-a-model-feature">Memory is a design decision, not a model feature</h2>
-<p>The assistant that greeted Alex by name on the second call is not a smarter model than the one that forgot. It is the same stateless function, called with a better-assembled prompt.</p>
-<p>Which tells you where to look when it breaks. Forgetting something four turns back is a compaction problem. Forgetting between calls means nothing was stored. Stating something false means retrieval missed, or a stored fact went stale. None of those are the model failing to remember. It was never remembering anything.</p>
+<section id="debugging" class="level2" data-number="8">
+<h2 data-number="8" class="anchored" data-anchor-id="debugging"><span class="header-section-number">8</span> Debugging</h2>
+<p>The model never remembers; failures are assembly or storage issues:</p>
+<ul>
+<li>Forgetting within a call → compaction dropped information</li>
+<li>Forgetting between calls → nothing was stored</li>
+<li>False statements → retrieval miss or stale stored fact</li>
+</ul>
+</section>
+<section id="references" class="level2" data-number="9">
+<h2 data-number="9" class="anchored" data-anchor-id="references"><span class="header-section-number">9</span> References</h2>
+<ul>
+<li><a href="../how-does-rag-work/">How Does RAG Work?</a></li>
+<li><a href="https://huggingface.co/hexgrad/Kokoro-82M">Kokoro-82M</a> — text-to-speech model used for demo audio</li>
+</ul>
 
 
 </section>
