@@ -1,0 +1,364 @@
+---
+title: "Claude Certified Architect, Week 1: The Orchestrator-Worker Loop"
+author: "Ravi Kalia"
+date: "2026-08-29"
+description: "Week one of preparing for the Claude Certified Architect - Foundations exam: the four-stage agent lifecycle, a production orchestrator-worker loop that branches on every stop_reason, and the failure modes that separate a demo from a service."
+categories: [AI, Architecture, Claude, Certification]
+image: "./cover.png"
+tags: [claude, agents, orchestration, tool-use, certification, anthropic]
+format:
+  html:
+    toc: true
+    code-fold: false
+    number-sections: true
+---
+
+![Claude Certified Architect, Week 1](./cover.png)
+
+Agentic Architecture and Orchestration is the heaviest domain on the Claude Certified Architect - Foundations exam at 27% of the total, and most of what it tests reduces to one question: what does your code do with `stop_reason`? These are week-one notes - the four-stage agent lifecycle, a working orchestrator-worker loop that branches on every stop reason and contains every tool failure, and the anti-patterns the exam targets.
+
+The full implementation is [`orchestrator.py`](./orchestrator.py), in this post's directory. Every code block below is excerpted from it unchanged, apart from dedenting.
+
+## Scope
+
+Week one covers one pattern end to end rather than skimming all six domains.
+
+- **Domain**: Agentic Architecture and Orchestration (27% weighting, the largest single block on the exam).
+- **Pattern**: orchestrator-worker - a planner model decomposes a request and delegates sub-tasks to worker loops with narrowed tool grants.
+- **Surface**: the Claude Messages API and a hand-written loop. The SDK's `client.beta.messages.tool_runner` handles this loop for you and is the right default in production; writing it by hand once is what makes the exam material legible.
+- **Model**: `claude-opus-5` with adaptive thinking.
+
+## Prompting versus architecture
+
+Ad-hoc prompting and agentic design fail in different places, and the shift between them is a shift in what you are responsible for.
+
+| | Ad-hoc prompting | Agentic architecture |
+|---|---|---|
+| Unit of work | One request, one response | A loop over many requests |
+| Who decides the next step | A human reading the output | Your control flow, reading `stop_reason` |
+| Primary failure surface | Prompt wording | State handling, tool boundary, budgets |
+| Effect of a bad output | A human notices | A malformed argument reaches a database |
+| Cost ceiling | One call | Unbounded until you impose one |
+
+The consequence: in an agentic system the model's output is not an answer, it is an **instruction to your code**. Everything below is about reading that instruction correctly.
+
+## The four-stage lifecycle
+
+One turn of an agent loop has four stages. Three of the four are code you own; only the first is prompting.
+
+```{mermaid}
+flowchart LR
+    A["1. Initial prompt<br/>system + tools + history"] --> B{"2. Stop reason<br/>check"}
+    B -->|end_turn / stop_sequence| Z["Return to caller"]
+    B -->|refusal| R["Terminal:<br/>read stop_details"]
+    B -->|max_tokens| T["Retry larger,<br/>then terminal"]
+    B -->|pause_turn| P["Resume,<br/>bounded"]
+    B -->|tool_use| C["3. Tool execution<br/>validate, run, contain"]
+    C --> D["4. State hand-off<br/>append content + results"]
+    D --> A
+    P --> A
+```
+
+### Stage 1: initial prompt
+
+The request carries the system prompt, the tool definitions, and the entire history - the API is stateless.
+
+- Put stable content first (frozen system text, a deterministically ordered tool list) and volatile content last, so the cached prefix survives.
+- A timestamp or request id in the system prompt silently invalidates the cache on every call. `usage.cache_read_input_tokens` reading zero across identical-prefix requests is the tell.
+
+### Stage 2: stop reason check
+
+The model reports why it stopped generating. This is the branch point of the whole architecture, and the one most implementations get wrong.
+
+### Stage 3: tool execution
+
+Each `tool_use` block names a tool and carries already-parsed JSON input.
+
+- Validate before dispatch. `strict: true` on the tool definition makes the API reject malformed input server-side.
+- Run blocks from one turn concurrently where the handlers allow it.
+- Never string-match the serialised input; escaping of Unicode and forward slashes varies between models.
+
+### Stage 4: state hand-off
+
+The results go back as the next user turn, and this stage has three hard rules.
+
+1. Append the **whole** `response.content` list, not just its text. Dropping the `tool_use` and `thinking` blocks makes the next request invalid.
+2. Every `tool_use_id` from the assistant turn needs a matching `tool_result`. An unanswered id is rejected outright.
+3. All results from one turn go in a **single** user message. Splitting them trains the model out of making parallel tool calls.
+
+## Stop reasons
+
+Six values, each with a distinct required action.
+
+| `stop_reason` | Meaning | Required action |
+|---|---|---|
+| `end_turn` | Finished naturally | Return the text |
+| `stop_sequence` | Hit a configured stop sequence | Return the text |
+| `tool_use` | Wants one or more tools run | Execute, hand results back, loop |
+| `max_tokens` | Output truncated mid-generation | Retry at a larger cap, then fail loudly |
+| `pause_turn` | A server-side tool loop hit its own cap | Re-send history unchanged to resume, bounded |
+| `refusal` | Declined on safety grounds | Terminal; read `stop_details` |
+
+`stop_details` is populated **only** for `refusal` and is `null` for every other reason, so guard before reading it.
+
+The loop encodes each of these as a distinct outcome, alongside the ceilings the model never sees:
+
+```python
+class Outcome(str, Enum):
+    """How a loop ended. Every value maps to one branch in `run_loop`."""
+
+    COMPLETED = "completed"  # stop_reason end_turn / stop_sequence
+    TRUNCATED = "truncated"  # stop_reason max_tokens, retry exhausted
+    REFUSED = "refused"  # stop_reason refusal
+    TURN_LIMIT = "turn_limit"  # our own ceiling, not the model's
+    STALLED = "stalled"  # same tool call repeated, no progress
+    ABORTED = "aborted"  # ToolAbort from a handler
+    UNKNOWN_STOP = "unknown_stop"  # a stop_reason this code has never seen
+
+
+@dataclass
+class Budget:
+    """Ceilings the model cannot see and therefore cannot talk its way past."""
+
+    max_turns: int = 12
+    max_tool_calls: int = 40
+    #: `pause_turn` means a server-side tool loop hit its own iteration cap.
+    #: Resuming is correct; resuming without a bound is an infinite loop.
+    max_pause_resumes: int = 5
+    #: One retry at a larger `max_tokens` before declaring truncation.
+    max_token_retries: int = 1
+    #: Identical (name, input) calls tolerated before the run is called stalled.
+    max_repeats: int = 2
+```
+
+The dispatch is a flat ladder with no fall-through. An unrecognised reason - one the API gains after this code ships - stops the run rather than being read as success:
+
+```python
+stop = response.stop_reason
+log.debug("turn %d stop_reason=%s", result.turns, stop)
+
+if stop in ("end_turn", "stop_sequence"):
+    result.outcome = Outcome.COMPLETED
+    result.text = _text_of(response)
+    return result
+
+if stop == "refusal":
+    # `stop_details` is populated only for refusals; guard before use.
+    details = response.stop_details
+    result.outcome = Outcome.REFUSED
+    result.detail = getattr(details, "explanation", None) or "no explanation"
+    log.error(
+        "refused (%s): %s",
+        getattr(details, "category", None),
+        result.detail,
+    )
+    return result
+
+if stop == "max_tokens":
+    # Output was cut mid-sentence. Continuing as if it were complete is
+    # how a half-written tool argument reaches a database.
+    if token_retries < budget.max_token_retries:
+        token_retries += 1
+        turn_max_tokens *= 2
+        messages.pop()  # discard the truncated turn before retrying
+        log.warning("truncated; retrying at max_tokens=%d", turn_max_tokens)
+        continue
+    result.outcome = Outcome.TRUNCATED
+    result.text = _text_of(response)
+    result.detail = f"still truncated after {token_retries} retry(ies)"
+    return result
+
+if stop == "pause_turn":
+    # A server-side tool (web search, code execution) hit its own
+    # iteration limit. Re-send the history unchanged -- the API sees the
+    # trailing server_tool_use block and resumes; an added "continue"
+    # message confuses it.
+    pause_resumes += 1
+    if pause_resumes > budget.max_pause_resumes:
+        result.outcome = Outcome.TURN_LIMIT
+        result.detail = f"paused {pause_resumes} times without finishing"
+        return result
+    continue
+
+if stop != "tool_use":
+    # A reason added to the API after this code was written. Stopping
+    # is the honest response; falling through would invent an answer.
+    result.outcome = Outcome.UNKNOWN_STOP
+    result.detail = f"unhandled stop_reason {stop!r}"
+    log.error(result.detail)
+    return result
+```
+
+Note the `messages.pop()` on truncation. The truncated assistant turn is discarded before the retry; leaving it in history and retrying appends a second turn continuing a half-written sentence.
+
+## Tool execution and error containment
+
+A tool failure is a message to the model, not an exception that unwinds the loop. The registry converts every failure mode - unknown tool, schema violation, handler exception, overrun - into a `tool_result` carrying `is_error: True`, so the model can read what went wrong and change approach.
+
+```python
+started = time.monotonic()
+try:
+    output = tool.handler(**block.input)
+except ToolFailure as exc:
+    log.warning("%s failed: %s", tool.name, exc)
+    return _error_result(block.id, str(exc))
+except ToolAbort:
+    raise
+except Exception as exc:  # noqa: BLE001 - a handler bug must not kill the run
+    log.exception("%s raised", tool.name)
+    return _error_result(
+        block.id,
+        f"{tool.name} failed with {type(exc).__name__}: {exc}",
+    )
+
+elapsed = time.monotonic() - started
+if elapsed > tool.timeout_s:
+    # The handler finished, but too late to be trusted by a caller that
+    # has already been waiting. Report it rather than pretend.
+    log.warning("%s overran: %.1fs > %.1fs", tool.name, elapsed, tool.timeout_s)
+    return _error_result(
+        block.id,
+        f"{tool.name} took {elapsed:.1f}s, over its {tool.timeout_s:.0f}s "
+        "budget. Narrow the request and try again.",
+    )
+
+return {
+    "type": "tool_result",
+    "tool_use_id": block.id,
+    "content": output if isinstance(output, str) else json.dumps(output),
+}
+```
+
+The one exception is `ToolAbort`: revoked credentials, a missing binary, a tripped breaker. Nothing the model does next can fix those, so the run ends rather than inviting a retry against a broken dependency.
+
+Error results carry the same `tool_use_id` as any other:
+
+```python
+def _error_result(tool_use_id: str, message: str) -> dict[str, Any]:
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": message,
+        "is_error": True,
+    }
+```
+
+## Bounding the loop
+
+The `tool_use` branch carries the two budgets that keep a run finite: a hard call ceiling, and repeat detection.
+
+```python
+# --- stop_reason == "tool_use" -------------------------------------
+calls = [b for b in response.content if b.type == "tool_use"]
+tool_results: list[dict[str, Any]] = []
+stalled_on: str | None = None
+for block in calls:
+    result.tool_calls += 1
+    if result.tool_calls > budget.max_tool_calls:
+        result.outcome = Outcome.TURN_LIMIT
+        result.detail = f"exceeded {budget.max_tool_calls} tool calls"
+        return result
+
+    # An agent that repeats a call verbatim is not making progress; it
+    # is usually re-reading a resource whose result it misread. Say so
+    # in-band before the turn ceiling burns the whole budget.
+    signature = (block.name, json.dumps(block.input, sort_keys=True))
+    seen_calls[signature] = seen_calls.get(signature, 0) + 1
+    if seen_calls[signature] > budget.max_repeats:
+        # Answer the block anyway -- every tool_use id in the turn needs
+        # a result or the history cannot be resent -- then stop.
+        tool_results.append(
+            _error_result(
+                block.id,
+                f"{block.name} has already been called with these exact "
+                "arguments and returned the same result. Use a different "
+                "approach or state what is blocking you.",
+            ),
+        )
+        stalled_on = f"{block.name} repeated {seen_calls[signature]} times"
+        continue
+
+    try:
+        tool_results.append(registry.dispatch(block))
+    except ToolAbort as exc:
+        result.outcome = Outcome.ABORTED
+        result.detail = str(exc)
+        log.error("aborted by %s: %s", block.name, exc)
+        return result
+
+# All results go back in one user message. Splitting them across
+# several messages trains the model out of parallel tool calls.
+messages.append({"role": "user", "content": tool_results})
+```
+
+Repeat detection is the cheaper of the two. An agent calling the same tool with byte-identical arguments is not making progress - it is usually re-reading a resource whose result it misread - and saying so in-band gives it a chance to recover before the turn ceiling burns the entire budget.
+
+## Delegation as a tool call
+
+The orchestrator's only tool spawns a worker loop. Making delegation a tool call rather than a special case means it inherits the whole error path above: a worker that stalls, truncates, or is refused returns as an `is_error` result the planner can route around.
+
+```python
+def delegate(task: str, tools: list[str]) -> str:
+    spend["workers"] += 1
+    if spend["workers"] > orchestrator_budget.max_tool_calls:
+        raise ToolAbort("worker budget exhausted")
+
+    unknown = [name for name in tools if name not in registry.names]
+    if unknown:
+        raise ToolFailure(f"no such tool(s): {', '.join(unknown)}")
+
+    worker = run_loop(
+        client,
+        system=worker_system,
+        messages=[{"role": "user", "content": task}],
+        tools=registry.params(tools),
+        registry=registry,
+        budget=worker_budget,
+        model=model,
+    )
+    if not worker.ok:
+        # Surfaced to the planner as a tool failure, with the outcome name
+        # so it can distinguish "ran out of turns" from "was refused".
+        raise ToolFailure(
+            f"worker ended as {worker.outcome.value} ({worker.detail}). "
+            f"Partial output: {worker.text[:500] or '(none)'}",
+        )
+    return worker.text
+```
+
+Two properties follow from this shape.
+
+- **Context isolation.** The worker sees the `task` string and nothing else, so a long orchestrator history never inflates worker requests.
+- **Least privilege.** The planner names the tools each worker may call. A summarisation worker cannot reach a write tool because it was never granted one.
+
+## Anti-patterns and production failure modes
+
+Each of these passes a demo and fails in production.
+
+1. **`while response.stop_reason == "tool_use"`.** The single most common defect. A `max_tokens` truncation, a `refusal`, and a `pause_turn` all exit the loop as though the model had finished, and the caller gets a partial answer with no error. Branch on every value by name.
+2. **Unhandled schema validation errors.** A handler raising on a malformed argument unwinds the loop and discards a recoverable turn. Worse, catching it and dropping the block leaves an unanswered `tool_use_id` and the *next* request is rejected with a 400 that names neither the tool nor the turn. Always emit a result; set `is_error`.
+3. **Infinite execution loops.** Three separate sources: no turn ceiling, unbounded `pause_turn` resumption, and a model retrying an identical call forever. Each needs its own bound - a single `max_turns` masks the other two until the bill arrives.
+4. **Appending only the text.** `messages.append({"role": "assistant", "content": response.text})` loses the `tool_use` and `thinking` blocks. The failure surfaces one request later, far from the cause.
+5. **Splitting parallel tool results.** Returning each `tool_result` in its own user message is accepted by the API and quietly teaches the model to stop batching calls. Throughput degrades over a session with no error anywhere.
+6. **One broad `except`.** Catching `APIStatusError` alone collapses retryable (429, 5xx, connection) into non-retryable (400, 404). Write a most-specific-first chain.
+7. **A volatile cache prefix.** A clock, a UUID, or an unsorted `json.dumps()` in the system prompt or tool list invalidates the prefix every call. Cost triples and nothing fails.
+8. **Uniform tool grants.** Handing every worker the full tool list makes the blast radius of a single bad call the whole system.
+
+## Takeaways
+
+- Treat `stop_reason` as a state machine with six named states, not a boolean.
+- A failing tool returns a message; a failing dependency raises. Distinguish the two in your exception types.
+- Bound turns, tool calls, pause resumptions, and repeated calls separately. They are four different runaway modes.
+- Grant each worker the narrowest tool set its task needs, and pass it a self-contained instruction rather than shared history.
+- Prefer the SDK's tool runner in production; hand-write the loop once to understand what it is doing on your behalf.
+- Verify prompt caching with `usage.cache_read_input_tokens` rather than assuming placement worked.
+
+Stop. Reasons. Branch. Errors. Return. Inline. Budgets. Bound. Loops. Delegate. Narrowly.
+
+## References
+
+- [Handling stop reasons](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons) - Anthropic docs; the per-reason required actions.
+- [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents) - Anthropic engineering; where orchestrator-worker sits among the agent patterns.
+- [anthropic-sdk-python](https://github.com/anthropics/anthropic-sdk-python) - the SDK, including `client.beta.messages.tool_runner`.
+- *Claude Certified Architect - Foundations exam guide* (Anthropic) - source of the 27% domain weighting quoted above.
+- [`orchestrator.py`](./orchestrator.py) - the full implementation excerpted throughout.
