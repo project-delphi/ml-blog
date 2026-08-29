@@ -2,7 +2,7 @@
 title: "Claude Certified Architect, Week 1: The Orchestrator-Worker Loop"
 author: "Ravi Kalia"
 date: "2026-08-29"
-description: "Week one of preparing for the Claude Certified Architect - Foundations exam: the four-stage agent lifecycle, a production orchestrator-worker loop that branches on every stop_reason, and the failure modes that separate a demo from a service."
+description: "Week one of preparing for the Claude Certified Architect – Foundations exam: the four-stage agent lifecycle, a production orchestrator-worker loop that branches on every stop_reason, and the failure modes that separate a demo from a service."
 categories: [AI, Architecture, Claude, Certification]
 image: "./cover.png"
 tags: [claude, agents, orchestration, tool-use, certification, anthropic]
@@ -15,7 +15,9 @@ format:
 
 ![Claude Certified Architect, Week 1](./cover.png)
 
-Agentic Architecture and Orchestration is the heaviest domain on the Claude Certified Architect - Foundations exam at 27% of the total, and most of what it tests reduces to one question: what does your code do with `stop_reason`? These are week-one notes - the four-stage agent lifecycle, a working orchestrator-worker loop that branches on every stop reason and contains every tool failure, and the anti-patterns the exam targets.
+An agent loop is a `while` loop wrapped around one API call. What separates one that survives production from one that only demos well is how it answers a single question — why did the model stop? — and there are six possible answers, each needing different code.
+
+These are notes from the first of a few weeks working toward the Claude Certified Architect – Foundations exam, whose heaviest domain is Agentic Architecture and Orchestration.
 
 The full implementation is [`orchestrator.py`](./orchestrator.py), in this post's directory. Every code block below is excerpted from it unchanged, apart from dedenting.
 
@@ -25,8 +27,8 @@ The framing comes out of work at [SoFi](https://www.sofi.com/) (Social Finance, 
 
 Week one covers one pattern end to end rather than skimming all six domains.
 
-- **Domain**: Agentic Architecture and Orchestration (27% weighting, the largest single block on the exam).
-- **Pattern**: orchestrator-worker - a planner model decomposes a request and delegates sub-tasks to worker loops with narrowed tool grants.
+- **Domain**: Agentic Architecture and Orchestration — 27% of the exam, the largest single block.
+- **Pattern**: orchestrator-worker — a planner model decomposes a request and delegates sub-tasks to worker loops with narrowed tool grants.
 - **Surface**: the Claude Messages API and a hand-written loop. The SDK's `client.beta.messages.tool_runner` handles this loop for you and is the right default in production; writing it by hand once is what makes the exam material legible.
 - **Model**: `claude-opus-5` with adaptive thinking.
 
@@ -42,7 +44,7 @@ Ad-hoc prompting and agentic design fail in different places, and the shift betw
 | Effect of a bad output | A human notices | A malformed argument reaches a database |
 | Cost ceiling | One call | Unbounded until you impose one |
 
-None of this deprecates prompting; it relocates it. The prompt remains a lever, and a wider one than plain text - [Soft Prompts vs. Hard Prompts](../soft-vs-hard-prompts/) takes a prompt initialised exactly on GPT-2's vocabulary and shows it drifting, after sixty gradient steps, somewhere no sequence of tokens can express. Neither a hard prompt nor a soft one can tell your code what to do when the model stops mid-sentence.
+None of this deprecates prompting; it relocates it. The prompt remains a lever, and a wider one than plain text — [Soft Prompts vs. Hard Prompts](../soft-vs-hard-prompts/) takes a prompt initialised exactly on GPT-2's vocabulary and shows it drifting, after sixty gradient steps, somewhere no sequence of tokens can express. Neither a hard prompt nor a soft one can tell your code what to do when the model stops mid-sentence.
 
 The consequence: in an agentic system the model's output is not an answer, it is an **instruction to your code**. Everything below is about reading that instruction correctly.
 
@@ -65,7 +67,7 @@ flowchart LR
 
 ### Stage 1: initial prompt
 
-The request carries the system prompt, the tool definitions, and the entire history - the API is stateless.
+The request carries the system prompt, the tool definitions, and the entire history — the API is stateless.
 
 - Put stable content first (frozen system text, a deterministically ordered tool list) and volatile content last, so the cached prefix survives.
 - A timestamp or request id in the system prompt silently invalidates the cache on every call. `usage.cache_read_input_tokens` reading zero across identical-prefix requests is the tell.
@@ -135,7 +137,7 @@ class Budget:
     max_repeats: int = 2
 ```
 
-The dispatch is a flat ladder with no fall-through. An unrecognised reason - one the API gains after this code ships - stops the run rather than being read as success:
+The dispatch is a flat ladder with no fall-through. An unrecognised reason — one the API gains after this code ships — stops the run rather than being read as success:
 
 ```python
 stop = response.stop_reason
@@ -197,7 +199,7 @@ Note the `messages.pop()` on truncation. The truncated assistant turn is discard
 
 ## Tool execution and error containment
 
-A tool failure is a message to the model, not an exception that unwinds the loop. The registry converts every failure mode - unknown tool, schema violation, handler exception, overrun - into a `tool_result` carrying `is_error: True`, so the model can read what went wrong and change approach.
+A tool failure is a message to the model, not an exception that unwinds the loop. The registry converts every failure mode — unknown tool, schema violation, handler exception, overrun — into a `tool_result` carrying `is_error: True`, so the model can read what went wrong and change approach.
 
 ```python
 started = time.monotonic()
@@ -295,7 +297,7 @@ for block in calls:
 messages.append({"role": "user", "content": tool_results})
 ```
 
-Repeat detection is the cheaper of the two. An agent calling the same tool with byte-identical arguments is not making progress - it is usually re-reading a resource whose result it misread - and saying so in-band gives it a chance to recover before the turn ceiling burns the entire budget.
+Repeat detection is the cheaper of the two. An agent calling the same tool with byte-identical arguments is not making progress — it is usually re-reading a resource whose result it misread — and saying so in-band gives it a chance to recover before the turn ceiling burns the entire budget.
 
 ## Delegation as a tool call
 
@@ -341,7 +343,7 @@ Each of these passes a demo and fails in production. The first two are the ones 
 
 1. **`while response.stop_reason == "tool_use"`.** The single most common defect. A `max_tokens` truncation, a `refusal`, and a `pause_turn` all exit the loop as though the model had finished, and the caller gets a partial answer with no error. Branch on every value by name.
 2. **Unhandled schema validation errors.** A handler raising on a malformed argument unwinds the loop and discards a recoverable turn. Worse, catching it and dropping the block leaves an unanswered `tool_use_id` and the *next* request is rejected with a 400 that names neither the tool nor the turn. Always emit a result; set `is_error`.
-3. **Infinite execution loops.** Three separate sources: no turn ceiling, unbounded `pause_turn` resumption, and a model retrying an identical call forever. Each needs its own bound - a single `max_turns` masks the other two until the bill arrives.
+3. **Infinite execution loops.** Three separate sources: no turn ceiling, unbounded `pause_turn` resumption, and a model retrying an identical call forever. Each needs its own bound — a single `max_turns` masks the other two until the bill arrives.
 4. **Appending only the text.** `messages.append({"role": "assistant", "content": response.text})` loses the `tool_use` and `thinking` blocks. The failure surfaces one request later, far from the cause.
 5. **Splitting parallel tool results.** Returning each `tool_result` in its own user message is accepted by the API and quietly teaches the model to stop batching calls. Throughput degrades over a session with no error anywhere.
 6. **One broad `except`.** Catching `APIStatusError` alone collapses retryable (429, 5xx, connection) into non-retryable (400, 404). Write a most-specific-first chain.
@@ -361,9 +363,9 @@ Stop. Reasons. Branch. Errors. Return. Inline. Budgets. Bound. Loops. Delegate. 
 
 ## References
 
-- [Handling stop reasons](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons) - Anthropic docs; the per-reason required actions.
-- [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents) - Anthropic engineering; where orchestrator-worker sits among the agent patterns.
-- [anthropic-sdk-python](https://github.com/anthropics/anthropic-sdk-python) - the SDK, including `client.beta.messages.tool_runner`.
-- *Claude Certified Architect - Foundations exam guide* (Anthropic) - source of the 27% domain weighting quoted above.
-- [Soft Prompts vs. Hard Prompts](../soft-vs-hard-prompts/) - this blog; the discrete-versus-continuous prompt distinction referenced above.
-- [`orchestrator.py`](./orchestrator.py) - the full implementation excerpted throughout.
+- [Handling stop reasons](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons) — Anthropic docs; the per-reason required actions.
+- [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents) — Anthropic engineering; where orchestrator-worker sits among the agent patterns.
+- [anthropic-sdk-python](https://github.com/anthropics/anthropic-sdk-python) — the SDK, including `client.beta.messages.tool_runner`.
+- *Claude Certified Architect – Foundations exam guide* (Anthropic) — source of the 27% domain weighting quoted above.
+- [Soft Prompts vs. Hard Prompts](../soft-vs-hard-prompts/) — this blog; the discrete-versus-continuous prompt distinction referenced above.
+- [`orchestrator.py`](./orchestrator.py) — the full implementation excerpted throughout.
