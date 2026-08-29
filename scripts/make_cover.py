@@ -5,7 +5,9 @@ Covers are content-derived: copy the figure that carries the post's main claim,
 or — if the post has no raster of its own — a license-safe Commons file. Never
 draw the old purple title card.
 
-Run with Pillow (and PyYAML, for --all) from the repo root::
+Run with Pillow and PyYAML from the repo root. PyYAML is required for
+--all and read on a single-post run too, to pick up that slug's recorded
+``fit``; without it a single-post run warns and falls back to ``cover``::
 
     uv run --with pillow --with pyyaml python scripts/make_cover.py \\
         posts/volcano-plots --source \\
@@ -395,7 +397,15 @@ def recorded_fit(slug: str) -> str:
     """
     try:
         entry = load_yaml(SOURCES).get(slug)
-    except SystemExit:
+    except (SystemExit, ImportError, OSError) as exc:
+        # PyYAML absent, or the map missing/unreadable. Degrade to the default
+        # rather than failing a run that used to work without PyYAML — but say
+        # so, since a slug pinned to contain would silently re-crop.
+        print(
+            f"warning: cannot read {SOURCES.name} ({exc}); using fit: cover."
+            " Pass --fit explicitly if this slug is pinned.",
+            file=sys.stderr,
+        )
         return "cover"
     if not isinstance(entry, dict):
         return "cover"
@@ -483,7 +493,7 @@ def main(argv: list[str] | None = None) -> int:
         Process exit code.
     """
     args = parse_args(argv)
-    if args.fit and not (args.source or args.commons):
+    if args.fit and (args.all or not (args.source or args.commons)):
         raise SystemExit(
             "--fit applies to --source/--commons; set fit: in the YAML otherwise"
         )
