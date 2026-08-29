@@ -17,6 +17,8 @@ The product here is prose. The tooling below exists to get prose onto the web wi
 
 Do not restyle a Register A post into Register B unless the author asked for that sweep. Do not restyle a Register B post back into claim-heading narrative.
 
+**Plain English, both registers.** Dry is not the same as abstract, and Register B's "do not try to make it engaging" is not a licence to write in nouns. Everyday words over Latinate ones — "use" not "utilize", "breaks" not "invalidates", "stops" not "terminates". Active voice. Short sentences: if a heavy clause sits between a subject and its verb, split it. Compress by cutting sentences, never by packing an argument into a noun phrase ("making delegation a tool call means it inherits the error path"). A jargon label — "least privilege", "blast radius", "context isolation" — needs a plain restatement beside it or a plain phrase instead of it.
+
 ### Register A (summary)
 
 Write so a smart reader who has never met the topic follows every sentence on the first pass.
@@ -24,7 +26,7 @@ Write so a smart reader who has never met the topic follows every sentence on th
 - Open on a plain-English sentence saying what the post is for — but say the thing, don't announce that you are about to ("In this post we will…" stays banned). In an essay it keeps the essay's voice.
 - Explain the idea before you name it.
 - Warm up before the mechanics; never open a section with code, a bullet list, or a table.
-- Everyday words over Latinate ones; active voice; one idea per paragraph.
+- One idea per paragraph.
 - Headings state claims so the ToC reconstructs the argument. Each section's first sentence links back; its last names the gap the next section fills. Close by returning to the opening claim. Caveats go inline where the objection occurs.
 
 `STYLE.md` carries two calibration examples (cross-validation, the bootstrap). Read the tone off those rather than guessing at it.
@@ -94,6 +96,8 @@ With the server gone there is no localhost link left to give, so that final repl
 
 ## Commands
 
+**Never run `python`, `python3`, or `pip` bare** — that resolves to Homebrew's interpreter, not this repo's. It applies to throwaway one-liners, stdlib-only scripts like `scripts/check_posts.py`, and `-m http.server` too. Always name the interpreter: `.venv/bin/python`, `.venv-<slug>/bin/python`, or `uv run`.
+
 - **Render one post**: `quarto render posts/<slug>/index.qmd`. Narrow blast radius, but it **always executes that post's code** — `freeze` is honoured only on a *project* render. Needs the post's real venv.
 - **Render the whole site**: `QUARTO_PYTHON="$(pwd)/.venv/bin/python" quarto render .` (`make quatro` runs the bare form). Deletes and rebuilds `docs/`, but *respects* `freeze: auto` — it re-executes only posts whose **source md5 changed** since their `_freeze/` record was written, which today is none. The right tool for anything site-wide: nav, theme, `_quarto.yml`, a stale `search.json`.
   - `QUARTO_PYTHON` is not optional. A bare `quarto render .` resolves a Python that cannot see `--user`-registered kernelspecs and dies on the first post pinning a named kernel — after it has already deleted `docs/`. Recover with `git checkout -- docs`.
@@ -117,7 +121,7 @@ Posts are dependency-isolated: `pyproject.toml` carries only dev/lint tooling, n
 
 ### Building a post venv
 
-**Never install into or execute with the system Python** — a bare `python`/`pip` is the system one and will pollute it (or fail on externally-managed environments). Target the venv explicitly rather than relying on activation:
+Per the rule under Commands, never install with a bare `pip` — it pollutes the system Python or fails outright on an externally-managed one. Target the venv explicitly rather than relying on activation:
 
 ```bash
 uv venv .venv-<slug>
