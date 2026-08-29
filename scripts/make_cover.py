@@ -105,9 +105,13 @@ def border_color(image, edges: str) -> tuple[int, int, int]:
     Only the two edges that abut the pad are sampled, since the opposite pair
     never touches it and pooling all four pulls the colour toward whatever sits
     there. This is a heuristic, not a guarantee: an edge the pad does touch can
-    still be unrepresentative — the caption bar on the Ripley portrait spans the
-    full width, so it darkens the sampled columns — and a source whose abutting
-    edges are strongly non-uniform will want an explicit crop instead.
+    still be unrepresentative — a banner whose top edge is sky and whose bottom
+    edge is stonework yields a median matching neither — so a source whose
+    abutting edges are strongly non-uniform wants an explicit crop instead.
+
+    No slug in cover_sources.yml currently pins `contain`, so `--all` does not
+    exercise this path; the mode exists for a portrait or other source the
+    default centre crop would cut the subject out of.
 
     Fully transparent pixels are composited onto white first, so a source with a
     transparent margin pads white rather than the black an RGB cast would give.
