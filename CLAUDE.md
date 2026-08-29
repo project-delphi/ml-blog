@@ -21,6 +21,7 @@ Do not restyle a Register A post into Register B unless the author asked for tha
 
 Write so a smart reader who has never met the topic follows every sentence on the first pass.
 
+- Open on a plain-English sentence saying what the post is for — but say the thing, don't announce that you are about to ("In this post we will…" stays banned). In an essay it keeps the essay's voice.
 - Explain the idea before you name it.
 - Warm up before the mechanics; never open a section with code, a bullet list, or a table.
 - Everyday words over Latinate ones; active voice; one idea per paragraph.
@@ -32,12 +33,15 @@ Write so a smart reader who has never met the topic follows every sentence on th
 
 Optimize for rapid transfer of technical information. Do not try to make the text engaging.
 
-- Start with the definition or procedure. Cut scene-setting and conversational transitions.
+- Open on a plain-English sentence saying what the post is for, then go straight to the definition or procedure. Cut scene-setting and conversational transitions.
 - Topic headings (`## Eigendecomposition`), numbered by Quarto — do not put `1.` in the heading text.
 - Default to bullets or numbered lists for multiple concepts, steps, or trade-offs.
 - Remaining paragraphs: one or two sentences. Isolate code, commands, and display math in fenced blocks.
-- End when the information is delivered.
-- **References last (both registers).** If the post cites papers, books, docs, datasets, or other posts as sources, end with `## References`: a short bulleted list of those sources only. Do not invent citations. Skip the section when there are none. Inline links may stay; the end list is the bibliography.
+- End when the information is delivered — no *paragraph* closer restating the opening claim.
+- **One-word closer last (both registers).** Every post ends on one line of one-word sentences summarising it and landing its consequence: 8–12 capitalised single words, each ending in a period, reading as two to four telegraphic clauses. It is a new final line; the existing last paragraph stays. `posts/tensor-factorizations/index.qmd` is the calibration — `Tensors. Outrun. Matrices. Factorizations. Compress. Inverses. Require. Products. Choose. First.` It must be true to *this* post; one that just restates the title is worse than none.
+- **References last (both registers).** If the post cites papers, books, docs, datasets, or other posts as sources, end with `## References`: a short bulleted list of those sources only. Do not invent citations. Skip the section when there are none. Inline links may stay; the end list is the bibliography. The one-word closer sits immediately above that heading.
+
+The purpose sentence and one-word closer are in place on the 50 posts with no `_freeze/` record. The 50 freeze-backed posts are **not** done — editing one invalidates its frozen output and forces a re-execution, so that sweep needs the venvs to hand and is a separate job. `STYLE.md` carries the same note.
 
 ### Two failure modes no check catches
 
