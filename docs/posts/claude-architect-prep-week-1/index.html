@@ -209,8 +209,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#stage-4-state-hand-off" id="toc-stage-4-state-hand-off" class="nav-link" data-scroll-target="#stage-4-state-hand-off"><span class="header-section-number">3.4</span> Stage 4: state hand-off</a></li>
   </ul></li>
   <li><a href="#stop-reasons" id="toc-stop-reasons" class="nav-link" data-scroll-target="#stop-reasons"><span class="header-section-number">4</span> Stop reasons</a></li>
-  <li><a href="#tool-execution-and-error-containment" id="toc-tool-execution-and-error-containment" class="nav-link" data-scroll-target="#tool-execution-and-error-containment"><span class="header-section-number">5</span> Tool execution and error containment</a></li>
-  <li><a href="#bounding-the-loop" id="toc-bounding-the-loop" class="nav-link" data-scroll-target="#bounding-the-loop"><span class="header-section-number">6</span> Bounding the loop</a></li>
+  <li><a href="#tool-execution-and-errors" id="toc-tool-execution-and-errors" class="nav-link" data-scroll-target="#tool-execution-and-errors"><span class="header-section-number">5</span> Tool execution and errors</a></li>
+  <li><a href="#loop-limits" id="toc-loop-limits" class="nav-link" data-scroll-target="#loop-limits"><span class="header-section-number">6</span> Loop limits</a></li>
   <li><a href="#delegation-as-a-tool-call" id="toc-delegation-as-a-tool-call" class="nav-link" data-scroll-target="#delegation-as-a-tool-call"><span class="header-section-number">7</span> Delegation as a tool call</a></li>
   <li><a href="#anti-patterns-and-production-failure-modes" id="toc-anti-patterns-and-production-failure-modes" class="nav-link" data-scroll-target="#anti-patterns-and-production-failure-modes"><span class="header-section-number">8</span> Anti-patterns and production failure modes</a></li>
   <li><a href="#takeaways" id="toc-takeaways" class="nav-link" data-scroll-target="#takeaways"><span class="header-section-number">9</span> Takeaways</a></li>
@@ -231,23 +231,23 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <figcaption>Claude Certified Architect, Week 1</figcaption>
 </figure>
 </div>
-<p>An agent loop is a <code>while</code> loop wrapped around one API call. What separates one that survives production from one that only demos well is how it answers a single question — why did the model stop? — and there are six possible answers, each needing different code.</p>
-<p>These are notes from the first of a few weeks working toward the Claude Certified Architect – Foundations exam, whose heaviest domain is Agentic Architecture and Orchestration.</p>
-<p>The full implementation is <a href="./orchestrator.py"><code>orchestrator.py</code></a>, in this post’s directory. Every code block below is excerpted from it unchanged, apart from dedenting.</p>
-<p>The framing comes out of work at <a href="https://www.sofi.com/">SoFi</a> (Social Finance, Inc.), building applications where LLMs automate repetitive regulatory job functions. That setting fixes the tolerance for everything below: the loop’s output feeds a filing rather than a human reader, so a partial answer that looks complete is worse than a loud failure.</p>
+<p>An agent loop is a <code>while</code> loop around one API call. Each time round, the model tells you why it stopped. There are six things it can say, and a loop that only handles one of them will hand back a half-finished answer and call it done.</p>
+<p>These are notes from the first of a few weeks studying for the Claude Certified Architect – Foundations exam. Its biggest topic is Agentic Architecture and Orchestration.</p>
+<p>The full implementation is <a href="./orchestrator.py"><code>orchestrator.py</code></a>, in this post’s directory. Every code block below is copied straight out of it; the only change is the indentation.</p>
+<p>I learned to think this way at <a href="https://www.sofi.com/">SoFi</a> (Social Finance, Inc.), building apps that use LLMs to take over repetitive regulatory work. Nobody reads the loop’s output there before it goes into a filing. A wrong answer that looks finished does more damage than a crash.</p>
 <section id="scope" class="level2" data-number="1">
 <h2 data-number="1" class="anchored" data-anchor-id="scope"><span class="header-section-number">1</span> Scope</h2>
-<p>Week one covers one pattern end to end rather than skimming all six domains.</p>
+<p>This week covers one pattern properly instead of skimming all six exam domains.</p>
 <ul>
 <li><strong>Domain</strong>: Agentic Architecture and Orchestration — 27% of the exam, the largest single block.</li>
-<li><strong>Pattern</strong>: orchestrator-worker — a planner model decomposes a request and delegates sub-tasks to worker loops with narrowed tool grants.</li>
-<li><strong>Surface</strong>: the Claude Messages API and a hand-written loop. The SDK’s <code>client.beta.messages.tool_runner</code> handles this loop for you and is the right default in production; writing it by hand once is what makes the exam material legible.</li>
+<li><strong>Pattern</strong>: orchestrator-worker — one model plans and splits the work, then hands each piece to a worker loop that can reach only the tools it needs.</li>
+<li><strong>Surface</strong>: the Claude Messages API and a hand-written loop. The SDK’s <code>client.beta.messages.tool_runner</code> handles this loop for you and is the right default in production; writing it out by hand once is what makes the rest of the material make sense.</li>
 <li><strong>Model</strong>: <code>claude-opus-5</code> with adaptive thinking.</li>
 </ul>
 </section>
 <section id="prompting-versus-architecture" class="level2" data-number="2">
 <h2 data-number="2" class="anchored" data-anchor-id="prompting-versus-architecture"><span class="header-section-number">2</span> Prompting versus architecture</h2>
-<p>Ad-hoc prompting and agentic design fail in different places, and the shift between them is a shift in what you are responsible for.</p>
+<p>Prompting and agent design break in different places. Moving from one to the other changes what you are on the hook for.</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 33%">
@@ -289,8 +289,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </tr>
 </tbody>
 </table>
-<p>None of this deprecates prompting; it relocates it. The prompt remains a lever, and a wider one than plain text — <a href="../soft-vs-hard-prompts/">Soft Prompts vs.&nbsp;Hard Prompts</a> takes a prompt initialised exactly on GPT-2’s vocabulary and shows it drifting, after sixty gradient steps, somewhere no sequence of tokens can express. Neither a hard prompt nor a soft one can tell your code what to do when the model stops mid-sentence.</p>
-<p>The consequence: in an agentic system the model’s output is not an answer, it is an <strong>instruction to your code</strong>. Everything below is about reading that instruction correctly.</p>
+<p>This does not make prompting matter less. It moves where it matters. The prompt is still a lever, and a wider one than plain text: <a href="../soft-vs-hard-prompts/">Soft Prompts vs.&nbsp;Hard Prompts</a> starts a prompt exactly on GPT-2’s vocabulary and, sixty gradient steps later, it has drifted somewhere no sentence can reach. But no prompt of either kind tells your code what to do when the model stops mid-sentence.</p>
+<p>So the model’s output stops being an answer. It becomes an <strong>instruction to your code</strong>, and the rest of this post is about reading it correctly.</p>
 </section>
 <section id="the-four-stage-lifecycle" class="level2" data-number="3">
 <h2 data-number="3" class="anchored" data-anchor-id="the-four-stage-lifecycle"><span class="header-section-number">3</span> The four-stage lifecycle</h2>
@@ -306,7 +306,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     B --&gt;|refusal| R["Terminal:&lt;br/&gt;read stop_details"]
     B --&gt;|max_tokens| T["Retry larger,&lt;br/&gt;then terminal"]
     B --&gt;|pause_turn| P["Resume,&lt;br/&gt;bounded"]
-    B --&gt;|tool_use| C["3. Tool execution&lt;br/&gt;validate, run, contain"]
+    B --&gt;|tool_use| C["3. Tool execution&lt;br/&gt;check, run, catch"]
     C --&gt; D["4. State hand-off&lt;br/&gt;append content + results"]
     D --&gt; A
     P --&gt; A
@@ -320,21 +320,21 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 data-number="3.1" class="anchored" data-anchor-id="stage-1-initial-prompt"><span class="header-section-number">3.1</span> Stage 1: initial prompt</h3>
 <p>The request carries the system prompt, the tool definitions, and the entire history — the API is stateless.</p>
 <ul>
-<li>Put stable content first (frozen system text, a deterministically ordered tool list) and volatile content last, so the cached prefix survives.</li>
-<li>A timestamp or request id in the system prompt silently invalidates the cache on every call. <code>usage.cache_read_input_tokens</code> reading zero across identical-prefix requests is the tell.</li>
+<li>Put the parts that never change first (fixed system text, a tool list in a fixed order) and the parts that change every call last, so the cache still hits.</li>
+<li>A timestamp or a request id in the system prompt quietly breaks the cache on every call. If <code>usage.cache_read_input_tokens</code> is zero across calls that should share a prefix, that is what happened.</li>
 </ul>
 </section>
 <section id="stage-2-stop-reason-check" class="level3" data-number="3.2">
 <h3 data-number="3.2" class="anchored" data-anchor-id="stage-2-stop-reason-check"><span class="header-section-number">3.2</span> Stage 2: stop reason check</h3>
-<p>The model reports why it stopped generating. This is the branch point of the whole architecture, and the one most implementations get wrong.</p>
+<p>The model tells you why it stopped. Everything else in the loop hangs off this one check, and it is the part most code gets wrong.</p>
 </section>
 <section id="stage-3-tool-execution" class="level3" data-number="3.3">
 <h3 data-number="3.3" class="anchored" data-anchor-id="stage-3-tool-execution"><span class="header-section-number">3.3</span> Stage 3: tool execution</h3>
 <p>Each <code>tool_use</code> block names a tool and carries already-parsed JSON input.</p>
 <ul>
-<li>Validate before dispatch. <code>strict: true</code> on the tool definition makes the API reject malformed input server-side.</li>
-<li>Run blocks from one turn concurrently where the handlers allow it.</li>
-<li>Never string-match the serialised input; escaping of Unicode and forward slashes varies between models.</li>
+<li>Check the input before you run anything. <code>strict: true</code> on the tool definition makes the API reject bad input before it ever reaches your handler.</li>
+<li>Run the blocks from one turn at the same time, where the handlers allow it.</li>
+<li>Never match on the raw JSON text; models escape Unicode and forward slashes differently.</li>
 </ul>
 </section>
 <section id="stage-4-state-hand-off" class="level3" data-number="3.4">
@@ -342,14 +342,14 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>The results go back as the next user turn, and this stage has three hard rules.</p>
 <ol type="1">
 <li>Append the <strong>whole</strong> <code>response.content</code> list, not just its text. Dropping the <code>tool_use</code> and <code>thinking</code> blocks makes the next request invalid.</li>
-<li>Every <code>tool_use_id</code> from the assistant turn needs a matching <code>tool_result</code>. An unanswered id is rejected outright.</li>
+<li>Every <code>tool_use_id</code> from the assistant turn needs a matching <code>tool_result</code>. Miss one and the next request is rejected.</li>
 <li>All results from one turn go in a <strong>single</strong> user message. Splitting them trains the model out of making parallel tool calls.</li>
 </ol>
 </section>
 </section>
 <section id="stop-reasons" class="level2" data-number="4">
 <h2 data-number="4" class="anchored" data-anchor-id="stop-reasons"><span class="header-section-number">4</span> Stop reasons</h2>
-<p>Six values, each with a distinct required action.</p>
+<p>Six values. Each one needs different code.</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 33%">
@@ -377,27 +377,27 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <tr class="odd">
 <td><code>tool_use</code></td>
 <td>Wants one or more tools run</td>
-<td>Execute, hand results back, loop</td>
+<td>Run them, hand the results back, go round again</td>
 </tr>
 <tr class="even">
 <td><code>max_tokens</code></td>
-<td>Output truncated mid-generation</td>
-<td>Retry at a larger cap, then fail loudly</td>
+<td>Output cut off part-way</td>
+<td>Retry with a bigger cap, then fail loudly</td>
 </tr>
 <tr class="odd">
 <td><code>pause_turn</code></td>
-<td>A server-side tool loop hit its own cap</td>
-<td>Re-send history unchanged to resume, bounded</td>
+<td>A server-side tool hit its own limit</td>
+<td>Send the history back unchanged to resume, and cap the resumes</td>
 </tr>
 <tr class="even">
 <td><code>refusal</code></td>
-<td>Declined on safety grounds</td>
-<td>Terminal; read <code>stop_details</code></td>
+<td>Turned the request down on safety grounds</td>
+<td>Stop here; read <code>stop_details</code></td>
 </tr>
 </tbody>
 </table>
-<p><code>stop_details</code> is populated <strong>only</strong> for <code>refusal</code> and is <code>null</code> for every other reason, so guard before reading it.</p>
-<p>The loop encodes each of these as a distinct outcome, alongside the ceilings the model never sees:</p>
+<p><code>stop_details</code> is filled in <strong>only</strong> for <code>refusal</code>. It is <code>null</code> for every other reason, so check before you read it.</p>
+<p>The loop gives each of these its own outcome, and sets limits the model never sees:</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Outcome(<span class="bu">str</span>, Enum):</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""How a loop ended. Every value maps to one branch in `run_loop`."""</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -423,7 +423,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>    max_token_retries: <span class="bu">int</span> <span class="op">=</span> <span class="dv">1</span></span>
 <span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a>    <span class="co">#: Identical (name, input) calls tolerated before the run is called stalled.</span></span>
 <span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a>    max_repeats: <span class="bu">int</span> <span class="op">=</span> <span class="dv">2</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<p>The dispatch is a flat ladder with no fall-through. An unrecognised reason — one the API gains after this code ships — stops the run rather than being read as success:</p>
+<p>The checks are a flat ladder, and nothing drops off the bottom. A reason this code has never seen — one the API adds after it ships — stops the run instead of being taken for success:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>stop <span class="op">=</span> response.stop_reason</span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>log.debug(<span class="st">"turn </span><span class="sc">%d</span><span class="st"> stop_reason=</span><span class="sc">%s</span><span class="st">"</span>, result.turns, stop)</span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -477,11 +477,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb2-51"><a href="#cb2-51" aria-hidden="true" tabindex="-1"></a>    result.detail <span class="op">=</span> <span class="ss">f"unhandled stop_reason </span><span class="sc">{</span>stop<span class="sc">!r}</span><span class="ss">"</span></span>
 <span id="cb2-52"><a href="#cb2-52" aria-hidden="true" tabindex="-1"></a>    log.error(result.detail)</span>
 <span id="cb2-53"><a href="#cb2-53" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> result</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<p>Note the <code>messages.pop()</code> on truncation. The truncated assistant turn is discarded before the retry; leaving it in history and retrying appends a second turn continuing a half-written sentence.</p>
+<p>Note the <code>messages.pop()</code>. The cut-off turn is thrown away before the retry. Leave it in and the retry just adds a second turn carrying on from half a sentence.</p>
 </section>
-<section id="tool-execution-and-error-containment" class="level2" data-number="5">
-<h2 data-number="5" class="anchored" data-anchor-id="tool-execution-and-error-containment"><span class="header-section-number">5</span> Tool execution and error containment</h2>
-<p>A tool failure is a message to the model, not an exception that unwinds the loop. The registry converts every failure mode — unknown tool, schema violation, handler exception, overrun — into a <code>tool_result</code> carrying <code>is_error: True</code>, so the model can read what went wrong and change approach.</p>
+<section id="tool-execution-and-errors" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="tool-execution-and-errors"><span class="header-section-number">5</span> Tool execution and errors</h2>
+<p>A broken tool is something you tell the model, not an exception that tears down the loop. Whatever goes wrong — no such tool, bad arguments, the handler blew up, it took too long — comes back as a <code>tool_result</code> marked <code>is_error: True</code>. The model reads it and tries something else.</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>started <span class="op">=</span> time.monotonic()</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="cf">try</span>:</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    output <span class="op">=</span> tool.handler(<span class="op">**</span>block.<span class="bu">input</span>)</span>
@@ -513,7 +513,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>    <span class="st">"tool_use_id"</span>: block.<span class="bu">id</span>,</span>
 <span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>    <span class="st">"content"</span>: output <span class="cf">if</span> <span class="bu">isinstance</span>(output, <span class="bu">str</span>) <span class="cf">else</span> json.dumps(output),</span>
 <span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>}</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<p>The one exception is <code>ToolAbort</code>: revoked credentials, a missing binary, a tripped breaker. Nothing the model does next can fix those, so the run ends rather than inviting a retry against a broken dependency.</p>
+<p><code>ToolAbort</code> is the exception: dead credentials, a missing binary, a tripped breaker. The model cannot fix any of those, so the run stops instead of retrying against something that is already broken.</p>
 <p>Error results carry the same <code>tool_use_id</code> as any other:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> _error_result(tool_use_id: <span class="bu">str</span>, message: <span class="bu">str</span>) <span class="op">-&gt;</span> <span class="bu">dict</span>[<span class="bu">str</span>, Any]:</span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> {</span>
@@ -523,9 +523,9 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"is_error"</span>: <span class="va">True</span>,</span>
 <span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    }</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </section>
-<section id="bounding-the-loop" class="level2" data-number="6">
-<h2 data-number="6" class="anchored" data-anchor-id="bounding-the-loop"><span class="header-section-number">6</span> Bounding the loop</h2>
-<p>The <code>tool_use</code> branch carries the two budgets that keep a run finite: a hard call ceiling, and repeat detection.</p>
+<section id="loop-limits" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="loop-limits"><span class="header-section-number">6</span> Loop limits</h2>
+<p>Two limits in the <code>tool_use</code> branch stop a run going forever: a hard cap on tool calls, and a check for repeats.</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co"># --- stop_reason == "tool_use" -------------------------------------</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>calls <span class="op">=</span> [b <span class="cf">for</span> b <span class="kw">in</span> response.content <span class="cf">if</span> b.<span class="bu">type</span> <span class="op">==</span> <span class="st">"tool_use"</span>]</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>tool_results: <span class="bu">list</span>[<span class="bu">dict</span>[<span class="bu">str</span>, Any]] <span class="op">=</span> []</span>
@@ -567,11 +567,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb5-39"><a href="#cb5-39" aria-hidden="true" tabindex="-1"></a><span class="co"># All results go back in one user message. Splitting them across</span></span>
 <span id="cb5-40"><a href="#cb5-40" aria-hidden="true" tabindex="-1"></a><span class="co"># several messages trains the model out of parallel tool calls.</span></span>
 <span id="cb5-41"><a href="#cb5-41" aria-hidden="true" tabindex="-1"></a>messages.append({<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: tool_results})</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<p>Repeat detection is the cheaper of the two. An agent calling the same tool with byte-identical arguments is not making progress — it is usually re-reading a resource whose result it misread — and saying so in-band gives it a chance to recover before the turn ceiling burns the entire budget.</p>
+<p>The repeat check is the cheaper of the two. An agent calling the same tool with the same arguments is stuck, usually re-reading something whose answer it misread the first time. Saying so in the tool result gives it a chance to recover before the turn limit eats the whole budget.</p>
 </section>
 <section id="delegation-as-a-tool-call" class="level2" data-number="7">
 <h2 data-number="7" class="anchored" data-anchor-id="delegation-as-a-tool-call"><span class="header-section-number">7</span> Delegation as a tool call</h2>
-<p>The orchestrator’s only tool spawns a worker loop. Making delegation a tool call rather than a special case means it inherits the whole error path above: a worker that stalls, truncates, or is refused returns as an <code>is_error</code> result the planner can route around.</p>
+<p>The orchestrator has one tool, and it starts a worker loop. Because handing off work is a plain tool call and not a special case, it gets the whole error path above for free: a worker that gets stuck, cut off, or refused comes back as an <code>is_error</code> result the planner can work around.</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> delegate(task: <span class="bu">str</span>, tools: <span class="bu">list</span>[<span class="bu">str</span>]) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>    spend[<span class="st">"workers"</span>] <span class="op">+=</span> <span class="dv">1</span></span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> spend[<span class="st">"workers"</span>] <span class="op">&gt;</span> orchestrator_budget.max_tool_calls:</span>
@@ -598,47 +598,47 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb6-24"><a href="#cb6-24" aria-hidden="true" tabindex="-1"></a>            <span class="ss">f"Partial output: </span><span class="sc">{</span>worker<span class="sc">.</span>text[:<span class="dv">500</span>] <span class="kw">or</span> <span class="st">'(none)'</span><span class="sc">}</span><span class="ss">"</span>,</span>
 <span id="cb6-25"><a href="#cb6-25" aria-hidden="true" tabindex="-1"></a>        )</span>
 <span id="cb6-26"><a href="#cb6-26" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> worker.text</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<p>Two properties follow from this shape.</p>
+<p>Two things fall out of this.</p>
 <ul>
-<li><strong>Context isolation.</strong> The worker sees the <code>task</code> string and nothing else, so a long orchestrator history never inflates worker requests.</li>
-<li><strong>Least privilege.</strong> The planner names the tools each worker may call. A summarisation worker cannot reach a write tool because it was never granted one.</li>
+<li><strong>The worker starts clean.</strong> It sees the <code>task</code> string and nothing else, so a long planner history never bloats worker requests.</li>
+<li><strong>Each worker gets only what it needs.</strong> The planner names the tools that worker may call. A worker that only summarises cannot touch a write tool, because it was never handed one.</li>
 </ul>
 </section>
 <section id="anti-patterns-and-production-failure-modes" class="level2" data-number="8">
 <h2 data-number="8" class="anchored" data-anchor-id="anti-patterns-and-production-failure-modes"><span class="header-section-number">8</span> Anti-patterns and production failure modes</h2>
-<p>Each of these passes a demo and fails in production. The first two are the ones that bite hardest in regulatory automation, where a truncated answer is indistinguishable from a complete one at the point it is read.</p>
+<p>Each of these passes a demo and fails in production. The first two hurt most in regulatory work, where nothing about a cut-off answer looks different from a finished one.</p>
 <ol type="1">
-<li><strong><code>while response.stop_reason == "tool_use"</code>.</strong> The single most common defect. A <code>max_tokens</code> truncation, a <code>refusal</code>, and a <code>pause_turn</code> all exit the loop as though the model had finished, and the caller gets a partial answer with no error. Branch on every value by name.</li>
-<li><strong>Unhandled schema validation errors.</strong> A handler raising on a malformed argument unwinds the loop and discards a recoverable turn. Worse, catching it and dropping the block leaves an unanswered <code>tool_use_id</code> and the <em>next</em> request is rejected with a 400 that names neither the tool nor the turn. Always emit a result; set <code>is_error</code>.</li>
-<li><strong>Infinite execution loops.</strong> Three separate sources: no turn ceiling, unbounded <code>pause_turn</code> resumption, and a model retrying an identical call forever. Each needs its own bound — a single <code>max_turns</code> masks the other two until the bill arrives.</li>
-<li><strong>Appending only the text.</strong> <code>messages.append({"role": "assistant", "content": response.text})</code> loses the <code>tool_use</code> and <code>thinking</code> blocks. The failure surfaces one request later, far from the cause.</li>
-<li><strong>Splitting parallel tool results.</strong> Returning each <code>tool_result</code> in its own user message is accepted by the API and quietly teaches the model to stop batching calls. Throughput degrades over a session with no error anywhere.</li>
-<li><strong>One broad <code>except</code>.</strong> Catching <code>APIStatusError</code> alone collapses retryable (429, 5xx, connection) into non-retryable (400, 404). Write a most-specific-first chain.</li>
-<li><strong>A volatile cache prefix.</strong> A clock, a UUID, or an unsorted <code>json.dumps()</code> in the system prompt or tool list invalidates the prefix every call. Cost triples and nothing fails.</li>
-<li><strong>Uniform tool grants.</strong> Handing every worker the full tool list makes the blast radius of a single bad call the whole system.</li>
+<li><strong><code>while response.stop_reason == "tool_use"</code>.</strong> The most common bug by far. A <code>max_tokens</code> truncation, a <code>refusal</code>, and a <code>pause_turn</code> all exit the loop as though the model had finished, and the caller gets a partial answer with no error. Branch on every value by name.</li>
+<li><strong>Unhandled schema validation errors.</strong> A handler that raises on a bad argument tears down the loop and throws away a turn you could have saved. Worse, catching it and dropping the block leaves a <code>tool_use_id</code> unanswered, and the <em>next</em> request comes back as a 400 that names neither the tool nor the turn. Always send a result, and set <code>is_error</code>.</li>
+<li><strong>Infinite execution loops.</strong> Three separate causes: no turn limit, resuming <code>pause_turn</code> forever, and a model retrying the same call forever. Each needs its own limit. One <code>max_turns</code> hides the other two until the bill shows up.</li>
+<li><strong>Appending only the text.</strong> <code>messages.append({"role": "assistant", "content": response.text})</code> loses the <code>tool_use</code> and <code>thinking</code> blocks. It breaks on the next request, well away from the line that caused it.</li>
+<li><strong>Splitting parallel tool results.</strong> The API accepts each <code>tool_result</code> in its own user message, and doing that quietly teaches the model to stop batching calls. Things get slower over a session and nothing errors.</li>
+<li><strong>One broad <code>except</code>.</strong> Catching <code>APIStatusError</code> alone lumps the errors worth retrying (429, 5xx, connection) in with the ones that will never succeed (400, 404). Catch the specific ones first.</li>
+<li><strong>A volatile cache prefix.</strong> A clock, a UUID, or an unsorted <code>json.dumps()</code> in the system prompt or tool list breaks the prefix on every call. The bill triples and nothing errors.</li>
+<li><strong>Uniform tool grants.</strong> Give every worker the full tool list and one bad call can reach anything.</li>
 </ol>
 </section>
 <section id="takeaways" class="level2" data-number="9">
 <h2 data-number="9" class="anchored" data-anchor-id="takeaways"><span class="header-section-number">9</span> Takeaways</h2>
 <ul>
-<li>Treat <code>stop_reason</code> as a state machine with six named states, not a boolean.</li>
-<li>A failing tool returns a message; a failing dependency raises. Distinguish the two in your exception types.</li>
-<li>Bound turns, tool calls, pause resumptions, and repeated calls separately. They are four different runaway modes.</li>
-<li>Grant each worker the narrowest tool set its task needs, and pass it a self-contained instruction rather than shared history.</li>
-<li>Prefer the SDK’s tool runner in production; hand-write the loop once to understand what it is doing on your behalf.</li>
-<li>Verify prompt caching with <code>usage.cache_read_input_tokens</code> rather than assuming placement worked.</li>
+<li>Treat <code>stop_reason</code> as six named cases, not a yes or no.</li>
+<li>A broken tool sends a message back. A broken dependency raises. Use different exception types for the two.</li>
+<li>Limit turns, tool calls, pause resumes, and repeated calls separately. They run away in four different ways.</li>
+<li>Give each worker the smallest tool set its job needs, and one self-contained instruction instead of the whole history.</li>
+<li>Use the SDK’s tool runner in production. Write the loop by hand once, to see what it is doing for you.</li>
+<li>Check caching with <code>usage.cache_read_input_tokens</code>. Do not assume you put the breakpoint in the right place.</li>
 </ul>
 <p>Stop. Reasons. Branch. Errors. Return. Inline. Budgets. Bound. Loops. Delegate. Narrowly.</p>
 </section>
 <section id="references" class="level2" data-number="10">
 <h2 data-number="10" class="anchored" data-anchor-id="references"><span class="header-section-number">10</span> References</h2>
 <ul>
-<li><a href="https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons">Handling stop reasons</a> — Anthropic docs; the per-reason required actions.</li>
+<li><a href="https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons">Handling stop reasons</a> — Anthropic docs; what to do for each stop reason.</li>
 <li><a href="https://www.anthropic.com/engineering/building-effective-agents">Building effective agents</a> — Anthropic engineering; where orchestrator-worker sits among the agent patterns.</li>
 <li><a href="https://github.com/anthropics/anthropic-sdk-python">anthropic-sdk-python</a> — the SDK, including <code>client.beta.messages.tool_runner</code>.</li>
-<li><em>Claude Certified Architect – Foundations exam guide</em> (Anthropic) — source of the 27% domain weighting quoted above.</li>
-<li><a href="../soft-vs-hard-prompts/">Soft Prompts vs.&nbsp;Hard Prompts</a> — this blog; the discrete-versus-continuous prompt distinction referenced above.</li>
-<li><a href="./orchestrator.py"><code>orchestrator.py</code></a> — the full implementation excerpted throughout.</li>
+<li><em>Claude Certified Architect – Foundations exam guide</em> (Anthropic) — where the 27% figure above comes from.</li>
+<li><a href="../soft-vs-hard-prompts/">Soft Prompts vs.&nbsp;Hard Prompts</a> — this blog; the hard-versus-soft prompt distinction used above.</li>
+<li><a href="./orchestrator.py"><code>orchestrator.py</code></a> — the full code the blocks above are copied from.</li>
 </ul>
 
 

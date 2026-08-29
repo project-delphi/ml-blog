@@ -15,26 +15,26 @@ format:
 
 ![Claude Certified Architect, Week 1](./cover.png)
 
-An agent loop is a `while` loop wrapped around one API call. What separates one that survives production from one that only demos well is how it answers a single question — why did the model stop? — and there are six possible answers, each needing different code.
+An agent loop is a `while` loop around one API call. Each time round, the model tells you why it stopped. There are six things it can say, and a loop that only handles one of them will hand back a half-finished answer and call it done.
 
-These are notes from the first of a few weeks working toward the Claude Certified Architect – Foundations exam, whose heaviest domain is Agentic Architecture and Orchestration.
+These are notes from the first of a few weeks studying for the Claude Certified Architect – Foundations exam. Its biggest topic is Agentic Architecture and Orchestration.
 
-The full implementation is [`orchestrator.py`](./orchestrator.py), in this post's directory. Every code block below is excerpted from it unchanged, apart from dedenting.
+The full implementation is [`orchestrator.py`](./orchestrator.py), in this post's directory. Every code block below is copied straight out of it; the only change is the indentation.
 
-The framing comes out of work at [SoFi](https://www.sofi.com/) (Social Finance, Inc.), building applications where LLMs automate repetitive regulatory job functions. That setting fixes the tolerance for everything below: the loop's output feeds a filing rather than a human reader, so a partial answer that looks complete is worse than a loud failure.
+I learned to think this way at [SoFi](https://www.sofi.com/) (Social Finance, Inc.), building apps that use LLMs to take over repetitive regulatory work. Nobody reads the loop's output there before it goes into a filing. A wrong answer that looks finished does more damage than a crash.
 
 ## Scope
 
-Week one covers one pattern end to end rather than skimming all six domains.
+This week covers one pattern properly instead of skimming all six exam domains.
 
 - **Domain**: Agentic Architecture and Orchestration — 27% of the exam, the largest single block.
-- **Pattern**: orchestrator-worker — a planner model decomposes a request and delegates sub-tasks to worker loops with narrowed tool grants.
-- **Surface**: the Claude Messages API and a hand-written loop. The SDK's `client.beta.messages.tool_runner` handles this loop for you and is the right default in production; writing it by hand once is what makes the exam material legible.
+- **Pattern**: orchestrator-worker — one model plans and splits the work, then hands each piece to a worker loop that can reach only the tools it needs.
+- **Surface**: the Claude Messages API and a hand-written loop. The SDK's `client.beta.messages.tool_runner` handles this loop for you and is the right default in production; writing it out by hand once is what makes the rest of the material make sense.
 - **Model**: `claude-opus-5` with adaptive thinking.
 
 ## Prompting versus architecture
 
-Ad-hoc prompting and agentic design fail in different places, and the shift between them is a shift in what you are responsible for.
+Prompting and agent design break in different places. Moving from one to the other changes what you are on the hook for.
 
 | | Ad-hoc prompting | Agentic architecture |
 |---|---|---|
@@ -44,9 +44,9 @@ Ad-hoc prompting and agentic design fail in different places, and the shift betw
 | Effect of a bad output | A human notices | A malformed argument reaches a database |
 | Cost ceiling | One call | Unbounded until you impose one |
 
-None of this deprecates prompting; it relocates it. The prompt remains a lever, and a wider one than plain text — [Soft Prompts vs. Hard Prompts](../soft-vs-hard-prompts/) takes a prompt initialised exactly on GPT-2's vocabulary and shows it drifting, after sixty gradient steps, somewhere no sequence of tokens can express. Neither a hard prompt nor a soft one can tell your code what to do when the model stops mid-sentence.
+This does not make prompting matter less. It moves where it matters. The prompt is still a lever, and a wider one than plain text: [Soft Prompts vs. Hard Prompts](../soft-vs-hard-prompts/) starts a prompt exactly on GPT-2's vocabulary and, sixty gradient steps later, it has drifted somewhere no sentence can reach. But no prompt of either kind tells your code what to do when the model stops mid-sentence.
 
-The consequence: in an agentic system the model's output is not an answer, it is an **instruction to your code**. Everything below is about reading that instruction correctly.
+So the model's output stops being an answer. It becomes an **instruction to your code**, and the rest of this post is about reading it correctly.
 
 ## The four-stage lifecycle
 
@@ -59,7 +59,7 @@ flowchart LR
     B -->|refusal| R["Terminal:<br/>read stop_details"]
     B -->|max_tokens| T["Retry larger,<br/>then terminal"]
     B -->|pause_turn| P["Resume,<br/>bounded"]
-    B -->|tool_use| C["3. Tool execution<br/>validate, run, contain"]
+    B -->|tool_use| C["3. Tool execution<br/>check, run, catch"]
     C --> D["4. State hand-off<br/>append content + results"]
     D --> A
     P --> A
@@ -69,45 +69,45 @@ flowchart LR
 
 The request carries the system prompt, the tool definitions, and the entire history — the API is stateless.
 
-- Put stable content first (frozen system text, a deterministically ordered tool list) and volatile content last, so the cached prefix survives.
-- A timestamp or request id in the system prompt silently invalidates the cache on every call. `usage.cache_read_input_tokens` reading zero across identical-prefix requests is the tell.
+- Put the parts that never change first (fixed system text, a tool list in a fixed order) and the parts that change every call last, so the cache still hits.
+- A timestamp or a request id in the system prompt quietly breaks the cache on every call. If `usage.cache_read_input_tokens` is zero across calls that should share a prefix, that is what happened.
 
 ### Stage 2: stop reason check
 
-The model reports why it stopped generating. This is the branch point of the whole architecture, and the one most implementations get wrong.
+The model tells you why it stopped. Everything else in the loop hangs off this one check, and it is the part most code gets wrong.
 
 ### Stage 3: tool execution
 
 Each `tool_use` block names a tool and carries already-parsed JSON input.
 
-- Validate before dispatch. `strict: true` on the tool definition makes the API reject malformed input server-side.
-- Run blocks from one turn concurrently where the handlers allow it.
-- Never string-match the serialised input; escaping of Unicode and forward slashes varies between models.
+- Check the input before you run anything. `strict: true` on the tool definition makes the API reject bad input before it ever reaches your handler.
+- Run the blocks from one turn at the same time, where the handlers allow it.
+- Never match on the raw JSON text; models escape Unicode and forward slashes differently.
 
 ### Stage 4: state hand-off
 
 The results go back as the next user turn, and this stage has three hard rules.
 
 1. Append the **whole** `response.content` list, not just its text. Dropping the `tool_use` and `thinking` blocks makes the next request invalid.
-2. Every `tool_use_id` from the assistant turn needs a matching `tool_result`. An unanswered id is rejected outright.
+2. Every `tool_use_id` from the assistant turn needs a matching `tool_result`. Miss one and the next request is rejected.
 3. All results from one turn go in a **single** user message. Splitting them trains the model out of making parallel tool calls.
 
 ## Stop reasons
 
-Six values, each with a distinct required action.
+Six values. Each one needs different code.
 
 | `stop_reason` | Meaning | Required action |
 |---|---|---|
 | `end_turn` | Finished naturally | Return the text |
 | `stop_sequence` | Hit a configured stop sequence | Return the text |
-| `tool_use` | Wants one or more tools run | Execute, hand results back, loop |
-| `max_tokens` | Output truncated mid-generation | Retry at a larger cap, then fail loudly |
-| `pause_turn` | A server-side tool loop hit its own cap | Re-send history unchanged to resume, bounded |
-| `refusal` | Declined on safety grounds | Terminal; read `stop_details` |
+| `tool_use` | Wants one or more tools run | Run them, hand the results back, go round again |
+| `max_tokens` | Output cut off part-way | Retry with a bigger cap, then fail loudly |
+| `pause_turn` | A server-side tool hit its own limit | Send the history back unchanged to resume, and cap the resumes |
+| `refusal` | Turned the request down on safety grounds | Stop here; read `stop_details` |
 
-`stop_details` is populated **only** for `refusal` and is `null` for every other reason, so guard before reading it.
+`stop_details` is filled in **only** for `refusal`. It is `null` for every other reason, so check before you read it.
 
-The loop encodes each of these as a distinct outcome, alongside the ceilings the model never sees:
+The loop gives each of these its own outcome, and sets limits the model never sees:
 
 ```python
 class Outcome(str, Enum):
@@ -137,7 +137,7 @@ class Budget:
     max_repeats: int = 2
 ```
 
-The dispatch is a flat ladder with no fall-through. An unrecognised reason — one the API gains after this code ships — stops the run rather than being read as success:
+The checks are a flat ladder, and nothing drops off the bottom. A reason this code has never seen — one the API adds after it ships — stops the run instead of being taken for success:
 
 ```python
 stop = response.stop_reason
@@ -195,11 +195,11 @@ if stop != "tool_use":
     return result
 ```
 
-Note the `messages.pop()` on truncation. The truncated assistant turn is discarded before the retry; leaving it in history and retrying appends a second turn continuing a half-written sentence.
+Note the `messages.pop()`. The cut-off turn is thrown away before the retry. Leave it in and the retry just adds a second turn carrying on from half a sentence.
 
-## Tool execution and error containment
+## Tool execution and errors
 
-A tool failure is a message to the model, not an exception that unwinds the loop. The registry converts every failure mode — unknown tool, schema violation, handler exception, overrun — into a `tool_result` carrying `is_error: True`, so the model can read what went wrong and change approach.
+A broken tool is something you tell the model, not an exception that tears down the loop. Whatever goes wrong — no such tool, bad arguments, the handler blew up, it took too long — comes back as a `tool_result` marked `is_error: True`. The model reads it and tries something else.
 
 ```python
 started = time.monotonic()
@@ -235,7 +235,7 @@ return {
 }
 ```
 
-The one exception is `ToolAbort`: revoked credentials, a missing binary, a tripped breaker. Nothing the model does next can fix those, so the run ends rather than inviting a retry against a broken dependency.
+`ToolAbort` is the exception: dead credentials, a missing binary, a tripped breaker. The model cannot fix any of those, so the run stops instead of retrying against something that is already broken.
 
 Error results carry the same `tool_use_id` as any other:
 
@@ -249,9 +249,9 @@ def _error_result(tool_use_id: str, message: str) -> dict[str, Any]:
     }
 ```
 
-## Bounding the loop
+## Loop limits
 
-The `tool_use` branch carries the two budgets that keep a run finite: a hard call ceiling, and repeat detection.
+Two limits in the `tool_use` branch stop a run going forever: a hard cap on tool calls, and a check for repeats.
 
 ```python
 # --- stop_reason == "tool_use" -------------------------------------
@@ -297,11 +297,11 @@ for block in calls:
 messages.append({"role": "user", "content": tool_results})
 ```
 
-Repeat detection is the cheaper of the two. An agent calling the same tool with byte-identical arguments is not making progress — it is usually re-reading a resource whose result it misread — and saying so in-band gives it a chance to recover before the turn ceiling burns the entire budget.
+The repeat check is the cheaper of the two. An agent calling the same tool with the same arguments is stuck, usually re-reading something whose answer it misread the first time. Saying so in the tool result gives it a chance to recover before the turn limit eats the whole budget.
 
 ## Delegation as a tool call
 
-The orchestrator's only tool spawns a worker loop. Making delegation a tool call rather than a special case means it inherits the whole error path above: a worker that stalls, truncates, or is refused returns as an `is_error` result the planner can route around.
+The orchestrator has one tool, and it starts a worker loop. Because handing off work is a plain tool call and not a special case, it gets the whole error path above for free: a worker that gets stuck, cut off, or refused comes back as an `is_error` result the planner can work around.
 
 ```python
 def delegate(task: str, tools: list[str]) -> str:
@@ -332,40 +332,40 @@ def delegate(task: str, tools: list[str]) -> str:
     return worker.text
 ```
 
-Two properties follow from this shape.
+Two things fall out of this.
 
-- **Context isolation.** The worker sees the `task` string and nothing else, so a long orchestrator history never inflates worker requests.
-- **Least privilege.** The planner names the tools each worker may call. A summarisation worker cannot reach a write tool because it was never granted one.
+- **The worker starts clean.** It sees the `task` string and nothing else, so a long planner history never bloats worker requests.
+- **Each worker gets only what it needs.** The planner names the tools that worker may call. A worker that only summarises cannot touch a write tool, because it was never handed one.
 
 ## Anti-patterns and production failure modes
 
-Each of these passes a demo and fails in production. The first two are the ones that bite hardest in regulatory automation, where a truncated answer is indistinguishable from a complete one at the point it is read.
+Each of these passes a demo and fails in production. The first two hurt most in regulatory work, where nothing about a cut-off answer looks different from a finished one.
 
-1. **`while response.stop_reason == "tool_use"`.** The single most common defect. A `max_tokens` truncation, a `refusal`, and a `pause_turn` all exit the loop as though the model had finished, and the caller gets a partial answer with no error. Branch on every value by name.
-2. **Unhandled schema validation errors.** A handler raising on a malformed argument unwinds the loop and discards a recoverable turn. Worse, catching it and dropping the block leaves an unanswered `tool_use_id` and the *next* request is rejected with a 400 that names neither the tool nor the turn. Always emit a result; set `is_error`.
-3. **Infinite execution loops.** Three separate sources: no turn ceiling, unbounded `pause_turn` resumption, and a model retrying an identical call forever. Each needs its own bound — a single `max_turns` masks the other two until the bill arrives.
-4. **Appending only the text.** `messages.append({"role": "assistant", "content": response.text})` loses the `tool_use` and `thinking` blocks. The failure surfaces one request later, far from the cause.
-5. **Splitting parallel tool results.** Returning each `tool_result` in its own user message is accepted by the API and quietly teaches the model to stop batching calls. Throughput degrades over a session with no error anywhere.
-6. **One broad `except`.** Catching `APIStatusError` alone collapses retryable (429, 5xx, connection) into non-retryable (400, 404). Write a most-specific-first chain.
-7. **A volatile cache prefix.** A clock, a UUID, or an unsorted `json.dumps()` in the system prompt or tool list invalidates the prefix every call. Cost triples and nothing fails.
-8. **Uniform tool grants.** Handing every worker the full tool list makes the blast radius of a single bad call the whole system.
+1. **`while response.stop_reason == "tool_use"`.** The most common bug by far. A `max_tokens` truncation, a `refusal`, and a `pause_turn` all exit the loop as though the model had finished, and the caller gets a partial answer with no error. Branch on every value by name.
+2. **Unhandled schema validation errors.** A handler that raises on a bad argument tears down the loop and throws away a turn you could have saved. Worse, catching it and dropping the block leaves a `tool_use_id` unanswered, and the *next* request comes back as a 400 that names neither the tool nor the turn. Always send a result, and set `is_error`.
+3. **Infinite execution loops.** Three separate causes: no turn limit, resuming `pause_turn` forever, and a model retrying the same call forever. Each needs its own limit. One `max_turns` hides the other two until the bill shows up.
+4. **Appending only the text.** `messages.append({"role": "assistant", "content": response.text})` loses the `tool_use` and `thinking` blocks. It breaks on the next request, well away from the line that caused it.
+5. **Splitting parallel tool results.** The API accepts each `tool_result` in its own user message, and doing that quietly teaches the model to stop batching calls. Things get slower over a session and nothing errors.
+6. **One broad `except`.** Catching `APIStatusError` alone lumps the errors worth retrying (429, 5xx, connection) in with the ones that will never succeed (400, 404). Catch the specific ones first.
+7. **A volatile cache prefix.** A clock, a UUID, or an unsorted `json.dumps()` in the system prompt or tool list breaks the prefix on every call. The bill triples and nothing errors.
+8. **Uniform tool grants.** Give every worker the full tool list and one bad call can reach anything.
 
 ## Takeaways
 
-- Treat `stop_reason` as a state machine with six named states, not a boolean.
-- A failing tool returns a message; a failing dependency raises. Distinguish the two in your exception types.
-- Bound turns, tool calls, pause resumptions, and repeated calls separately. They are four different runaway modes.
-- Grant each worker the narrowest tool set its task needs, and pass it a self-contained instruction rather than shared history.
-- Prefer the SDK's tool runner in production; hand-write the loop once to understand what it is doing on your behalf.
-- Verify prompt caching with `usage.cache_read_input_tokens` rather than assuming placement worked.
+- Treat `stop_reason` as six named cases, not a yes or no.
+- A broken tool sends a message back. A broken dependency raises. Use different exception types for the two.
+- Limit turns, tool calls, pause resumes, and repeated calls separately. They run away in four different ways.
+- Give each worker the smallest tool set its job needs, and one self-contained instruction instead of the whole history.
+- Use the SDK's tool runner in production. Write the loop by hand once, to see what it is doing for you.
+- Check caching with `usage.cache_read_input_tokens`. Do not assume you put the breakpoint in the right place.
 
 Stop. Reasons. Branch. Errors. Return. Inline. Budgets. Bound. Loops. Delegate. Narrowly.
 
 ## References
 
-- [Handling stop reasons](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons) — Anthropic docs; the per-reason required actions.
+- [Handling stop reasons](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons) — Anthropic docs; what to do for each stop reason.
 - [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents) — Anthropic engineering; where orchestrator-worker sits among the agent patterns.
 - [anthropic-sdk-python](https://github.com/anthropics/anthropic-sdk-python) — the SDK, including `client.beta.messages.tool_runner`.
-- *Claude Certified Architect – Foundations exam guide* (Anthropic) — source of the 27% domain weighting quoted above.
-- [Soft Prompts vs. Hard Prompts](../soft-vs-hard-prompts/) — this blog; the discrete-versus-continuous prompt distinction referenced above.
-- [`orchestrator.py`](./orchestrator.py) — the full implementation excerpted throughout.
+- *Claude Certified Architect – Foundations exam guide* (Anthropic) — where the 27% figure above comes from.
+- [Soft Prompts vs. Hard Prompts](../soft-vs-hard-prompts/) — this blog; the hard-versus-soft prompt distinction used above.
+- [`orchestrator.py`](./orchestrator.py) — the full code the blocks above are copied from.
