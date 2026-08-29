@@ -19,6 +19,8 @@ Agentic Architecture and Orchestration is the heaviest domain on the Claude Cert
 
 The full implementation is [`orchestrator.py`](./orchestrator.py), in this post's directory. Every code block below is excerpted from it unchanged, apart from dedenting.
 
+The framing comes out of work in social finance, building applications where LLMs automate repetitive regulatory job functions. That setting fixes the tolerance for everything below: the loop's output feeds a filing rather than a human reader, so a partial answer that looks complete is worse than a loud failure.
+
 ## Scope
 
 Week one covers one pattern end to end rather than skimming all six domains.
@@ -39,6 +41,8 @@ Ad-hoc prompting and agentic design fail in different places, and the shift betw
 | Primary failure surface | Prompt wording | State handling, tool boundary, budgets |
 | Effect of a bad output | A human notices | A malformed argument reaches a database |
 | Cost ceiling | One call | Unbounded until you impose one |
+
+None of this deprecates prompting; it relocates it. The prompt remains a lever, and a wider one than plain text - [Soft Prompts vs. Hard Prompts](../soft-vs-hard-prompts/) takes a prompt initialised exactly on GPT-2's vocabulary and shows it drifting, after sixty gradient steps, somewhere no sequence of tokens can express. Neither a hard prompt nor a soft one can tell your code what to do when the model stops mid-sentence.
 
 The consequence: in an agentic system the model's output is not an answer, it is an **instruction to your code**. Everything below is about reading that instruction correctly.
 
@@ -333,7 +337,7 @@ Two properties follow from this shape.
 
 ## Anti-patterns and production failure modes
 
-Each of these passes a demo and fails in production.
+Each of these passes a demo and fails in production. The first two are the ones that bite hardest in regulatory automation, where a truncated answer is indistinguishable from a complete one at the point it is read.
 
 1. **`while response.stop_reason == "tool_use"`.** The single most common defect. A `max_tokens` truncation, a `refusal`, and a `pause_turn` all exit the loop as though the model had finished, and the caller gets a partial answer with no error. Branch on every value by name.
 2. **Unhandled schema validation errors.** A handler raising on a malformed argument unwinds the loop and discards a recoverable turn. Worse, catching it and dropping the block leaves an unanswered `tool_use_id` and the *next* request is rejected with a 400 that names neither the tool nor the turn. Always emit a result; set `is_error`.
@@ -361,4 +365,5 @@ Stop. Reasons. Branch. Errors. Return. Inline. Budgets. Bound. Loops. Delegate. 
 - [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents) - Anthropic engineering; where orchestrator-worker sits among the agent patterns.
 - [anthropic-sdk-python](https://github.com/anthropics/anthropic-sdk-python) - the SDK, including `client.beta.messages.tool_runner`.
 - *Claude Certified Architect - Foundations exam guide* (Anthropic) - source of the 27% domain weighting quoted above.
+- [Soft Prompts vs. Hard Prompts](../soft-vs-hard-prompts/) - this blog; the discrete-versus-continuous prompt distinction referenced above.
 - [`orchestrator.py`](./orchestrator.py) - the full implementation excerpted throughout.
