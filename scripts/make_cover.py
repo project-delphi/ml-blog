@@ -5,13 +5,19 @@ Covers are content-derived: copy the figure that carries the post's main claim,
 or — if the post has no raster of its own — a license-safe Commons file. Never
 draw the old purple title card.
 
-Run with Pillow (and PyYAML, for --all) from the repo root::
+Run with Pillow and PyYAML from the repo root. PyYAML is required for
+--all and read on a single-post run too, to pick up that slug's recorded
+``fit``; without it a single-post run warns and falls back to ``cover``::
 
     uv run --with pillow --with pyyaml python scripts/make_cover.py \\
         posts/volcano-plots --source \\
         _freeze/posts/volcano-plots/index/figure-html/fig-airway-output-1.png
 
     uv run --with pillow --with pyyaml python scripts/make_cover.py --all
+
+A portrait source loses its subject to the default centre crop; pass
+``--fit contain`` (and record ``fit: contain`` in cover_sources.yml) to pad it
+into the frame whole instead.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SOURCES = Path(__file__).resolve().parent / "cover_sources.yml"
 WIDTH, HEIGHT = 1200, 630
+FIT_MODES = ("cover", "contain")
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 USER_AGENT = "ml-blog-cover-bot/1.0 (https://github.com/project-delphi/ml-blog)"
 
@@ -64,7 +71,7 @@ def load_yaml(path: Path) -> dict[str, dict[str, object]]:
         path: Path to cover_sources.yml.
 
     Returns:
-        Mapping of post slug to a dict with skip/source/commons keys.
+        Mapping of post slug to a dict with skip/source/commons/fit keys.
     """
     import yaml  # noqa: PLC0415  # optional extra via uv run --with pyyaml
 
@@ -90,11 +97,65 @@ def open_rgba(path: Path):
     return image.convert("RGBA")
 
 
-def fit_cover(image) -> object:
-    """Scale an image to fill WIDTH×HEIGHT and center-crop the overflow.
+def border_color(image, edges: str) -> tuple[int, int, int]:
+    """Median colour of the source edges a contain fit will pad against.
+
+    Sampling the edge rather than defaulting to white lets the pad continue a
+    photo's backdrop, or a figure's white margin, instead of banding against it.
+    Only the two edges that abut the pad are sampled, since the opposite pair
+    never touches it and pooling all four pulls the colour toward whatever sits
+    there. This is a heuristic, not a guarantee: an edge the pad does touch can
+    still be unrepresentative — the caption bar on the Ripley portrait spans the
+    full width, so it darkens the sampled columns — and a source whose abutting
+    edges are strongly non-uniform will want an explicit crop instead.
+
+    Fully transparent pixels are composited onto white first, so a source with a
+    transparent margin pads white rather than the black an RGB cast would give.
+    Interior transparency is a separate matter: `fit_cover` pastes with the
+    source's alpha as a mask, so a hole shows this pad colour, not white.
 
     Args:
         image: A Pillow image.
+        edges: "vertical" to sample the left and right columns (pad sits beside
+            the image), or "horizontal" to sample the top and bottom rows.
+
+    Returns:
+        An RGB triple.
+    """
+    from PIL import Image  # noqa: PLC0415
+
+    if image.mode in ("RGBA", "LA", "P"):
+        rgba = image.convert("RGBA")
+        white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        rgb = Image.alpha_composite(white, rgba).convert("RGB")
+    else:
+        rgb = image.convert("RGB")
+    src_w, src_h = rgb.size
+    pixels = rgb.load()
+    samples = []
+    if edges == "vertical":
+        for y in range(src_h):
+            samples.append(pixels[0, y])
+            samples.append(pixels[src_w - 1, y])
+    else:
+        for x in range(src_w):
+            samples.append(pixels[x, 0])
+            samples.append(pixels[x, src_h - 1])
+    mid = len(samples) // 2
+    return tuple(sorted(band)[mid] for band in zip(*samples))
+
+
+def fit_cover(image, mode: str = "cover") -> object:
+    """Render an image into the WIDTH×HEIGHT frame.
+
+    `cover` scales to fill and center-crops the overflow, which suits a wide
+    figure. `contain` scales to fit whole and pads the remainder with the
+    source's edge colour, which suits a portrait — a centre crop of one keeps
+    the middle band and cuts off the head.
+
+    Args:
+        image: A Pillow image.
+        mode: Either "cover" or "contain".
 
     Returns:
         A new RGB image of exactly WIDTH by HEIGHT.
@@ -104,6 +165,21 @@ def fit_cover(image) -> object:
     src_w, src_h = image.size
     if src_w == 0 or src_h == 0:
         raise SystemExit("source image has zero size")
+    if mode not in FIT_MODES:
+        raise SystemExit(f"unknown fit mode: {mode!r} (want {FIT_MODES})")
+
+    if mode == "contain":
+        scale = min(WIDTH / src_w, HEIGHT / src_h)
+        new_w = max(1, min(WIDTH, round(src_w * scale)))
+        new_h = max(1, min(HEIGHT, round(src_h * scale)))
+        resized = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        edges = "vertical" if new_w < WIDTH else "horizontal"
+        background = Image.new("RGB", (WIDTH, HEIGHT), border_color(image, edges))
+        box = ((WIDTH - new_w) // 2, (HEIGHT - new_h) // 2)
+        alpha = resized.split()[-1] if resized.mode == "RGBA" else None
+        background.paste(resized, box, mask=alpha)
+        return background
+
     scale = max(WIDTH / src_w, HEIGHT / src_h)
     new_w = max(WIDTH, round(src_w * scale))
     new_h = max(HEIGHT, round(src_h * scale))
@@ -116,12 +192,13 @@ def fit_cover(image) -> object:
     return background
 
 
-def write_cover(slug: str, source: Path) -> Path:
+def write_cover(slug: str, source: Path, fit: str = "cover") -> Path:
     """Fit `source` into posts/<slug>/cover.png.
 
     Args:
         slug: Post directory name.
         source: Raster to copy from.
+        fit: Frame mode, "cover" (crop to fill) or "contain" (pad to fit).
 
     Returns:
         Path of the written cover.
@@ -130,7 +207,7 @@ def write_cover(slug: str, source: Path) -> Path:
         raise SystemExit(f"source not found: {source}")
     out = ROOT / "posts" / slug / "cover.png"
     out.parent.mkdir(parents=True, exist_ok=True)
-    fitted = fit_cover(open_rgba(source))
+    fitted = fit_cover(open_rgba(source), fit)
     fitted.save(out, "PNG", optimize=True)
     return out
 
@@ -272,33 +349,35 @@ def write_attribution(slug: str, info: dict[str, str]) -> Path:
     return out
 
 
-def process_source(slug: str, relpath: str) -> None:
+def process_source(slug: str, relpath: str, fit: str = "cover") -> None:
     """Copy a repo-relative raster onto cover.png.
 
     Args:
         slug: Post directory name.
         relpath: Path relative to the repo root.
+        fit: Frame mode, "cover" or "contain".
     """
     source = (ROOT / relpath).resolve()
     if not str(source).startswith(str(ROOT)):
         raise SystemExit(f"source escapes the repo: {relpath}")
-    out = write_cover(slug, source)
-    print(f"wrote {out.relative_to(ROOT)} from {relpath}")
+    out = write_cover(slug, source, fit)
+    print(f"wrote {out.relative_to(ROOT)} from {relpath} (fit: {fit})")
 
 
-def process_commons(slug: str, filename: str) -> None:
+def process_commons(slug: str, filename: str, fit: str = "cover") -> None:
     """Download a Commons file, fit it, and record attribution.
 
     Args:
         slug: Post directory name.
         filename: Commons File: title.
+        fit: Frame mode, "cover" or "contain".
     """
     info = commons_info(filename)
     tmp = ROOT / "posts" / slug / ".cover-download"
     tmp.parent.mkdir(parents=True, exist_ok=True)
     try:
         download(info["url"], tmp)
-        out = write_cover(slug, tmp)
+        out = write_cover(slug, tmp, fit)
     finally:
         if tmp.exists():
             tmp.unlink()
@@ -307,12 +386,41 @@ def process_commons(slug: str, filename: str) -> None:
     print(f"wrote {attr.relative_to(ROOT)} ({info['license']})")
 
 
+def recorded_fit(slug: str) -> str:
+    """The fit recorded for `slug` in cover_sources.yml, or "cover".
+
+    Args:
+        slug: Post directory name.
+
+    Returns:
+        A member of FIT_MODES.
+    """
+    try:
+        entry = load_yaml(SOURCES).get(slug)
+    except (SystemExit, ImportError, OSError) as exc:
+        # PyYAML absent, or the map missing/unreadable. Degrade to the default
+        # rather than failing a run that used to work without PyYAML — but say
+        # so, since a slug pinned to contain would silently re-crop.
+        print(
+            f"warning: cannot read {SOURCES.name} ({exc}); using fit: cover."
+            " Pass --fit explicitly if this slug is pinned.",
+            file=sys.stderr,
+        )
+        return "cover"
+    if not isinstance(entry, dict):
+        return "cover"
+    fit = str(entry.get("fit") or "cover")
+    if fit not in FIT_MODES:
+        raise SystemExit(f"{slug}: fit must be one of {FIT_MODES}")
+    return fit
+
+
 def process_entry(slug: str, entry: dict[str, object], *, only: str | None) -> None:
     """Dispatch one YAML entry.
 
     Args:
         slug: Post directory name.
-        entry: skip/source/commons mapping.
+        entry: skip/source/commons/fit mapping.
         only: If set, skip entries that are not this kind (`source` or `commons`).
     """
     if entry.get("skip"):
@@ -320,17 +428,20 @@ def process_entry(slug: str, entry: dict[str, object], *, only: str | None) -> N
         return
     source = entry.get("source")
     commons = entry.get("commons")
+    fit = str(entry.get("fit") or "cover")
+    if fit not in FIT_MODES:
+        raise SystemExit(f"{slug}: fit must be one of {FIT_MODES}")
     if source and commons:
         raise SystemExit(f"{slug}: set source or commons, not both")
     if source:
         if only and only != "source":
             return
-        process_source(slug, str(source))
+        process_source(slug, str(source), fit)
         return
     if commons:
         if only and only != "commons":
             return
-        process_commons(slug, str(commons))
+        process_commons(slug, str(commons), fit)
         return
     raise SystemExit(f"{slug}: entry needs skip, source, or commons")
 
@@ -352,6 +463,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--source", help="repo-relative path of an in-post raster")
     parser.add_argument("--commons", help="Wikimedia Commons File: title")
+    parser.add_argument(
+        "--fit",
+        choices=FIT_MODES,
+        default=None,
+        help="crop to fill the frame (cover) or pad to fit it whole (contain);"
+        " only with --source/--commons, since --all takes fit from the YAML",
+    )
     parser.add_argument(
         "--all",
         action="store_true",
@@ -375,6 +493,10 @@ def main(argv: list[str] | None = None) -> int:
         Process exit code.
     """
     args = parse_args(argv)
+    if args.fit and (args.all or not (args.source or args.commons)):
+        raise SystemExit(
+            "--fit applies to --source/--commons; set fit: in the YAML otherwise"
+        )
     if args.all:
         mapping = load_yaml(SOURCES)
         failures = 0
@@ -394,11 +516,15 @@ def main(argv: list[str] | None = None) -> int:
     if not args.post:
         raise SystemExit("pass posts/<slug> or --all")
     slug = args.post.rstrip("/").split("/")[-1]
-    if args.source:
-        process_source(slug, args.source)
-        return 0
-    if args.commons:
-        process_commons(slug, args.commons)
+    if args.source or args.commons:
+        # An explicit --source/--commons still defaults to the slug's recorded
+        # fit. Otherwise the invocation CLAUDE.md documents would silently
+        # re-crop a post that had been pinned to contain.
+        fit = args.fit or recorded_fit(slug)
+        if args.source:
+            process_source(slug, args.source, fit)
+        else:
+            process_commons(slug, args.commons, fit)
         return 0
 
     mapping = load_yaml(SOURCES)

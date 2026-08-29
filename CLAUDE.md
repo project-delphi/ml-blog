@@ -225,7 +225,9 @@ uv run --with pillow --with pyyaml python scripts/make_cover.py \
 uv run --with pillow --with pyyaml python scripts/make_cover.py --all
 ```
 
-Record the choice in `scripts/cover_sources.yml` (`source:`, `commons:`, or `skip: true`) so a later `--all` can reproduce it. Do not add a per-post `src/make_cover.py`. Do not edit a freeze-backed `index.qmd` merely to point `image:` at a new file — that invalidates `_freeze/` (see `scripts/check_posts.py`).
+By default the raster is scaled to fill 1200×630 and centre-cropped, which is right for a wide figure. A **portrait** source loses its subject to that crop — the Ripley photo came out with the top of his head cut off — so pin it with `--fit contain`, which scales the source to fit whole and pads the remainder with the colour of the edges the pad abuts.
+
+Record the choice in `scripts/cover_sources.yml` (`source:`, `commons:`, or `skip: true`, plus `fit: contain` where it applies) so a later `--all` can reproduce it. A recorded `fit:` is also what a bare `--source`/`--commons` run for that slug defaults to, so regenerating one cover the usual way will not silently re-crop it; pass `--fit` only to override. Do not add a per-post `src/make_cover.py`. Do not edit a freeze-backed `index.qmd` merely to point `image:` at a new file — that invalidates `_freeze/` (see `scripts/check_posts.py`).
 
 The site favicon (`favicon.png`, declared via `_quarto.yml`'s `website.favicon`) still uses the triple-ring mark; that is independent of post covers.
 
