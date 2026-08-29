@@ -95,28 +95,45 @@ def open_rgba(path: Path):
     return image.convert("RGBA")
 
 
-def border_color(image) -> tuple[int, int, int]:
-    """Median colour of a source's outer edge, for padding a contain fit.
+def border_color(image, edges: str) -> tuple[int, int, int]:
+    """Median colour of the source edges a contain fit will pad against.
 
     Sampling the edge rather than defaulting to white lets the pad continue a
     photo's backdrop, or a figure's white margin, instead of banding against it.
+    Only the two edges that actually abut the pad are sampled: pooling all four
+    would let an unrelated edge — a portrait's dark caption bar, say — tint a
+    pad that sits beside plain backdrop.
+
+    Transparent pixels are composited onto white first, so a source with a
+    transparent margin pads white like the `cover` path rather than black.
 
     Args:
         image: A Pillow image.
+        edges: "vertical" to sample the left and right columns (pad sits beside
+            the image), or "horizontal" to sample the top and bottom rows.
 
     Returns:
         An RGB triple.
     """
-    rgb = image.convert("RGB")
+    from PIL import Image  # noqa: PLC0415
+
+    if image.mode in ("RGBA", "LA", "P"):
+        rgba = image.convert("RGBA")
+        white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        rgb = Image.alpha_composite(white, rgba).convert("RGB")
+    else:
+        rgb = image.convert("RGB")
     src_w, src_h = rgb.size
     pixels = rgb.load()
     samples = []
-    for x in range(src_w):
-        samples.append(pixels[x, 0])
-        samples.append(pixels[x, src_h - 1])
-    for y in range(src_h):
-        samples.append(pixels[0, y])
-        samples.append(pixels[src_w - 1, y])
+    if edges == "vertical":
+        for y in range(src_h):
+            samples.append(pixels[0, y])
+            samples.append(pixels[src_w - 1, y])
+    else:
+        for x in range(src_w):
+            samples.append(pixels[x, 0])
+            samples.append(pixels[x, src_h - 1])
     mid = len(samples) // 2
     return tuple(sorted(band)[mid] for band in zip(*samples))
 
@@ -149,7 +166,8 @@ def fit_cover(image, mode: str = "cover") -> object:
         new_w = max(1, min(WIDTH, round(src_w * scale)))
         new_h = max(1, min(HEIGHT, round(src_h * scale)))
         resized = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        background = Image.new("RGB", (WIDTH, HEIGHT), border_color(image))
+        edges = "vertical" if new_w < WIDTH else "horizontal"
+        background = Image.new("RGB", (WIDTH, HEIGHT), border_color(image, edges))
         box = ((WIDTH - new_w) // 2, (HEIGHT - new_h) // 2)
         alpha = resized.split()[-1] if resized.mode == "RGBA" else None
         background.paste(resized, box, mask=alpha)
@@ -412,8 +430,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--fit",
         choices=FIT_MODES,
-        default="cover",
-        help="crop to fill the frame (cover) or pad to fit it whole (contain)",
+        default=None,
+        help="crop to fill the frame (cover) or pad to fit it whole (contain);"
+        " only with --source/--commons, since --all takes fit from the YAML",
     )
     parser.add_argument(
         "--all",
@@ -438,6 +457,10 @@ def main(argv: list[str] | None = None) -> int:
         Process exit code.
     """
     args = parse_args(argv)
+    if args.fit and not (args.source or args.commons):
+        raise SystemExit(
+            "--fit applies to --source/--commons; set fit: in the YAML otherwise"
+        )
     if args.all:
         mapping = load_yaml(SOURCES)
         failures = 0
@@ -458,10 +481,10 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("pass posts/<slug> or --all")
     slug = args.post.rstrip("/").split("/")[-1]
     if args.source:
-        process_source(slug, args.source, args.fit)
+        process_source(slug, args.source, args.fit or "cover")
         return 0
     if args.commons:
-        process_commons(slug, args.commons, args.fit)
+        process_commons(slug, args.commons, args.fit or "cover")
         return 0
 
     mapping = load_yaml(SOURCES)
