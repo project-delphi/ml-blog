@@ -100,12 +100,17 @@ def border_color(image, edges: str) -> tuple[int, int, int]:
 
     Sampling the edge rather than defaulting to white lets the pad continue a
     photo's backdrop, or a figure's white margin, instead of banding against it.
-    Only the two edges that actually abut the pad are sampled: pooling all four
-    would let an unrelated edge — a portrait's dark caption bar, say — tint a
-    pad that sits beside plain backdrop.
+    Only the two edges that abut the pad are sampled, since the opposite pair
+    never touches it and pooling all four pulls the colour toward whatever sits
+    there. This is a heuristic, not a guarantee: an edge the pad does touch can
+    still be unrepresentative — the caption bar on the Ripley portrait spans the
+    full width, so it darkens the sampled columns — and a source whose abutting
+    edges are strongly non-uniform will want an explicit crop instead.
 
-    Transparent pixels are composited onto white first, so a source with a
-    transparent margin pads white like the `cover` path rather than black.
+    Fully transparent pixels are composited onto white first, so a source with a
+    transparent margin pads white rather than the black an RGB cast would give.
+    Interior transparency is a separate matter: `fit_cover` pastes with the
+    source's alpha as a mask, so a hole shows this pad colour, not white.
 
     Args:
         image: A Pillow image.
@@ -379,6 +384,27 @@ def process_commons(slug: str, filename: str, fit: str = "cover") -> None:
     print(f"wrote {attr.relative_to(ROOT)} ({info['license']})")
 
 
+def recorded_fit(slug: str) -> str:
+    """The fit recorded for `slug` in cover_sources.yml, or "cover".
+
+    Args:
+        slug: Post directory name.
+
+    Returns:
+        A member of FIT_MODES.
+    """
+    try:
+        entry = load_yaml(SOURCES).get(slug)
+    except SystemExit:
+        return "cover"
+    if not isinstance(entry, dict):
+        return "cover"
+    fit = str(entry.get("fit") or "cover")
+    if fit not in FIT_MODES:
+        raise SystemExit(f"{slug}: fit must be one of {FIT_MODES}")
+    return fit
+
+
 def process_entry(slug: str, entry: dict[str, object], *, only: str | None) -> None:
     """Dispatch one YAML entry.
 
@@ -480,11 +506,15 @@ def main(argv: list[str] | None = None) -> int:
     if not args.post:
         raise SystemExit("pass posts/<slug> or --all")
     slug = args.post.rstrip("/").split("/")[-1]
-    if args.source:
-        process_source(slug, args.source, args.fit or "cover")
-        return 0
-    if args.commons:
-        process_commons(slug, args.commons, args.fit or "cover")
+    if args.source or args.commons:
+        # An explicit --source/--commons still defaults to the slug's recorded
+        # fit. Otherwise the invocation CLAUDE.md documents would silently
+        # re-crop a post that had been pinned to contain.
+        fit = args.fit or recorded_fit(slug)
+        if args.source:
+            process_source(slug, args.source, fit)
+        else:
+            process_commons(slug, args.commons, fit)
         return 0
 
     mapping = load_yaml(SOURCES)
