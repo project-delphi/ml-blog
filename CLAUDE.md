@@ -21,6 +21,7 @@ Do not restyle a Register A post into Register B unless the author asked for tha
 
 Write so a smart reader who has never met the topic follows every sentence on the first pass.
 
+- Open on a plain-English sentence saying what the post is for — but say the thing, don't announce that you are about to ("In this post we will…" stays banned). In an essay it keeps the essay's voice.
 - Explain the idea before you name it.
 - Warm up before the mechanics; never open a section with code, a bullet list, or a table.
 - Everyday words over Latinate ones; active voice; one idea per paragraph.
@@ -32,12 +33,15 @@ Write so a smart reader who has never met the topic follows every sentence on th
 
 Optimize for rapid transfer of technical information. Do not try to make the text engaging.
 
-- Start with the definition or procedure. Cut scene-setting and conversational transitions.
+- Open on a plain-English sentence saying what the post is for, then go straight to the definition or procedure. Cut scene-setting and conversational transitions.
 - Topic headings (`## Eigendecomposition`), numbered by Quarto — do not put `1.` in the heading text.
 - Default to bullets or numbered lists for multiple concepts, steps, or trade-offs.
 - Remaining paragraphs: one or two sentences. Isolate code, commands, and display math in fenced blocks.
-- End when the information is delivered.
-- **References last (both registers).** If the post cites papers, books, docs, datasets, or other posts as sources, end with `## References`: a short bulleted list of those sources only. Do not invent citations. Skip the section when there are none. Inline links may stay; the end list is the bibliography.
+- End when the information is delivered — no *paragraph* closer restating the opening claim.
+- **One-word closer last (both registers).** Every post ends on one line of one-word sentences summarising it and landing its consequence: 8–12 capitalised single words, each ending in a period, reading as two to four telegraphic clauses. It is a new final line; the existing last paragraph stays. `posts/tensor-factorizations/index.qmd` is the calibration — `Tensors. Outrun. Matrices. Factorizations. Compress. Inverses. Require. Products. Choose. First.` It must be true to *this* post; one that just restates the title is worse than none.
+- **References last (both registers).** If the post cites papers, books, docs, datasets, or other posts as sources, end with `## References`: a short bulleted list of those sources only. Do not invent citations. Skip the section when there are none. Inline links may stay; the end list is the bibliography. The one-word closer sits immediately above that heading.
+
+The purpose sentence and one-word closer are in place on the 50 posts with no `_freeze/` record. The other 51, the freeze-backed ones, are **not** done — editing one invalidates its frozen output and forces a re-execution, so that sweep needs the venvs to hand and is a separate job. Both counts go stale with every new post; re-derive them from `ls -d posts/*/` and `ls -d _freeze/posts/*/`. `STYLE.md` carries the same note.
 
 ### Two failure modes no check catches
 
@@ -173,6 +177,7 @@ Two rules bite when adding a post:
 
 - **`data/` is ignored everywhere.** A post that reads a data file at render time needs that path un-ignored, or a clone cannot rebuild it. Two directories are carved out already — `posts/volcano-plots/data/` and `posts/dataset-to-biological-signature/data/` — so copy their two-line pattern (un-ignore the directory *and* `/**`; git will not descend into an excluded directory to find a negated file inside it). Both are also exempted from the whitespace and large-file pre-commit hooks, since they cache upstream bytes verbatim. Note the carve-out covers the *source* copy only: Quarto also copies the directory into `docs/`, where the same `data/` rule swallows it again, so every render regenerates a few MB that is never committed and the published path 404s. Nothing links to it, so this is cosmetic — but don't be surprised by it.
 - **Training artefacts are ignored on purpose**: `checkpoints/`, `posts/**/checkpoints/`, `posts/**/results/`, and Quarto's `posts/**/index_files/` and `index_cache/`. A fine-tuning post drops hundreds of MB there relative to the render's cwd. The published copies live in `docs/` and `_freeze/`.
+- **A render-time asset that is gitignored at the source but committed under `docs/` disappears on the next full render.** `posts/uses-of-tensor-factorizations/media/clip-cp.wav` and `clip-hosvd.mp4` are the live case: the post's code writes them from the committed `clip.mp4`, so `.gitignore` excludes the source copies, but the *rendered* copies under `docs/` are tracked. A project render deletes `docs/` and rebuilds it, and because the post is freeze-backed its code does not re-execute — so nothing rewrites those two files and the rebuilt `docs/` silently drops them, leaving a dead `<video>` and `<audio>` in the published page. Nothing warns you: `make check-posts` is green and `_freeze/` is untouched. After any full render, check for deletions under `docs/` (`git status --short -- docs | grep '^ D'`) and restore them from the previous commit.
 
 ### Why `_freeze/` is committed
 
