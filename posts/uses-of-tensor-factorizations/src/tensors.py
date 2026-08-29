@@ -218,22 +218,35 @@ def make_mixing_cube(
     return clean + noise, factors
 
 
-def align_factors(
-    true: NDArray[np.floating], est: NDArray[np.floating]
-) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
-    """Permute and sign-flip ``est`` columns to match ``true``."""
+def match_parts(
+    true: NDArray[np.floating],
+    est: NDArray[np.floating],
+) -> tuple[NDArray[np.intp], NDArray[np.floating]]:
+    """Column permutation and signs that carry ``est`` onto ``true``.
+
+    Returned separately from :func:`align_factors` so the same permutation can
+    be applied to another mode — an SVD sample direction and the row of ``V^T``
+    that goes with it have to move together.
+    """
     t_norm = true / np.linalg.norm(true, axis=0, keepdims=True)
     e_norm = est / np.linalg.norm(est, axis=0, keepdims=True)
     corr = t_norm.T @ e_norm
     row_ind, col_ind = linear_sum_assignment(-np.abs(corr))
-    order = np.empty(est.shape[1], dtype=int)
+    order = np.empty(est.shape[1], dtype=np.intp)
     order[row_ind] = col_ind
-    aligned = est[:, order].copy()
-    for r in range(est.shape[1]):
-        sign = np.sign(np.dot(true[:, r], aligned[:, r]))
-        if sign == 0:
-            sign = 1.0
-        aligned[:, r] *= sign
+    signs = np.sign(np.sum(true * est[:, order], axis=0))
+    signs[signs == 0] = 1.0
+    return order, signs
+
+
+def align_factors(
+    true: NDArray[np.floating],
+    est: NDArray[np.floating],
+) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
+    """Permute and sign-flip ``est`` columns to match ``true``."""
+    order, signs = match_parts(true, est)
+    aligned = est[:, order] * signs
+    t_norm = true / np.linalg.norm(true, axis=0, keepdims=True)
     a_norm = aligned / np.linalg.norm(aligned, axis=0, keepdims=True)
     col_corr = np.abs((t_norm * a_norm).sum(axis=0))
     return aligned, col_corr
@@ -310,11 +323,16 @@ def sweep_tt(matrix: NDArray[np.floating], ms: list[int], ns: list[int]) -> dict
 
 
 def mixing_fit(
-    cube: NDArray[np.floating], true_factors: list[NDArray[np.floating]]
+    cube: NDArray[np.floating],
+    true_factors: list[NDArray[np.floating]],
 ) -> dict[str, Any]:
     """Rank-3 CP vs mode-0 unfolding SVD on the mixing cube."""
     weights, factors = parafac(
-        cube, rank=MIX_RANK, n_iter_max=200, init="svd", random_state=SEED
+        cube,
+        rank=MIX_RANK,
+        n_iter_max=200,
+        init="svd",
+        random_state=SEED,
     )
     recon = cp_to_tensor((weights, factors))
     aligned = []
@@ -340,4 +358,59 @@ def mixing_fit(
         "mean_cp_corr": float(np.mean(corrs[0])),
         "mean_cp_em_corr": float(np.mean(corrs[1])),
         "mean_svd_corr": float(np.mean(svd_corr)),
+    }
+
+
+def unit_peak(a: NDArray[np.floating]) -> NDArray[np.floating]:
+    """Scale each column to peak magnitude 1, for plotting on one axis."""
+    a = np.asarray(a, dtype=float)
+    peak = np.max(np.abs(a), axis=0, keepdims=True)
+    peak[peak == 0] = 1.0
+    return a / peak
+
+
+def mixing_scene(rng: np.random.Generator | None = None) -> dict[str, Any]:
+    """Everything the unmixing figures draw: cube, truth, CP fit, unfolding SVD.
+
+    One ``parafac`` call serves the poster and the animation, so the two cannot
+    quote different numbers for the same cube.
+    """
+    rng = np.random.default_rng(SEED) if rng is None else rng
+    cube, true = make_mixing_cube(rng)
+    n_s, n_em, n_ex = cube.shape
+
+    weights, factors = parafac(
+        cube,
+        rank=MIX_RANK,
+        n_iter_max=200,
+        init="svd",
+        random_state=SEED,
+    )
+    recon = cp_to_tensor((weights, factors))
+    cp_s, cp_corr = align_factors(true[0], factors[0])
+    cp_em, _ = align_factors(true[1], factors[1])
+    cp_ex, _ = align_factors(true[2], factors[2])
+
+    unfolding = cube.reshape(n_s, -1)
+    u, _, vt = np.linalg.svd(unfolding, full_matrices=False)
+    svd_s, svd_corr = align_factors(true[0], u[:, :MIX_RANK])
+    # The sample direction and its row of V^T are one component: permute and
+    # flip them together, or the maps stop matching the amounts.
+    order, signs = match_parts(true[0], u[:, :MIX_RANK])
+    vt_aligned = vt[:MIX_RANK][order] * signs[:, None]
+
+    return {
+        "cube": cube,
+        "shape": (n_s, n_em, n_ex),
+        "true": true,
+        "true_s": unit_peak(true[0]),
+        "cp_s": unit_peak(cp_s),
+        "svd_s": unit_peak(svd_s),
+        "dye_eems": [np.outer(true[1][:, r], true[2][:, r]) for r in range(MIX_RANK)],
+        "cp_eems": [np.outer(cp_em[:, r], cp_ex[:, r]) for r in range(MIX_RANK)],
+        "svd_eems": [vt_aligned[r].reshape(n_em, n_ex) for r in range(MIX_RANK)],
+        "cp_rel_error": rel_fro(cube, recon),
+        "mean_cp_corr": float(np.mean(cp_corr)),
+        "mean_svd_corr": float(np.mean(svd_corr)),
+        "svd_min_amount": float(np.min(unit_peak(svd_s))),
     }

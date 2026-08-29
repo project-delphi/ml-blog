@@ -1,4 +1,7 @@
-"""Write media/mixing.gif: what the cube is, then CP vs flatten-SVD.
+r"""Write media/mixing.gif: the instrument, what the cube is, then CP vs flatten-SVD.
+
+Shares the palette, glyphs, and fitted scene with ``make_mixing_poster.py`` so
+the still and the animation cannot drift apart.
 
 Usage (from repo root or this directory):
 
@@ -16,27 +19,26 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
 from PIL import Image
-from scipy.optimize import linear_sum_assignment
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import draw as D
 import tensors as T
 
-INK = "#1F2430"
-MUTED = "#5F6672"
-GREY = "#999999"
-ACCENT = "#4A3AA7"
-TEAL = "#2A9D8F"
-CORAL = "#E07A5F"
-DYE = [ACCENT, TEAL, CORAL]
-NAMES = ("dye A", "dye B", "dye C")
+INK, MUTED = D.INK, D.MUTED
+DYE, NAMES = list(D.DYE), D.NAMES
 POST = Path(__file__).resolve().parent.parent
 OUT = POST / "media" / "mixing.gif"
+
+W_FIG, H_FIG = 9.6, 4.35
+WELL_SHOWN = 10
 
 
 def _style() -> None:
     plt.rcParams.update(
         {
+            "font.family": "sans-serif",
+            "font.sans-serif": D.FONT,
             "axes.edgecolor": "0.85",
             "axes.labelcolor": INK,
             "text.color": INK,
@@ -45,19 +47,12 @@ def _style() -> None:
             "font.size": 11,
             "axes.spines.top": False,
             "axes.spines.right": False,
-        }
+        },
     )
 
 
 def _cmap(hex_color: str) -> LinearSegmentedColormap:
     return LinearSegmentedColormap.from_list("dye", ["#FFFFFF", hex_color])
-
-
-def _maxabs(a: np.ndarray) -> np.ndarray:
-    a = np.asarray(a, dtype=float)
-    peak = np.max(np.abs(a), axis=0, keepdims=True)
-    peak[peak == 0] = 1.0
-    return a / peak
 
 
 def _fig_to_pil(fig: plt.Figure) -> Image.Image:
@@ -69,7 +64,7 @@ def _fig_to_pil(fig: plt.Figure) -> Image.Image:
 
 
 def _new_fig():
-    fig = plt.figure(figsize=(9.6, 4.35), facecolor="white")
+    fig = plt.figure(figsize=(W_FIG, H_FIG), facecolor="white")
     gs = fig.add_gridspec(
         1,
         2,
@@ -128,14 +123,7 @@ def _amounts(
     for r in range(n_show):
         ax.plot(x, truth[:, r], color=DYE[r], lw=2.2, label=NAMES[r], zorder=3)
         if recovered is not None:
-            ax.plot(
-                x,
-                recovered[:, r],
-                color=DYE[r],
-                lw=1.6,
-                ls="--",
-                zorder=4,
-            )
+            ax.plot(x, recovered[:, r], color=DYE[r], lw=1.6, ls="--", zorder=4)
     if needle is not None:
         ax.axvline(needle, color=INK, lw=1.15, zorder=2)
         ax.scatter(
@@ -162,63 +150,93 @@ def _amounts(
         ax.set_title("How much of each dye is in each sample", fontsize=10)
         ax.legend(frameon=False, fontsize=8, loc="upper right")
     else:
-        ax.set_title(
-            f"Solid = true. Dashed = {recovered_label}.",
-            fontsize=10,
-        )
+        ax.set_title(f"Solid = true. Dashed = {recovered_label}.", fontsize=10)
 
 
 def _caption(fig: plt.Figure, text: str) -> None:
     fig.text(0.5, 0.045, text, ha="center", va="center", fontsize=11, color=INK)
 
 
-def _load():
-    rng = np.random.default_rng(T.SEED)
-    cube, true = T.make_mixing_cube(rng)
-    n_s, n_em, n_ex = cube.shape
-    fit = T.mixing_fit(cube, true)
-    from tensorly.decomposition import parafac
+def _frame_instrument(scene) -> Image.Image:
+    """Where the numbers come from — the poster's spine, flat for GIF colours."""
+    fig = plt.figure(figsize=(W_FIG, H_FIG), facecolor="white")
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, W_FIG)
+    ax.set_ylim(0, H_FIG)
+    ax.axis("off")
 
-    _weights, factors = parafac(
-        cube, rank=T.MIX_RANK, n_iter_max=200, init="svd", random_state=T.SEED
+    top, bot = 2.90, 1.35
+    pick_ex, pick_em = D.SPECTRUM[1], D.SPECTRUM[5]
+    weights = scene["true_s"][WELL_SHOWN]
+
+    D.lamp(ax, 1.05, top, 0.62, soft=False)
+    D.beam(
+        ax,
+        (1.42, top),
+        (2.32, top + 0.02),
+        0.08,
+        0.17,
+        D.wash(D.AMBER, 0.25),
+        alpha=0.65,
     )
-    cp_ex, _ = T.align_factors(true[2], factors[2])
-    unfolding = cube.reshape(n_s, -1)
-    u, _, vt = np.linalg.svd(unfolding, full_matrices=False)
-    order, signs = _match_parts(true[0], u[:, : T.MIX_RANK])
-    u_al = u[:, : T.MIX_RANK][:, order] * signs
-    vt_al = vt[: T.MIX_RANK][order] * signs[:, None]
-    cp_e = np.asarray(fit["cp_emission"])
-    return {
-        "cube": cube,
-        "true_s": _maxabs(true[0]),
-        "cp_s": _maxabs(np.asarray(fit["cp_sample"])),
-        "svd_s": _maxabs(u_al),
-        "dye_eems": [np.outer(true[1][:, r], true[2][:, r]) for r in range(3)],
-        "cp_eems": [np.outer(cp_e[:, r], cp_ex[:, r]) for r in range(3)],
-        "svd_eems": [vt_al[r].reshape(n_em, n_ex) for r in range(T.MIX_RANK)],
-        "mean_cp": fit["mean_cp_corr"],
-        "mean_svd": fit["mean_svd_corr"],
-        "cp_err": fit["cp_rel_error"],
-    }
+    D.prism(ax, 2.50, top, 0.62)
+    D.fan(ax, (2.67, top + 0.02), 3.52, 0.26)
+    D.beam(ax, (3.48, top), (4.55, top), 0.09, 0.11, pick_ex, alpha=0.9, z=8)
+    D.slit(ax, 3.58, top, 0.70, gap=0.12)
+    D.well(ax, 4.85, top, 0.76, weights=weights, soft=False)
 
+    D.beam(ax, (4.85, top - 0.36), (4.85, bot), 0.10, 0.09, pick_em, alpha=0.85)
+    D.beam(ax, (4.81, bot), (5.30, bot), 0.09, 0.12, pick_em, alpha=0.85)
+    D.prism(ax, 5.58, bot, 0.60)
+    D.fan(ax, (5.74, bot + 0.02), 6.50, 0.23)
+    D.beam(ax, (6.46, bot), (6.94, bot), 0.08, 0.10, pick_em, alpha=0.9, z=8)
+    D.slit(ax, 6.55, bot, 0.66, gap=0.12)
+    reading = float(scene["cube"][WELL_SHOWN, 12, 9])
+    D.detector(ax, 7.22, bot, 0.62, reading=f"{reading:.2f}")
 
-def _match_order(true: np.ndarray, est: np.ndarray) -> np.ndarray:
-    t = true / np.linalg.norm(true, axis=0, keepdims=True)
-    e = est / np.linalg.norm(est, axis=0, keepdims=True)
-    corr = t.T @ e
-    row, col = linear_sum_assignment(-np.abs(corr))
-    order = np.empty(est.shape[1], dtype=int)
-    order[row] = col
-    return order
+    for x, text in ((1.05, "lamp"), (2.95, "excitation colour"), (4.85, "one well")):
+        ax.text(x, top + 0.58, text, ha="center", fontsize=10, fontweight="bold")
+    ax.text(
+        5.85,
+        bot - 0.52,
+        "emission colour",
+        ha="center",
+        fontsize=10,
+        fontweight="bold",
+    )
+    ax.text(
+        7.22,
+        bot + 0.55,
+        "one observation",
+        ha="center",
+        fontsize=10,
+        fontweight="bold",
+        color=D.ACCENT,
+    )
+    ax.text(5.05, 2.15, "read at 90°", ha="left", fontsize=9.5, color=MUTED)
+    n_s, n_em, n_ex = scene["shape"]
+    D.settings_panel(
+        ax,
+        0.45,
+        0.62,
+        2.55,
+        1.55,
+        [
+            ("well", f"{WELL_SHOWN + 1} of {n_s}", None),
+            ("excitation", f"10 of {n_ex}", pick_ex),
+            ("emission", f"13 of {n_em}", pick_em),
+        ],
+        header="inputs you set",
+        fs=9.5,
+    )
 
-
-def _match_parts(true: np.ndarray, est: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    order = _match_order(true, est)
-    aligned = est[:, order]
-    signs = np.sign(np.sum(true * aligned, axis=0))
-    signs[signs == 0] = 1.0
-    return order, signs
+    fig.suptitle("Where the numbers come from", fontsize=13, color=INK, y=0.97)
+    _caption(
+        fig,
+        "One excitation colour, one emission colour, one number. "
+        "Sweep both and a well becomes a map.",
+    )
+    return _fig_to_pil(fig)
 
 
 def _frame_build(scene, k: int) -> Image.Image:
@@ -258,19 +276,20 @@ def _frame_recover(scene, kind: str) -> Image.Image:
         maps, rec, corr, label = (
             scene["cp_eems"],
             scene["cp_s"],
-            scene["mean_cp"],
+            scene["mean_cp_corr"],
             "CP",
         )
         title = "CP names the dyes"
         cap = (
             f"CP writes the cube as three outer products. "
-            f"Amount correlation {corr:.2f}. Leftover error {scene['cp_err']:.3f} (the noise)."
+            f"Amount correlation {corr:.2f}. "
+            f"Leftover error {scene['cp_rel_error']:.3f} (the noise)."
         )
     else:
         maps, rec, corr, label = (
             scene["svd_eems"],
             scene["svd_s"],
-            scene["mean_svd"],
+            scene["mean_svd_corr"],
             "flatten-then-SVD",
         )
         title = "Flatten, then SVD — mixed dyes"
@@ -283,13 +302,7 @@ def _frame_recover(scene, kind: str) -> Image.Image:
         if kind == "cp"
         else ["SVD map 1", "SVD map 2", "SVD map 3"]
     )
-    _three_eems(
-        fig,
-        gs,
-        maps,
-        [_cmap(c) for c in DYE],
-        titles,
-    )
+    _three_eems(fig, gs, maps, [_cmap(c) for c in DYE], titles)
     ax_a = fig.add_subplot(gs[1])
     _amounts(ax_a, scene["true_s"], recovered=rec, recovered_label=label)
     _caption(fig, cap)
@@ -299,9 +312,12 @@ def _frame_recover(scene, kind: str) -> Image.Image:
 
 def write_gif(path: Path | None = None) -> Path:
     _style()
-    scene = _load()
+    scene = T.mixing_scene()
     frames: list[Image.Image] = []
     durs: list[int] = []
+
+    frames.append(_frame_instrument(scene))
+    durs.append(3000)
 
     for k in (1, 2, 3):
         frames.append(_frame_build(scene, k))
@@ -321,12 +337,13 @@ def write_gif(path: Path | None = None) -> Path:
     dest = Path(path) if path is not None else OUT
     dest.parent.mkdir(parents=True, exist_ok=True)
     w, h = frames[0].size
-    picks = [frames[2], frames[7], frames[-2], frames[-1]]
+    picks = [frames[0], frames[3], frames[8], frames[-2], frames[-1]]
     strip = Image.new("RGB", (w, h * len(picks)))
     for i, f in enumerate(picks):
         strip.paste(f, (0, i * h))
-    palette = strip.quantize(colors=72, method=Image.Quantize.MEDIANCUT)
-    out = [f.quantize(palette=palette) for f in frames]
+    palette = strip.quantize(colors=128, method=Image.Quantize.MEDIANCUT)
+    # No dithering: flat illustration fills speckle badly in a 128-colour GIF.
+    out = [f.quantize(palette=palette, dither=Image.Dither.NONE) for f in frames]
     out[0].save(
         dest,
         save_all=True,
