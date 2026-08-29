@@ -84,35 +84,6 @@ plt.rcParams.update({
 })
 
 
-def letterbox_cover(fig, path="cover.png", size=(1200, 630), pad=0.2):
-    buf = io.BytesIO()
-    fig.savefig(
-        buf, dpi=160, bbox_inches="tight", pad_inches=pad,
-        facecolor="white", format="png",
-    )
-    buf.seek(0)
-    raw = Image.open(buf).convert("RGB")
-    arr = np.asarray(raw)
-    ink = (arr < 250).any(axis=2)
-    rows = np.where(ink.any(axis=1))[0]
-    cols = np.where(ink.any(axis=0))[0]
-    if len(rows) and len(cols):
-        margin = 18
-        top = max(0, int(rows[0]) - margin)
-        bottom = min(raw.height, int(rows[-1]) + 1 + margin)
-        left = max(0, int(cols[0]) - margin)
-        right = min(raw.width, int(cols[-1]) + 1 + margin)
-        raw = raw.crop((left, top, right, bottom))
-    width, height = size
-    scale = min(width / raw.width, height / raw.height)
-    new_w = max(1, round(raw.width * scale))
-    new_h = max(1, round(raw.height * scale))
-    raw = raw.resize((new_w, new_h), Image.Resampling.LANCZOS)
-    canvas = Image.new("RGB", (width, height), (255, 255, 255))
-    canvas.paste(raw, ((width - new_w) // 2, (height - new_h) // 2))
-    canvas.save(path)
-
-
 def fmt_count(n):
     n = float(n)
     if n >= 1_000_000:
@@ -497,25 +468,6 @@ def write_clip_mp4(path, frames, wav, sr, fps=12, size=(320, 240)):
     shutil.rmtree(tmp)
 
 
-# Cover: the two before/after weight counts the post is for.
-fig_c, axes_c = plt.subplots(1, 2, figsize=(10.6, 4.2))
-weight_hbars(
-    axes_c[0],
-    ["Uncompressed", "After CP (rank 64)"],
-    [CP["headline"]["dense_params"], CP["headline"]["cp_params"]],
-    [GREY, ACCENT],
-    "VGG-16 conv5, 3×3 512-ch",
-)
-weight_hbars(
-    axes_c[1],
-    ["Uncompressed", "After TT (rank 16)"],
-    [TT["headline"]["dense_params"], TT["headline"]["tt_params"]],
-    [GREY, TEAL],
-    "Transformer $W_O$, 4096×4096",
-)
-fig_c.tight_layout()
-letterbox_cover(fig_c)
-plt.close(fig_c)
 ```
 
 ## Factorizations
@@ -1150,6 +1102,68 @@ for j, t in enumerate(idx):
 fig.tight_layout()
 ```
 
+```{python}
+#| label: cover
+#| echo: false
+#| output: false
+
+# Cover: the post's claim as pictures — the same frames as @fig-film-video,
+# full bleed, with what the compression cost.
+def _crop_to(img, aspect):
+    h, w = img.shape[:2]
+    want_w = int(round(h * aspect))
+    if want_w <= w:
+        x0 = (w - want_w) // 2
+        return img[:, x0 : x0 + want_w]
+    want_h = int(round(w / aspect))
+    y0 = (h - want_h) // 2
+    return img[y0 : y0 + want_h]
+
+
+def write_film_cover(path="cover.png", size=(1200, 630), dpi=100):
+    n_t = frames.shape[-1]
+    # Explosion, the cut to the close-up, then the wreck: three different
+    # kinds of picture, so the cost of compression is visible on each.
+    picks = (0, n_t // 4, n_t // 2)
+    fig_k = plt.figure(figsize=(size[0] / dpi, size[1] / dpi), dpi=dpi, facecolor="white")
+    label_w, gut = 0.055, 0.005
+    panel_w = (1.0 - label_w - gut * 4) / 3
+    panel_h = (1.0 - gut * 3) / 2
+    aspect = (panel_w * size[0]) / (panel_h * size[1])
+    rows = (
+        (frames, "original"),
+        (vid_hat, f"HOSVD, {frames.size / vid_params:.1f}× fewer numbers"),
+    )
+    for r, (stack, label) in enumerate(rows):
+        y0 = gut * (2 - r) + (1 - r) * panel_h
+        for c, t in enumerate(picks):
+            ax_k = fig_k.add_axes(
+                [label_w + gut * (c + 1) + c * panel_w, y0, panel_w, panel_h]
+            )
+            img = np.clip(stack[:, :, :, t], 0, 255).astype(np.uint8)
+            ax_k.imshow(_crop_to(img, aspect), interpolation="bilinear", aspect="auto")
+            ax_k.set_xticks([])
+            ax_k.set_yticks([])
+            for spine in ax_k.spines.values():
+                spine.set_visible(False)
+        fig_k.text(
+            label_w / 2,
+            y0 + panel_h / 2,
+            label,
+            rotation=90,
+            ha="center",
+            va="center",
+            fontsize=13,
+            fontweight="bold",
+            color=INK,
+        )
+    fig_k.savefig(path, dpi=dpi, facecolor="white")
+    plt.close(fig_k)
+
+
+write_film_cover()
+```
+
 ### Audio
 
 A microphone stores air pressure as one number per sample. That list is a 1-tensor: one mode, time. Factorizing it is a 1-D SVD — there is no second mode to separate.
@@ -1397,24 +1411,24 @@ print(
 
 ### Assay
 
-A fluorophore absorbs light at one colour and emits at a longer one. The instrument:
+You want how much of each dye is in each well. The dyes are already mixed; you cannot pipette them apart.
 
-1. Places one sample in the beam (one well).
-2. Shines a single excitation colour $\lambda_{\mathrm{ex}}$.
-3. Records intensity at one emission colour $\lambda_{\mathrm{em}}$.
-4. Sweeps both colours. The fill is a 2-D map: emission × excitation — an excitation–emission matrix (EEM).
+The instrument shines one excitation colour into one well and records how bright that well is at one emission colour. That number is **intensity**. Sweep both colours and one well becomes a map (emission colour × excitation colour). Twenty wells become a stack of twenty maps.
 
-Three dyes with separated peaks make three blobs on that map. Blob brightness tracks how much of that dye is in the well. Twenty wells with different mixes make twenty maps. Stack them. That stack is a cube: sample × emission × excitation.
+That stack is a 3-way tensor $\mathcal{X}\in\mathbb{R}^{20\times 24\times 18}$.
 
-This cube is synthetic (seed 7, noise $0.08$). It stands in for that fluorescence stack. No wet-lab data.
+- **Sample** (20). Which well.
+- **Emission colour** (24). Colour coming out.
+- **Excitation colour** (18). Colour shone in.
+- **Intensity.** The value in each cell, not a fourth axis.
 
-- **Sample.** Which well.
-- **Emission.** Colour coming out.
-- **Excitation.** Colour shone in.
+Dye is not an axis of $\mathcal{X}$. Each dye is one rank-1 tensor: amount × emission spectrum × excitation spectrum. The observed cube is the sum of three of those, plus noise.
 
-Each dye is one outer product: amount × emission spectrum × excitation spectrum. The cube is the sum of three of those.
+The maps do not give the amounts. The three fingerprints overlap, so a bright spot is a mix. Flatten the two colour axes into one long row and the cube becomes a $20\times 432$ matrix: SVD then returns mixed dyes. CP keeps the three axes and recovers the amounts.
 
-@fig-mixing-assay is that process.
+This cube is synthetic (seed 7, noise $0.08$). It stands in for a fluorescence excitation–emission stack. No wet-lab data.
+
+@fig-mixing-assay is the whole assay: settings in, one observation out, that tensor, and what the two splits return.
 
 ```{python}
 #| echo: false
@@ -1427,14 +1441,14 @@ mg.write_gif(Path("media/mixing.gif"))
 ```
 
 ::: {.column-page}
-![The fluorescence layout the cube stands in for. A: a spectrofluorometer with the sample in the beam path — excitation through the cuvette, emission at 90° — one map per well. B: twenty maps stacked as $\mathcal{X}\in\mathbb{R}^{20\times 24\times 18}$ (sample × emission × excitation); the front face is one well. C: each dye is an emission–excitation outer product. D: amounts overlap, so most wells are mixes. Synthetic, seed 7.](media/mixing-assay.png){#fig-mixing-assay fig-alt="Poster schematic: a scientist at a spectrofluorometer with excitation and emission beams through a sample cuvette; a 20 by 24 by 18 sample-emission-excitation cube with dimension arrows; three dye fingerprints; overlapping amounts across twenty wells."}
+![You want dye amounts; you measure intensity. Top, left to right: someone makes up twenty wells of mixed dye; three settings go in — which well, which excitation colour, which emission colour; the instrument returns one observation. Sweeping the two colour settings gives one map per well, and stacking the wells gives $\mathcal{X}\in\mathbb{R}^{20\times 24\times 18}$, 8,640 readings. Middle: the three rank-1 dyes the cube is made of; their amounts overlap. Bottom: CP returns the dyes, flatten-then-SVD returns mixes. Drawn; the cube is synthetic, seed 7.](media/mixing-assay.png){#fig-mixing-assay fig-alt="Drawn assay poster in five numbered stages. One, the samples: a scientist in a lab coat and goggles pipettes three dyes into a twenty-well plate, one well ringed. Two, the settings: a console listing well 11 of 20, excitation colour 10 of 18, emission colour 13 of 24. Three, the instrument: lamp, prism and slit picking the excitation colour, the well, then emission read at ninety degrees through a second prism and slit. Four, the observation: a detector and a single intensity, 0.95. Five, the tensor: the swept map for that well, then twenty such maps stacked into a 20 by 24 by 18 cube. Middle band: the three rank-1 dyes, each an emission-by-excitation map with its two spectra, and their overlapping amounts. Bottom: branch A, CP returns the three dye maps and matching amounts; branch B, flattening then SVD returns mixed maps and amounts that go negative."}
 :::
 
 ### Recoveries
 
-@fig-mixing is CP versus flatten-then-SVD on the same cube.
+@fig-mixing is CP versus flatten-then-SVD on that cube.
 
-![Each sample is an emission × excitation map. The needle is that sample. CP recovers the three dyes. Flatten-then-SVD returns mixed dyes.](media/mixing.gif){#fig-mixing fig-alt="Animation: three dyes build a cube of emission-excitation maps, then CP recovers the dyes and flatten-then-SVD mixes them."}
+![It opens on the instrument, then builds the cube dye by dye. Each sample is an emission × excitation map; the needle marks that sample. CP recovers the three dyes. Flatten-then-SVD returns mixed dyes.](media/mixing.gif){#fig-mixing fig-alt="Animation: a drawn fluorimeter reads one intensity, then three dyes build a cube of emission-excitation maps, then CP recovers the dyes and flatten-then-SVD mixes them."}
 
 ```{python}
 cube, true = T.make_mixing_cube(np.random.default_rng(T.SEED))

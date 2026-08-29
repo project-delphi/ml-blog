@@ -1,4 +1,8 @@
-"""High-resolution assay schematic for the unmixing section.
+r"""Drawn poster for the unmixing section: assay, tensor, and the two splits.
+
+Everything but the heat maps and line plots is drawn — lamp, monochromators,
+well, detector — from the glyph kit in ``draw.py``. Every number on the poster
+comes from ``tensors.mixing_scene``, so it cannot disagree with the prose.
 
 Usage (from repo root):
 
@@ -14,64 +18,60 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
-from matplotlib.patches import (
-    Circle,
-    Ellipse,
-    FancyArrowPatch,
-    FancyBboxPatch,
-    Polygon,
-    Rectangle,
-    Wedge,
-)
+from matplotlib.patches import Polygon
 from matplotlib.patheffects import withStroke
 from matplotlib.transforms import Affine2D
 from scipy.ndimage import zoom
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import draw as D
 import tensors as T
 
-INK = "#1B2433"
-MUTED = "#5C6570"
-RULE = "#D5D9E2"
-CARD = "#F4F6FA"
-ACCENT = "#4A3AA7"
-TEAL = "#2A9D8F"
-CORAL = "#E07A5F"
-GOLD = "#E0B44A"
-SKIN = "#C9956C"
-HAIR = "#2B211C"
-COAT = "#F4F6FA"
-DYE = (ACCENT, TEAL, CORAL)
-NAMES = ("dye A", "dye B", "dye C")
 POST = Path(__file__).resolve().parent.parent
 OUT = POST / "media" / "mixing-assay.png"
+
+W_FIG, H_FIG = 24.0, 15.0
+DPI = 200
+
+# Type scale, in points on a 24-inch canvas.
+TITLE, SUB = 40.0, 22.0
+CARD_T, LEAD = 22.0, 18.0
+BODY, SMALL, TINY = 15.5, 14.0, 12.5
+
+WELL_SHOWN = 10  # the well drawn in the instrument and mapped in the cube
 
 
 def _style() -> None:
     plt.rcParams.update(
         {
             "font.family": "sans-serif",
-            "font.sans-serif": ["DejaVu Sans"],
-            "axes.edgecolor": RULE,
-            "axes.labelcolor": INK,
-            "text.color": INK,
-            "xtick.color": MUTED,
-            "ytick.color": MUTED,
-            "font.size": 13.5,
+            "font.sans-serif": D.FONT,
+            "text.color": D.INK,
+            "axes.labelcolor": D.INK,
+            "xtick.color": D.MUTED,
+            "ytick.color": D.MUTED,
+            "font.size": BODY,
             "axes.spines.top": False,
             "axes.spines.right": False,
-        }
+        },
     )
 
 
 def _cmap(hex_color: str) -> LinearSegmentedColormap:
     return LinearSegmentedColormap.from_list(
-        "dye", ["#FFFFFF", hex_color + "22", hex_color]
+        "dye",
+        ["#FFFFFF", hex_color + "22", hex_color],
     )
 
 
-def _to_rgb(z: np.ndarray, cmap="inferno") -> np.ndarray:
+DIVERGING = LinearSegmentedColormap.from_list(
+    "signed",
+    [D.CORAL, "#FFFFFF", D.ACCENT],
+)
+
+
+def _to_rgb(z: np.ndarray, cmap: str = "inferno") -> np.ndarray:
     z = np.abs(np.asarray(z, dtype=float))
     z = z / (float(z.max()) + 1e-12)
     rgba = plt.colormaps[cmap](z)
@@ -82,22 +82,81 @@ def _hi(z: np.ndarray, factor: float = 10.0) -> np.ndarray:
     return zoom(np.asarray(z, dtype=float), factor, order=3)
 
 
-def iso_xy(x, y, z, origin, scale=1.0, depth=0.40):
+def _ax(fig: plt.Figure, x: float, y: float, w: float, h: float):
+    """Axes placed in poster inches rather than figure fractions."""
+    return fig.add_axes([x / W_FIG, y / H_FIG, w / W_FIG, h / H_FIG])
+
+
+def _map_axes(
+    ax,
+    z: np.ndarray,
+    cmap,
+    title: str = "",
+    title_color: str = D.INK,
+    xlabel: str = "",
+    ylabel: str = "",
+    signed: bool = False,
+) -> None:
+    hi = _hi(z, 8)
+    kw: dict = {}
+    if signed:
+        peak = float(np.max(np.abs(hi))) or 1.0
+        kw = dict(vmin=-peak, vmax=peak)
+    ax.imshow(
+        np.flipud(hi),
+        origin="upper",
+        aspect="auto",
+        cmap=cmap,
+        interpolation="bicubic",
+        **kw,
+    )
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if title:
+        ax.set_title(title, fontsize=SMALL, color=title_color, pad=4, fontweight="bold")
+    if xlabel:
+        ax.set_xlabel(xlabel, fontsize=TINY)
+    if ylabel:
+        ax.set_ylabel(ylabel, fontsize=TINY)
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_color(D.RULE)
+
+
+def _amount_axes(ax, title: str) -> None:
+    ax.set_xlim(-0.4, 19.4)
+    ax.set_xlabel("sample (well)", fontsize=SMALL)
+    ax.set_ylabel("amount", fontsize=SMALL)
+    ax.yaxis.grid(True, color="#EEF0F4", zorder=0)
+    ax.set_axisbelow(True)
+    ax.tick_params(axis="x", length=0, labelsize=TINY)
+    ax.tick_params(axis="y", labelsize=TINY)
+    ax.spines["left"].set_color(D.RULE)
+    ax.spines["bottom"].set_color(D.RULE)
+    ax.set_facecolor("white")
+    if title:
+        ax.set_title(title, fontsize=SMALL, pad=5)
+
+
+# --- the isometric cube ----------------------------------------------------
+
+
+def iso_xy(x, y, z, origin, scale: float = 1.0, depth: float = 0.40):
     return np.array(
         [
             origin[0] + scale * (x + depth * z),
             origin[1] + scale * (y + 0.48 * depth * z),
-        ]
+        ],
     )
 
 
-def imshow_quad(ax, image, bl, br, tr, tl, zorder=5, lw=0.7):
+def imshow_quad(ax, image, bl, br, tr, tl, zorder: int = 5, lw: float = 0.7):
     image = np.clip(np.asarray(image), 0, 255).astype(np.uint8)
     bl, br, tr, tl = map(np.asarray, (bl, br, tr, tl))
     vx, vy = br - bl, tl - bl
-    trans = Affine2D.from_values(
-        vx[0], vx[1], vy[0], vy[1], bl[0], bl[1]
-    ) + ax.transData
+    trans = (
+        Affine2D.from_values(vx[0], vx[1], vy[0], vy[1], bl[0], bl[1]) + ax.transData
+    )
     im = ax.imshow(
         image,
         origin="upper",
@@ -114,559 +173,615 @@ def imshow_quad(ax, image, bl, br, tr, tl, zorder=5, lw=0.7):
             [bl, br, tr, tl],
             closed=True,
             fill=False,
-            edgecolor=INK,
+            edgecolor=D.INK,
             lw=lw,
             zorder=zorder + 1,
-        )
+        ),
     )
     return im
 
 
-def _header(ax, letter: str, title: str, *, y: float = 1.08, va: str = "bottom") -> None:
-    """Letter badge + title. Default sits above the axes so it never covers the drawing."""
-    ax.text(
-        0.0,
-        y,
-        f"  {letter}  ",
-        transform=ax.transAxes,
-        fontsize=18,
-        fontweight="bold",
-        color="white",
-        ha="left",
-        va=va,
-        zorder=20,
-        clip_on=False,
-        bbox=dict(boxstyle="square,pad=0.38", facecolor=ACCENT, edgecolor="none"),
-    )
-    ax.text(
-        0.11,
-        y,
-        title,
-        transform=ax.transAxes,
-        fontsize=16.5,
-        color=INK,
-        ha="left",
-        va=va,
-        zorder=20,
-        clip_on=False,
-        fontweight="bold",
-    )
+def _paint_cube(ax, cube: np.ndarray, origin, scale: float) -> None:
+    n_s, n_em, n_ex = cube.shape
+    i_em, i_ex = int(0.50 * (n_em - 1)), int(0.52 * (n_ex - 1))
+    front = np.flipud(_hi(cube[WELL_SHOWN]))
+    right = np.flipud(_hi(cube[:, :, i_ex].T))
+    top = _hi(cube[:, i_em, :])
+    W, H, Dp = 1.55, 1.70, 1.45
 
+    def p(x, y, z):
+        return iso_xy(x, y, z, np.asarray(origin), scale=scale)
 
-def _arrow(ax, p0, p1, color, lw=2.0, style="-|>", z=8):
-    ax.add_patch(
-        FancyArrowPatch(
-            p0,
-            p1,
-            arrowstyle=style,
-            mutation_scale=13,
-            lw=lw,
-            color=color,
-            zorder=z,
-            shrinkA=0,
-            shrinkB=0,
-        )
-    )
-
-
-def _load():
-    rng = np.random.default_rng(T.SEED)
-    cube, true = T.make_mixing_cube(rng)
-    dye_eems = [np.outer(true[1][:, r], true[2][:, r]) for r in range(3)]
-    return cube, true, dye_eems
-
-
-def _scientist(ax, x: float, y: float, s: float = 1.0) -> None:
-    """Stylized scientist in a lab coat, facing the instrument (right)."""
-    ax.add_patch(Rectangle((x - 0.22 * s, y), 0.18 * s, 1.05 * s, facecolor="#2A3140", edgecolor=INK, lw=0.65, zorder=5))
-    ax.add_patch(Rectangle((x + 0.06 * s, y), 0.18 * s, 1.05 * s, facecolor="#2A3140", edgecolor=INK, lw=0.65, zorder=5))
-    ax.add_patch(Ellipse((x - 0.13 * s, y), 0.20 * s, 0.09 * s, facecolor="#1A1F28", edgecolor=INK, lw=0.4, zorder=6))
-    ax.add_patch(Ellipse((x + 0.15 * s, y), 0.20 * s, 0.09 * s, facecolor="#1A1F28", edgecolor=INK, lw=0.4, zorder=6))
-    coat = [
-        (x - 0.52 * s, y + 0.98 * s),
-        (x + 0.54 * s, y + 0.98 * s),
-        (x + 0.62 * s, y + 2.48 * s),
-        (x - 0.56 * s, y + 2.48 * s),
-    ]
-    ax.add_patch(Polygon(coat, closed=True, facecolor=COAT, edgecolor=INK, lw=1.15, zorder=6))
-    ax.add_patch(
-        Rectangle((x - 0.045 * s, y + 1.05 * s), 0.09 * s, 1.32 * s, facecolor="#E2E6EF", edgecolor=INK, lw=0.5, zorder=7)
-    )
     ax.add_patch(
         Polygon(
             [
-                (x + 0.48 * s, y + 2.22 * s),
-                (x + 1.12 * s, y + 1.82 * s),
-                (x + 1.16 * s, y + 2.02 * s),
-                (x + 0.54 * s, y + 2.42 * s),
+                p(0.14, -0.10, 0.14),
+                p(W + 0.14, -0.10, 0.14),
+                p(W + 0.14, -0.10, Dp + 0.14),
+                p(0.14, -0.10, Dp + 0.14),
             ],
             closed=True,
-            facecolor=COAT,
-            edgecolor=INK,
-            lw=0.85,
-            zorder=7,
-        )
+            facecolor=D.SHADOW,
+            edgecolor="none",
+            zorder=1,
+            alpha=0.95,
+        ),
     )
-    ax.add_patch(Circle((x + 1.20 * s, y + 1.90 * s), 0.12 * s, facecolor=SKIN, edgecolor=INK, lw=0.6, zorder=8))
-    ax.add_patch(Circle((x + 0.04 * s, y + 2.86 * s), 0.34 * s, facecolor=SKIN, edgecolor=INK, lw=0.85, zorder=8))
-    ax.add_patch(Wedge((x + 0.04 * s, y + 2.90 * s), 0.36 * s, 10, 176, facecolor=HAIR, edgecolor=INK, lw=0.5, zorder=9))
-    ax.add_patch(Ellipse((x + 0.04 * s, y + 3.14 * s), 0.48 * s, 0.18 * s, facecolor=HAIR, edgecolor=INK, lw=0.4, zorder=9))
-    ax.add_patch(
-        FancyBboxPatch(
-            (x - 0.82 * s, y + 1.52 * s),
-            0.50 * s,
-            0.68 * s,
-            boxstyle="round,pad=0.01,rounding_size=0.04",
-            facecolor="#FFFDF7",
-            edgecolor=INK,
-            lw=0.75,
-            zorder=8,
-        )
-    )
-    ax.text(x - 0.57 * s, y + 1.92 * s, "EEM", ha="center", va="center", fontsize=9, color=MUTED, zorder=9, fontweight="bold")
+    tl, tr, trz, tlz = p(0, H, 0), p(W, H, 0), p(W, H, Dp), p(0, H, Dp)
+    br, brz, bl = p(W, 0, 0), p(W, 0, Dp), p(0, 0, 0)
+    imshow_quad(ax, _to_rgb(top), tl, tr, trz, tlz, zorder=2, lw=0.9)
+    imshow_quad(ax, _to_rgb(right), br, brz, trz, tr, zorder=3, lw=0.9)
+    imshow_quad(ax, _to_rgb(front), bl, br, tr, tl, zorder=6, lw=1.1)
 
-
-def _fluorometer(ax, x0: float, y0: float, s: float = 1.0, eem: np.ndarray | None = None) -> None:
-    """Bench fluorometer: lamp, sample in the beam path, detector at 90°."""
-    W, H = 7.35 * s, 5.85 * s
-
-    ax.add_patch(
-        FancyBboxPatch(
-            (x0, y0),
-            W,
-            H,
-            boxstyle="round,pad=0.03,rounding_size=0.18",
-            facecolor="#243044",
-            edgecolor=INK,
-            lw=1.45,
-            zorder=2,
-        )
-    )
-    ax.add_patch(
-        FancyBboxPatch(
-            (x0 + 0.22 * s, y0 + 0.30 * s),
-            W - 0.44 * s,
-            H - 0.62 * s,
-            boxstyle="round,pad=0.02,rounding_size=0.12",
-            facecolor="#1A2333",
-            edgecolor="#3A465A",
-            lw=0.85,
-            zorder=3,
-        )
-    )
+    D.arrow(ax, bl + [0.0, -0.30], br + [0.0, -0.30], color=D.INK, lw=1.4, head=8)
+    D.arrow(ax, br + [0.0, -0.30], bl + [0.0, -0.30], color=D.INK, lw=1.4, head=8)
     ax.text(
-        x0 + 0.50 * W,
-        y0 + H - 0.48 * s,
-        "spectrofluorometer",
+        *((bl + br) / 2 + np.array([0.0, -0.58])),
+        f"excitation colour  {n_ex}",
         ha="center",
-        fontsize=12,
-        color="#D7DCE6",
+        fontsize=SMALL,
         fontweight="bold",
-        zorder=12,
+        zorder=15,
     )
-
-    # Lamp
-    ax.add_patch(
-        FancyBboxPatch(
-            (x0 + 0.40 * s, y0 + 2.05 * s),
-            1.28 * s,
-            1.72 * s,
-            boxstyle="round,pad=0.02,rounding_size=0.09",
-            facecolor="#3D3420",
-            edgecolor=GOLD,
-            lw=1.15,
-            zorder=4,
-        )
-    )
-    ax.add_patch(
-        Circle((x0 + 1.04 * s, y0 + 2.95 * s), 0.34 * s, facecolor=GOLD, edgecolor="#F6E7A8", lw=0.7, zorder=5, alpha=0.95)
-    )
-    ax.add_patch(Circle((x0 + 1.04 * s, y0 + 2.95 * s), 0.52 * s, facecolor=GOLD, edgecolor="none", lw=0, zorder=4, alpha=0.18))
-    ax.text(x0 + 1.04 * s, y0 + 2.22 * s, "lamp", ha="center", fontsize=10, color="#F6E7A8", zorder=6)
-
-    # Excitation beam through the cuvette
-    beam = [
-        (x0 + 1.70 * s, y0 + 2.72 * s),
-        (x0 + 1.70 * s, y0 + 3.18 * s),
-        (x0 + 4.05 * s, y0 + 3.28 * s),
-        (x0 + 4.05 * s, y0 + 2.62 * s),
-    ]
-    ax.add_patch(Polygon(beam, closed=True, facecolor=GOLD, edgecolor="none", alpha=0.62, zorder=5))
-    ax.add_patch(Polygon(beam, closed=True, facecolor="#FFF3B8", edgecolor="none", alpha=0.28, zorder=5))
+    D.arrow(ax, bl + [-0.34, 0.0], tl + [-0.34, 0.0], color=D.INK, lw=1.4, head=8)
+    D.arrow(ax, tl + [-0.34, 0.0], bl + [-0.34, 0.0], color=D.INK, lw=1.4, head=8)
     ax.text(
-        x0 + 2.70 * s,
-        y0 + 3.52 * s,
-        r"excitation beam  $\lambda_{\mathrm{ex}}$",
-        fontsize=11,
-        color=GOLD,
-        ha="center",
-        zorder=12,
-        fontweight="bold",
-    )
-
-    # Sample cuvette in the beam
-    cx, cy = x0 + 4.22 * s, y0 + 2.28 * s
-    ax.add_patch(
-        Rectangle((cx, cy), 0.82 * s, 1.52 * s, facecolor="#8FD0E8", edgecolor="#EAF6FB", lw=1.2, alpha=0.90, zorder=7)
-    )
-    ax.add_patch(
-        Rectangle((cx - 0.07 * s, cy + 1.44 * s), 0.96 * s, 0.18 * s, facecolor="#D7DEE8", edgecolor=INK, lw=0.65, zorder=8)
-    )
-    for dx, dy, col, r in (
-        (0.24 * s, 0.58 * s, ACCENT, 0.22 * s),
-        (0.46 * s, 0.44 * s, TEAL, 0.20 * s),
-        (0.38 * s, 0.82 * s, CORAL, 0.17 * s),
-    ):
-        ax.add_patch(Circle((cx + dx, cy + dy), r, facecolor=col, edgecolor="white", lw=0.45, alpha=0.58, zorder=9))
-    ax.text(
-        cx + 0.41 * s,
-        cy - 0.38 * s,
-        "sample",
-        ha="center",
-        fontsize=11,
-        color="#E8EDF5",
-        zorder=12,
-        fontweight="bold",
-    )
-
-    # Emission beam at 90°
-    em = [
-        (cx + 0.24 * s, cy + 1.52 * s),
-        (cx + 0.58 * s, cy + 1.52 * s),
-        (cx + 0.70 * s, y0 + 4.42 * s),
-        (cx + 0.18 * s, y0 + 4.42 * s),
-    ]
-    ax.add_patch(Polygon(em, closed=True, facecolor=CORAL, edgecolor="none", alpha=0.55, zorder=6))
-    ax.text(
-        cx + 1.22 * s,
-        y0 + 3.92 * s,
-        r"emission beam  $\lambda_{\mathrm{em}}$",
-        fontsize=11,
-        color="#F3C1B3",
-        ha="left",
-        zorder=12,
-        fontweight="bold",
-    )
-
-    ax.add_patch(
-        FancyBboxPatch(
-            (cx - 0.18 * s, y0 + 4.32 * s),
-            1.18 * s,
-            0.62 * s,
-            boxstyle="round,pad=0.015,rounding_size=0.07",
-            facecolor="#3A2A58",
-            edgecolor=ACCENT,
-            lw=1.15,
-            zorder=8,
-        )
-    )
-    ax.text(cx + 0.41 * s, y0 + 4.63 * s, "detector", ha="center", va="center", fontsize=10, color="#EDE4FF", zorder=9)
-
-    # Live EEM on the instrument screen
-    sx, sy, sw, sh = x0 + 5.55 * s, y0 + 1.15 * s, 1.42 * s, 1.62 * s
-    ax.add_patch(
-        FancyBboxPatch(
-            (sx, sy),
-            sw,
-            sh,
-            boxstyle="round,pad=0.02,rounding_size=0.08",
-            facecolor="#0E131C",
-            edgecolor="#6B7384",
-            lw=0.85,
-            zorder=6,
-        )
-    )
-    if eem is not None:
-        pad = 0.10 * s
-        ax.imshow(
-            _to_rgb(np.flipud(_hi(eem, 8))),
-            origin="upper",
-            extent=(sx + pad, sx + sw - pad, sy + pad, sy + sh - 0.32 * s),
-            aspect="auto",
-            interpolation="bicubic",
-            zorder=7,
-        )
-    ax.text(sx + 0.50 * sw, sy + sh - 0.16 * s, "live EEM", ha="center", fontsize=9, color="#AEB6C4", zorder=8)
-
-
-def _draw_assay(ax, true: list[np.ndarray], cube: np.ndarray) -> None:
-    ax.set_xlim(0, 13.4)
-    ax.set_ylim(-0.05, 11.2)
-    ax.set_facecolor(CARD)
-    ax.axis("off")
-    for spine in ax.spines.values():
-        spine.set_visible(True)
-        spine.set_color(RULE)
-    _header(ax, "A", "A scientist records one map per well")
-
-    _scientist(ax, 1.55, 3.15, s=1.42)
-    _fluorometer(ax, 4.55, 3.05, s=1.08, eem=cube[10])
-
-    ax.text(
-        8.4,
-        2.55,
-        "Shine one colour.  Collect another.  Sweep both.",
-        ha="center",
-        va="top",
-        fontsize=13.5,
-        color=INK,
-    )
-
-    amounts = true[0] / (true[0].max(axis=0, keepdims=True) + 1e-12)
-    n_s = cube.shape[0]
-    ax.text(0.55, 1.15, f"{n_s} wells", ha="left", va="center", fontsize=12, color=MUTED, fontweight="bold")
-    ax.text(
-        8.4,
-        1.55,
-        "One well  →  one emission × excitation map.",
-        ha="center",
-        fontsize=13.5,
-        color=INK,
-    )
-    x0, y0, rad = 2.35, 0.42, 0.18
-    span = 13.4 - x0 - 0.55
-    step = span / n_s
-    for i in range(n_s):
-        w = amounts[i]
-        w = w / (w.sum() + 1e-12)
-        rgb = np.clip(
-            w[0] * np.array([0x4A, 0x3A, 0xA7]) / 255
-            + w[1] * np.array([0x2A, 0x9D, 0x8F]) / 255
-            + w[2] * np.array([0xE0, 0x7A, 0x5F]) / 255,
-            0,
-            1,
-        )
-        ax.add_patch(
-            Circle(
-                (x0 + (i + 0.5) * step, y0),
-                rad,
-                facecolor=rgb,
-                edgecolor="white",
-                lw=0.6,
-                zorder=4,
-            )
-        )
-
-
-def _dim_arrow(ax, p0, p1, label, outward=0.22):
-    p0, p1 = np.asarray(p0, dtype=float), np.asarray(p1, dtype=float)
-    ax.annotate(
-        "",
-        xy=p1,
-        xytext=p0,
-        arrowprops=dict(arrowstyle="<->", color=INK, lw=1.35, shrinkA=0, shrinkB=0),
-        zorder=14,
-    )
-    mid = (p0 + p1) / 2
-    v = p1 - p0
-    n = np.array([-v[1], v[0]])
-    n = n / (float(np.linalg.norm(n)) + 1e-9)
-    loc = mid + n * outward
-    ax.text(loc[0], loc[1], label, ha="center", va="center", fontsize=13.5, color=INK, fontweight="bold", zorder=15)
-
-
-def _draw_cube(ax, cube: np.ndarray) -> None:
-    ax.set_xlim(0, 11.6)
-    ax.set_ylim(-0.15, 11.4)
-    ax.set_facecolor(CARD)
-    ax.axis("off")
-    for spine in ax.spines.values():
-        spine.set_visible(True)
-        spine.set_color(RULE)
-    n_s, n_em, n_ex = cube.shape
-    _header(ax, "B", rf"Those maps stack into a tensor  ${n_s}\times {n_em}\times {n_ex}$")
-
-    i_s, i_em, i_ex = 10, int(0.50 * (n_em - 1)), int(0.52 * (n_ex - 1))
-    front = np.flipud(_hi(cube[i_s]))
-    right = np.flipud(_hi(cube[:, :, i_ex].T))
-    top = _hi(cube[:, i_em, :])
-
-    origin = np.array([2.35, 3.35])
-    scale, W, H, D = 3.15, 1.55, 1.70, 1.45
-    p = lambda x, y, z: iso_xy(x, y, z, origin, scale=scale)
-
-    sh = [p(0.14, -0.10, 0.14), p(W + 0.14, -0.10, 0.14), p(W + 0.14, -0.10, D + 0.14), p(0.14, -0.10, D + 0.14)]
-    ax.add_patch(Polygon(sh, closed=True, facecolor="#DEE2EA", edgecolor="none", zorder=1, alpha=0.95))
-
-    tl, tr, trz, tlz = p(0, H, 0), p(W, H, 0), p(W, H, D), p(0, H, D)
-    br, brz = p(W, 0, 0), p(W, 0, D)
-    bl = p(0, 0, 0)
-
-    imshow_quad(ax, _to_rgb(top), tl, tr, trz, tlz, zorder=2, lw=0.85)
-    imshow_quad(ax, _to_rgb(right), br, brz, trz, tr, zorder=3, lw=0.85)
-    imshow_quad(ax, _to_rgb(front), bl, br, tr, tl, zorder=6, lw=1.0)
-
-    _dim_arrow(ax, bl + np.array([0.0, -0.62]), br + np.array([0.0, -0.62]), f"excitation   {n_ex}", outward=-0.50)
-    ax.annotate(
-        "",
-        xy=tl + np.array([-0.72, 0.0]),
-        xytext=bl + np.array([-0.72, 0.0]),
-        arrowprops=dict(arrowstyle="<->", color=INK, lw=1.45, shrinkA=0, shrinkB=0),
-        zorder=14,
-    )
-    ax.text(
-        *( (bl + tl) / 2 + np.array([-1.28, 0.0]) ),
-        f"emission   {n_em}",
+        *((bl + tl) / 2 + np.array([-0.52, 0.0])),
+        f"emission colour  {n_em}",
         ha="center",
         va="center",
-        fontsize=13.5,
-        color=INK,
+        fontsize=SMALL,
         fontweight="bold",
         rotation=90,
         zorder=15,
     )
-    p0 = br + np.array([0.78, -0.28])
-    p1 = brz + np.array([1.05, 0.22])
-    ax.annotate(
-        "",
-        xy=p1,
-        xytext=p0,
-        arrowprops=dict(arrowstyle="<->", color=INK, lw=1.45, shrinkA=0, shrinkB=0),
-        zorder=14,
-    )
-    mid = (p0 + p1) / 2
+    p0, p1 = br + np.array([0.30, -0.10]), brz + np.array([0.42, 0.12])
+    D.arrow(ax, p0, p1, color=D.INK, lw=1.4, head=8)
+    D.arrow(ax, p1, p0, color=D.INK, lw=1.4, head=8)
     ax.text(
-        mid[0] + 0.92,
-        mid[1] + 0.08,
-        f"sample   {n_s}",
+        *((p0 + p1) / 2 + np.array([0.52, 0.04])),
+        f"sample (well)  {n_s}",
         ha="center",
-        va="center",
-        fontsize=13.5,
-        color=INK,
+        fontsize=TINY,
         fontweight="bold",
+        rotation=26,
         zorder=15,
-        rotation=28,
     )
-
     ax.text(
-        *( (bl + tr) / 2 + np.array([0.0, 0.12]) ),
-        "front  =  one well",
-        fontsize=11,
+        *((bl + tr) / 2 + np.array([0.0, 0.06])),
+        "front = one well",
+        fontsize=TINY,
         color="white",
         ha="center",
         zorder=12,
-        path_effects=[withStroke(linewidth=3.2, foreground=INK)],
+        path_effects=[withStroke(linewidth=3.0, foreground=D.INK)],
     )
 
+
+# --- panels ----------------------------------------------------------------
+
+
+def _header(ax) -> None:
     ax.text(
-        5.9,
-        1.55,
+        0.55,
+        14.40,
+        "You want dye amounts. You measure intensity.",
+        fontsize=TITLE,
+        fontweight="bold",
+        va="center",
+        zorder=5,
+    )
+    ax.text(
+        0.55,
+        13.82,
+        "Twenty wells × emission colour × excitation colour is a 3-way tensor. "
+        "Dye is a factor, not an axis.",
+        fontsize=SUB,
+        color=D.MUTED,
+        va="center",
+        zorder=5,
+    )
+    D.pill(
+        ax,
+        21.75,
+        14.28,
+        "synthetic · seed 7 · no wet-lab data",
+        fs=SMALL,
+        h=0.56,
+    )
+
+
+def _row_reading(fig, ax, scene) -> None:
+    """Row 1: samples and settings in, one observation out, stacked to a tensor."""
+    x0, y0, w, h = 0.35, 9.05, 23.30, 4.50
+    D.card(ax, x0, y0, w, h)
+    n_s, n_em, n_ex = scene["shape"]
+    i_em, i_ex = 12, 9  # the pair of colours the drawn reading is taken at
+    pick_ex, pick_em = D.SPECTRUM[1], D.SPECTRUM[5]
+
+    ax.text(
+        x0 + 0.30,
+        y0 + h - 0.40,
+        "One reading at a time: settings in, one observation out",
+        fontsize=CARD_T,
+        fontweight="bold",
+        va="center",
+        zorder=6,
+    )
+    for label, text, bx in (
+        ("1", "The samples", 0.75),
+        ("2", "The settings", 4.90),
+        ("3", "The instrument", 8.40),
+        ("4", "The observation", 14.60),
+        ("5", "The tensor", 17.55),
+    ):
+        D.badge(ax, bx, 12.80, label, r=0.20, fs=BODY)
+        ax.text(
+            bx + 0.30,
+            12.80,
+            text,
+            fontsize=LEAD,
+            fontweight="bold",
+            va="center",
+            zorder=6,
+        )
+
+    # 1 — someone makes up twenty wells of mixed dye
+    for i, color in enumerate(D.DYE):
+        D.droplet(ax, 2.86 + i * 0.46, 11.92, 0.36, color)
+    # Plate first: the pipette then reaches over it rather than behind it.
+    D.plate(ax, 3.02, 10.52, 0.70, scene["true_s"], ring=WELL_SHOWN)
+    D.scientist(ax, 1.62, 11.08, 1.30, z=12)
+    ax.text(
+        2.60,
+        9.58,
+        "three dyes, unknown amounts, in 20 wells",
+        ha="center",
+        fontsize=SMALL,
+        color=D.MUTED,
+        zorder=6,
+    )
+
+    # 2 — the console: everything the operator chooses
+    D.settings_panel(
+        ax,
+        4.85,
+        10.15,
+        3.20,
+        2.25,
+        [
+            ("well", f"{WELL_SHOWN + 1} of {n_s}", None),
+            ("excitation", f"{i_ex + 1} of {n_ex}", pick_ex),
+            ("emission", f"{i_em + 1} of {n_em}", pick_em),
+        ],
+        header="inputs you set",
+        fs=SMALL,
+    )
+    D.arrow(ax, (8.12, 11.28), (8.42, 11.28), color=D.MUTED, lw=1.8)
+
+    # 3 — the optics, one well at a time
+    top, bot = 11.85, 10.30
+    D.lamp(ax, 8.85, top, 0.70)
+    D.beam(
+        ax,
+        (9.22, top),
+        (9.90, top + 0.02),
+        0.09,
+        0.18,
+        D.wash(D.AMBER, 0.25),
+        alpha=0.65,
+    )
+    D.prism(ax, 10.10, top, 0.70)
+    D.fan(ax, (10.28, top + 0.02), 11.22, 0.29)
+    D.beam(ax, (11.18, top), (12.14, top), 0.09, 0.12, pick_ex, alpha=0.9, z=8)
+    D.slit(ax, 11.28, top, 0.78, gap=0.12)
+    D.well(ax, 12.42, top, 0.85, weights=scene["true_s"][WELL_SHOWN])
+
+    D.beam(ax, (12.42, top - 0.38), (12.42, bot), 0.10, 0.09, pick_em, alpha=0.85)
+    D.beam(ax, (12.38, bot), (12.86, bot), 0.09, 0.12, pick_em, alpha=0.85)
+    D.prism(ax, 13.15, bot, 0.66)
+    D.fan(ax, (13.32, bot + 0.02), 14.06, 0.25)
+    D.beam(ax, (14.02, bot), (14.58, bot), 0.08, 0.10, pick_em, alpha=0.9, z=8)
+    D.slit(ax, 14.12, bot, 0.72, gap=0.12)
+    D.detector(ax, 14.92, bot, 0.72)
+
+    for x, text in ((8.85, "lamp"), (10.75, "excitation colour"), (12.42, "one well")):
+        ax.text(
+            x,
+            top + 0.55,
+            text,
+            ha="center",
+            fontsize=BODY,
+            fontweight="bold",
+            zorder=8,
+        )
+    ax.text(
+        13.45,
+        bot - 0.58,
+        "emission colour",
+        ha="center",
+        fontsize=BODY,
+        fontweight="bold",
+        zorder=8,
+    )
+    ax.text(
+        12.62,
+        11.02,
+        "read at 90°",
+        ha="left",
+        fontsize=SMALL,
+        color=D.MUTED,
+        zorder=8,
+    )
+
+    # 4 — what comes back is one number
+    reading = float(scene["cube"][WELL_SHOWN, i_em, i_ex])
+    D.arrow(ax, (15.34, bot), (15.54, bot), color=D.MUTED, lw=1.8)
+    D.card(ax, 15.58, 9.92, 1.70, 0.98, fc="#F4F6FC", z=6, rs=0.10)
+    ax.text(
+        16.43,
+        10.60,
+        f"{reading:.2f}",
+        ha="center",
+        va="center",
+        fontsize=24,
+        fontweight="bold",
+        color=D.ACCENT,
+        zorder=8,
+    )
+    ax.text(
+        16.43,
+        10.20,
+        "intensity",
+        ha="center",
+        va="center",
+        fontsize=SMALL,
+        color=D.MUTED,
+        zorder=8,
+    )
+    ax.text(
+        16.43,
+        11.14,
+        "one observation",
+        ha="center",
+        fontsize=BODY,
+        fontweight="bold",
+        zorder=8,
+    )
+
+    # 5 — sweep the colours for one map, stack the wells for the tensor
+    axm = _ax(fig, 17.72, 10.20, 1.25, 1.25)
+    _map_axes(
+        axm,
+        scene["cube"][WELL_SHOWN],
+        "inferno",
+        title="one map",
+        xlabel="all colour pairs",
+    )
+    D.arrow(ax, (19.14, 10.82), (19.44, 10.82), color=D.MUTED, lw=1.8)
+    ax.text(
+        19.29,
+        11.06,
+        f"×{n_s}",
+        ha="center",
+        fontsize=SMALL,
+        color=D.MUTED,
+        zorder=8,
+    )
+    _paint_cube(ax, scene["cube"], origin=(20.12, 10.20), scale=0.92)
+    ax.text(
+        21.80,
+        12.10,
         rf"$\mathcal{{X}}\in\mathbb{{R}}^{{{n_s}\times {n_em}\times {n_ex}}}$",
         ha="center",
-        fontsize=18,
-        color=ACCENT,
+        fontsize=LEAD,
+        color=D.ACCENT,
         fontweight="bold",
+        zorder=8,
+    )
+
+    ax.text(
+        12.60,
+        9.30,
+        f"Sweep both colour settings over one well and the observations make a map. "
+        f"Stack the {n_s} wells and they make the tensor: "
+        f"{n_s} × {n_em} × {n_ex} = {n_s * n_em * n_ex:,} readings, one number each.",
+        ha="center",
+        fontsize=BODY,
+        color=D.MUTED,
+        zorder=6,
+    )
+
+
+def _row_makeup(fig, ax, scene) -> None:
+    x0, y0, w, h = 0.35, 5.35, 23.30, 3.50
+    D.card(ax, x0, y0, w, h, fc="#FBFBFE")
+    ax.text(
+        x0 + 0.30,
+        y0 + h - 0.42,
+        "What the cube is made of",
+        fontsize=CARD_T,
+        fontweight="bold",
+        va="center",
+        zorder=6,
     )
     ax.text(
-        5.9,
-        0.95,
-        r"sample $\times$ emission $\times$ excitation",
-        ha="center",
-        fontsize=14.5,
-        color=MUTED,
+        x0 + 0.30,
+        y0 + h - 0.98,
+        "observed cube  =  dye A  +  dye B  +  dye C  +  noise",
+        fontsize=LEAD,
+        va="center",
+        zorder=6,
     )
     ax.text(
-        5.9,
-        0.32,
-        r"$\mathcal{X}\;\approx\;a_1\circ b_1\circ c_1\;+\;a_2\circ b_2\circ c_2\;+\;a_3\circ b_3\circ c_3$",
+        x0 + 0.30,
+        y0 + h - 1.44,
+        "one dye  =  amount\n∘  emission spectrum\n∘  excitation spectrum",
+        fontsize=SMALL,
+        color=D.MUTED,
+        va="top",
+        linespacing=1.5,
+        zorder=6,
+    )
+    D.rank_one_chip(ax, 1.95, 6.30, 1.05, D.ACCENT)
+    ax.text(
+        1.95,
+        5.72,
+        "a rank-1 tensor",
         ha="center",
-        fontsize=13.5,
-        color=INK,
+        fontsize=SMALL,
+        color=D.MUTED,
+        zorder=6,
     )
 
-
-def _draw_dyes(fig, gs, true, dye_eems) -> None:
-    inner = gs.subgridspec(3, 3, height_ratios=[0.52, 1.45, 0.95], hspace=0.38, wspace=0.32)
-    ax_tag = fig.add_subplot(inner[0, :])
-    ax_tag.set_xlim(0, 1)
-    ax_tag.set_ylim(0, 1)
-    ax_tag.axis("off")
-    ax_tag.set_facecolor("white")
-    _header(ax_tag, "C", "Each dye is one outer product — a map times an amount", y=0.42, va="center")
-
-    em = true[1] / (np.max(np.abs(true[1]), axis=0, keepdims=True) + 1e-12)
-    ex = true[2] / (np.max(np.abs(true[2]), axis=0, keepdims=True) + 1e-12)
-    x_em = np.linspace(0, 1, em.shape[0])
-    x_ex = np.linspace(0, 1, ex.shape[0])
-
-    for r, color in enumerate(DYE):
-        ax = fig.add_subplot(inner[1, r])
-        z = np.flipud(_hi(dye_eems[r], 12))
-        ax.imshow(z, origin="upper", aspect="auto", cmap=_cmap(color), interpolation="bicubic")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        ax.set_xlabel(r"excitation $\rightarrow$", fontsize=11)
+    dye_eems = scene["dye_eems"]
+    em = T.unit_peak(scene["true"][1])
+    ex = T.unit_peak(scene["true"][2])
+    for r, color in enumerate(D.DYE):
+        left = 4.35 + r * 3.30
+        axm = _ax(fig, left, 5.95, 1.35, 1.55)
+        _map_axes(
+            axm,
+            dye_eems[r],
+            _cmap(color),
+            title=D.NAMES[r],
+            title_color=color,
+            xlabel="excitation →",
+            ylabel="emission →" if r == 0 else "",
+        )
+        axs = _ax(fig, left + 1.55, 5.95, 1.35, 1.55)
+        axs.plot(
+            np.linspace(0, 1, ex.shape[0]),
+            ex[:, r],
+            color=color,
+            lw=2.2,
+            label="excitation",
+        )
+        axs.plot(
+            np.linspace(0, 1, em.shape[0]),
+            em[:, r],
+            color=color,
+            lw=1.6,
+            ls="--",
+            alpha=0.9,
+            label="emission",
+        )
+        axs.fill_between(
+            np.linspace(0, 1, ex.shape[0]),
+            ex[:, r],
+            color=color,
+            alpha=0.12,
+        )
+        axs.set_xlim(0, 1)
+        axs.set_ylim(0, 1.30)
+        axs.set_yticks([])
+        axs.set_xticks([])
+        axs.set_title("its two spectra", fontsize=SMALL, pad=4)
+        axs.set_xlabel("colour →", fontsize=TINY)
+        axs.spines["left"].set_visible(False)
+        axs.spines["bottom"].set_color(D.RULE)
         if r == 0:
-            ax.set_ylabel(r"emission $\rightarrow$", fontsize=11)
-        ax.set_title(NAMES[r], fontsize=13, color=color, pad=8, fontweight="bold")
-        for spine in ax.spines.values():
-            spine.set_visible(True)
-            spine.set_color(RULE)
+            axs.legend(
+                frameon=False,
+                fontsize=TINY,
+                loc="upper left",
+                handlelength=1.2,
+                borderpad=0.1,
+                labelspacing=0.2,
+            )
 
-        ax2 = fig.add_subplot(inner[2, r])
-        ax2.plot(x_ex, ex[:, r], color=color, lw=2.3, label="excitation")
-        ax2.plot(x_em, em[:, r], color=color, lw=1.7, ls="--", alpha=0.9, label="emission")
-        ax2.fill_between(x_ex, ex[:, r], color=color, alpha=0.12)
-        ax2.set_xlim(0, 1)
-        ax2.set_ylim(0, 1.12)
-        ax2.set_xlabel(r"colour $\rightarrow$", fontsize=11)
-        ax2.set_yticks([])
-        ax2.spines["left"].set_visible(False)
-        if r == 2:
-            ax2.legend(frameon=False, fontsize=10, loc="upper left")
+    axa = _ax(fig, 15.55, 5.95, 7.55, 1.55)
+    x = np.arange(scene["true_s"].shape[0])
+    for r, color in enumerate(D.DYE):
+        axa.plot(
+            x,
+            scene["true_s"][:, r],
+            color=color,
+            lw=2.4,
+            label=D.NAMES[r],
+            zorder=3,
+        )
+        axa.fill_between(x, scene["true_s"][:, r], color=color, alpha=0.08, zorder=2)
+    axa.set_ylim(-0.04, 1.42)
+    _amount_axes(axa, "the amounts overlap — most wells are mixes")
+    axa.legend(frameon=False, ncol=3, fontsize=TINY, loc="upper right")
 
 
-def _draw_amounts(ax, true) -> None:
-    amounts = true[0] / (np.max(np.abs(true[0]), axis=0, keepdims=True) + 1e-12)
-    x = np.arange(amounts.shape[0])
-    _header(ax, "D", "Amounts overlap — most wells are mixes")
-    for r, color in enumerate(DYE):
-        ax.plot(x, amounts[:, r], color=color, lw=2.6, label=NAMES[r], zorder=3)
-        ax.fill_between(x, amounts[:, r], color=color, alpha=0.08, zorder=2)
-    ax.set_xlim(-0.4, 19.4)
-    ax.set_ylim(-0.04, 1.42)
-    ax.set_xlabel("well (sample)", fontsize=12)
-    ax.set_ylabel("amount", fontsize=12)
-    ax.yaxis.grid(True, color="#EEF0F4", zorder=0)
-    ax.set_axisbelow(True)
-    ax.legend(frameon=False, ncol=3, fontsize=11, loc="upper right")
-    ax.tick_params(axis="x", length=0, labelsize=11)
-    ax.tick_params(axis="y", labelsize=11)
-    ax.spines["left"].set_color(RULE)
-    ax.spines["bottom"].set_color(RULE)
+def _card_cp(fig, ax, scene) -> None:
+    x0, y0, w, h = 0.35, 0.35, 11.45, 4.40
+    D.card(ax, x0, y0, w, h)
+    D.badge(ax, x0 + 0.42, y0 + h - 0.44, "A", color=D.GREEN, r=0.25, fs=LEAD)
+    ax.text(
+        x0 + 0.80,
+        y0 + h - 0.44,
+        "CP keeps the three axes — the dyes come back",
+        fontsize=CARD_T,
+        fontweight="bold",
+        va="center",
+        zorder=6,
+    )
+    ax.text(
+        x0 + 0.80,
+        y0 + h - 0.88,
+        "three outer products, one per dye: amount ∘ emission ∘ excitation",
+        fontsize=SMALL,
+        color=D.MUTED,
+        va="center",
+        zorder=6,
+    )
+
+    for r, color in enumerate(D.DYE):
+        axm = _ax(fig, 0.80 + r * 1.60, 1.95, 1.35, 1.35)
+        _map_axes(
+            axm,
+            scene["cp_eems"][r],
+            _cmap(color),
+            title=f"CP {D.NAMES[r]}",
+            title_color=color,
+            ylabel="emission →" if r == 0 else "",
+            xlabel="excitation →",
+        )
+    axa = _ax(fig, 6.30, 1.95, 5.05, 1.35)
+    x = np.arange(scene["true_s"].shape[0])
+    for r, color in enumerate(D.DYE):
+        axa.plot(x, scene["true_s"][:, r], color=color, lw=2.3, zorder=3)
+        axa.plot(x, scene["cp_s"][:, r], color=color, lw=1.5, ls="--", zorder=4)
+    axa.set_ylim(-0.10, 1.30)
+    _amount_axes(axa, "amounts: true (solid) vs CP (dashed)")
+
+    D.tick(ax, x0 + 0.55, 1.10, 1.0)
+    ax.text(
+        x0 + 0.90,
+        1.10,
+        f"amount correlation {scene['mean_cp_corr']:.2f}   ·   "
+        f"leftover error {scene['cp_rel_error']:.3f}, which is the noise that was added",
+        fontsize=BODY,
+        va="center",
+        zorder=6,
+    )
+    ax.text(
+        x0 + 0.90,
+        0.66,
+        "Kruskal at rank 3: $k_A+k_B+k_C\\geq 2R+2$, so the split is unique "
+        "up to relabelling and scale.",
+        fontsize=SMALL,
+        color=D.MUTED,
+        va="center",
+        zorder=6,
+    )
+
+
+def _card_svd(fig, ax, scene) -> None:
+    x0, y0, w, h = 12.20, 0.35, 11.45, 4.40
+    n_s, n_em, n_ex = scene["shape"]
+    D.card(ax, x0, y0, w, h)
+    D.badge(ax, x0 + 0.42, y0 + h - 0.44, "B", color=D.RED, r=0.25, fs=LEAD)
+    ax.text(
+        x0 + 0.80,
+        y0 + h - 0.44,
+        "Flatten first, then SVD — mixed dyes",
+        fontsize=CARD_T,
+        fontweight="bold",
+        va="center",
+        zorder=6,
+    )
+    ax.text(
+        x0 + 0.80,
+        y0 + h - 0.88,
+        f"each map stacked into one long row: a {n_s} × {n_em * n_ex} matrix",
+        fontsize=SMALL,
+        color=D.MUTED,
+        va="center",
+        zorder=6,
+    )
+
+    for r in range(3):
+        axm = _ax(fig, 12.65 + r * 1.60, 1.95, 1.35, 1.35)
+        _map_axes(
+            axm,
+            scene["svd_eems"][r],
+            DIVERGING,
+            title=f"SVD map {r + 1}",
+            title_color=D.MUTED,
+            signed=True,
+            ylabel="emission →" if r == 0 else "",
+            xlabel="excitation →",
+        )
+    axa = _ax(fig, 18.15, 1.95, 5.05, 1.35)
+    x = np.arange(scene["true_s"].shape[0])
+    for r, color in enumerate(D.DYE):
+        axa.plot(x, scene["true_s"][:, r], color=color, lw=2.3, zorder=3)
+        axa.plot(x, scene["svd_s"][:, r], color=color, lw=1.5, ls="--", zorder=4)
+    axa.axhline(0.0, color=D.INK, lw=1.0, zorder=2)
+    axa.set_ylim(-1.15, 1.30)
+    _amount_axes(axa, "amounts: true (solid) vs SVD (dashed)")
+
+    D.flatten_icon(ax, 13.35, 1.10, 0.72)
+    D.cross(ax, 14.70, 1.10, 1.0)
+    ax.text(
+        15.05,
+        1.10,
+        f"amount correlation {scene['mean_svd_corr']:.3f}   ·   amounts go negative",
+        fontsize=BODY,
+        va="center",
+        zorder=6,
+    )
+    ax.text(
+        x0 + 0.90,
+        0.66,
+        "The unfolding reconstructs the matrix well and still misses the sources: "
+        "these maps are mixes.",
+        fontsize=SMALL,
+        color=D.MUTED,
+        va="center",
+        zorder=6,
+    )
+
+
+def _connectors(ax) -> None:
+    D.arrow(ax, (6.08, 5.30), (6.08, 4.82), color=D.GREEN, lw=1.8)
+    D.arrow(ax, (17.93, 5.30), (17.93, 4.82), color=D.RED, lw=1.8)
+    ax.text(
+        6.23,
+        5.06,
+        "factor the cube",
+        fontsize=SMALL,
+        color=D.GREEN,
+        va="center",
+        zorder=14,
+    )
+    ax.text(
+        18.08,
+        5.06,
+        "flatten the cube",
+        fontsize=SMALL,
+        color=D.RED,
+        va="center",
+        zorder=14,
+    )
 
 
 def draw_poster(fig: plt.Figure | None = None) -> plt.Figure:
     _style()
-    cube, true, dye_eems = _load()
-    size = (16.2, 12.4)
+    scene = T.mixing_scene()
     if fig is None:
-        fig = plt.figure(figsize=size, facecolor="white", dpi=240)
+        fig = plt.figure(figsize=(W_FIG, H_FIG), facecolor=D.PAGE, dpi=DPI)
     else:
-        fig.set_size_inches(*size)
-        fig.set_facecolor("white")
+        fig.set_size_inches(W_FIG, H_FIG)
+        fig.set_facecolor(D.PAGE)
     fig.clf()
-    gs = fig.add_gridspec(
-        3,
-        2,
-        height_ratios=[1.85, 1.55, 1.05],
-        width_ratios=[1.20, 1.22],
-        hspace=0.48,
-        wspace=0.18,
-        left=0.042,
-        right=0.975,
-        top=0.915,
-        bottom=0.052,
-    )
-    ax_a = fig.add_subplot(gs[0, 0])
-    ax_b = fig.add_subplot(gs[0, 1])
-    _draw_assay(ax_a, true, cube)
-    _draw_cube(ax_b, cube)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, W_FIG)
+    ax.set_ylim(0, H_FIG)
+    ax.axis("off")
+    ax.set_facecolor(D.PAGE)
 
-    _draw_dyes(fig, gs[1, :], true, dye_eems)
-
-    ax_d = fig.add_subplot(gs[2, :])
-    _draw_amounts(ax_d, true)
+    _header(ax)
+    _row_reading(fig, ax, scene)
+    _row_makeup(fig, ax, scene)
+    _card_cp(fig, ax, scene)
+    _card_svd(fig, ax, scene)
+    _connectors(ax)
     return fig
 
 
@@ -674,14 +789,18 @@ def write_png(path: Path | None = None) -> Path:
     dest = Path(path) if path is not None else OUT
     dest.parent.mkdir(parents=True, exist_ok=True)
     fig = draw_poster()
-    fig.savefig(dest, dpi=280, facecolor="white", bbox_inches="tight", pad_inches=0.28)
+    fig.savefig(dest, dpi=DPI, facecolor=D.PAGE, bbox_inches="tight", pad_inches=0.18)
     plt.close(fig)
     return dest
 
 
 def main() -> None:
     path = write_png(OUT)
-    print(f"wrote {path} ({path.stat().st_size / 1024:.0f} KB)  {__import__('PIL').Image.open(path).size}")
+    from PIL import Image
+
+    print(
+        f"wrote {path} ({path.stat().st_size / 1024:.0f} KB)  {Image.open(path).size}",
+    )
 
 
 if __name__ == "__main__":
