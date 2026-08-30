@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Blocks a bare `python` / `python3` / `pip` in command position.
+# Wired up as a PreToolUse hook on Bash in .claude/settings.json.
+# Policy lives in CLAUDE.md: name the interpreter, never inherit one.
+#
+# A bare `python3` on this machine is Homebrew's, not this repo's. It is wrong
+# even for a throwaway one-liner or a stdlib-only script, because "it does not
+# import anything" is exactly the reasoning that ends with `pip install` into an
+# externally-managed environment, or an `http.server` running for hours on the
+# wrong interpreter.
+set -uo pipefail
+
+# Fail open rather than breaking every Bash call, but say so — a policy hook
+# that silently stops enforcing is worse than one that is obviously off.
+if ! command -v jq >/dev/null 2>&1; then
+  echo "block-bare-python: jq not found; interpreter policy NOT enforced" >&2
+  exit 0
+fi
+
+cmd=$(jq -r '.tool_input.command // ""')
+
+# Only intervene when the interpreter is in *command position*: at the start of
+# the command, or right after a shell operator (`;`, `&&`, `||`, `|`, `(`, `{`),
+# optionally behind a wrapper like `env` / `nohup` / `time` / `exec` and any
+# leading VAR=value assignments.
+#
+# Anchoring on the operator rather than on whitespace is what keeps the hook
+# quiet for the many commands that merely *name* an interpreter:
+#   which -a python3        the name is an argument, nothing runs
+#   uv run python -c ...    uv resolves the project interpreter, which is the
+#                           documented way to run one
+#   .venv/bin/python -m x   an explicit path — preceded by `/`, not an operator
+#   QUARTO_PYTHON="$(pwd)/.venv/bin/python" quarto render .
+#
+# Like block-main-commit.sh, this matches the raw command text, so a heredoc
+# whose body has a line starting with `python3` is denied too. Write such files
+# with the Write tool.
+bare_re='(^|[;&|(){}]|&&|\|\|)[[:space:]]*((env|nohup|time|exec|sudo)[[:space:]]+)*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(python|python3|python3\.[0-9]+|pip|pip3)([[:space:]]|$)'
+
+if ! printf '%s' "$cmd" | grep -Eq "$bare_re"; then
+  exit 0
+fi
+
+jq -n '{
+  hookSpecificOutput: {
+    hookEventName: "PreToolUse",
+    permissionDecision: "deny",
+    permissionDecisionReason: "Refusing to run a bare `python`/`python3`/`pip` — that is Homebrew'"'"'s interpreter, not this repo'"'"'s (see CLAUDE.md § Commands). Name one explicitly: `.venv/bin/python`, `.venv-<slug>/bin/python`, or `uv run python`. Install with `uv pip install --python .venv-<slug>/bin/python`, never bare `pip`. This holds for one-liners, stdlib-only scripts like scripts/check_posts.py, and `-m http.server` too."
+  }
+}'
