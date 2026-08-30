@@ -11,10 +11,17 @@
    consults _freeze/, so one missing name fails the entire render on a
    fresh clone -- while passing silently on the laptop that happens to
    have the real kernel installed.
+4. Every post must appear in docs/listings.json, which only a *project*
+   render writes. A single-document render publishes the post's own page
+   and never touches the site index, so the post is live at its URL and
+   invisible from the home page.
 
 Invariant 2 is the one that actually bit: the cover-image commits edited
 11 post sources without re-rendering, silently marking their frozen output
 stale. Nothing noticed until a full render was attempted months later.
+Invariant 4 bit the same way: claude-api-python-sdk shipped from a
+single-document render and was missing from the listing for as long as
+nobody scrolled looking for it.
 
 Stdlib only, so it runs against any interpreter without installing anything.
 """
@@ -30,6 +37,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 POSTS = ROOT / "posts"
 FREEZE = ROOT / "_freeze" / "posts"
+LISTINGS = ROOT / "docs" / "listings.json"
 MAKEFILE = ROOT / "Makefile"
 
 # The kernel list inside the kernels-stub recipe: `@for k in a b \<newline> c; do`
@@ -81,18 +89,18 @@ def check_environment(slug: str, text: str, post_dir: Path) -> list[str]:
     if not kernel:
         problems.append(
             "executes code but declares no `jupyter:` kernel, so it resolves to "
-            "system Python. Give it a .venv-<slug> and a named kernel (CLAUDE.md)."
+            "system Python. Give it a .venv-<slug> and a named kernel (CLAUDE.md).",
         )
     elif kernel.group(1) == "python3":
         problems.append(
             "pins the shared `python3` kernel rather than a dedicated one, so its "
-            "dependencies are whatever happens to be installed."
+            "dependencies are whatever happens to be installed.",
         )
     if not (post_dir / "requirements.txt").exists():
         problems.append(
             "executes code but has no requirements.txt, so a re-render on drifted "
             "dependencies silently changes published output. Freeze it with "
-            "`uv pip freeze --python .venv-<slug>/bin/python > requirements.txt`."
+            "`uv pip freeze --python .venv-<slug>/bin/python > requirements.txt`.",
         )
     return problems
 
@@ -108,7 +116,7 @@ def check_freeze(slug: str, source: Path, executes: bool) -> list[str]:
             return [
                 "has no _freeze/ record, and no environment to rebuild one from. "
                 "Restore it from git history: a project render will otherwise try "
-                "to execute this post and fail."
+                "to execute this post and fail.",
             ]
         return []
     if slug in STALE_FREEZE_OK:
@@ -117,7 +125,7 @@ def check_freeze(slug: str, source: Path, executes: bool) -> list[str]:
         if executes:
             return [
                 "is exempted in STALE_FREEZE_OK on the grounds that it has no code "
-                "cells, but it now executes code. Re-render it and drop the exemption."
+                "cells, but it now executes code. Re-render it and drop the exemption.",
             ]
         return []
     stored = json.loads(record.read_text())["hash"]
@@ -127,8 +135,43 @@ def check_freeze(slug: str, source: Path, executes: bool) -> list[str]:
     return [
         f"frozen output is stale ({stored[:8]} != {actual[:8]}): the source changed "
         "without a re-render, so a project render will try to re-execute this post. "
-        "Re-render it, or realign the hash if only prose changed."
+        "Re-render it, or realign the hash if only prose changed.",
     ]
+
+
+def listed_slugs() -> set[str] | None:
+    """Read the slugs the built site actually lists, or None if unbuilt."""
+    if not LISTINGS.exists():
+        # docs/ is tracked, so this file is normally present on every
+        # clone. Guard anyway: a tree with docs/ deleted should get a
+        # skipped check, not a crash from a checker it did not ask for.
+        return None
+    slugs = set()
+    for listing in json.loads(LISTINGS.read_text()):
+        for item in listing.get("items", []):
+            parts = item.strip("/").split("/")
+            if len(parts) >= 2 and parts[0] == "posts":
+                slugs.add(parts[1])
+    return slugs
+
+
+def check_listed(slugs: list[str]) -> dict[str, list[str]]:
+    """Require every post to appear in the site index a project render writes."""
+    listed = listed_slugs()
+    if listed is None:
+        return {}
+    return {
+        f"posts/{slug}/": [
+            "is missing from docs/listings.json, so it is published at its own "
+            "URL but absent from the home page and site search. Only a project "
+            "render writes the site index -- a single-document `quarto render "
+            "posts/<slug>/index.qmd` never touches it. Run "
+            '`QUARTO_PYTHON="$(pwd)/.venv/bin/python" quarto render .` and '
+            "commit docs/.",
+        ]
+        for slug in slugs
+        if slug not in listed
+    }
 
 
 def stubbed_kernels() -> set[str]:
@@ -156,8 +199,11 @@ def check_kernel_stubs(pinned: dict[str, str]) -> list[str]:
 def main() -> int:
     failures: dict[str, list[str]] = {}
     pinned: dict[str, str] = {}
+    slugs: list[str] = []
     for post_dir in sorted(p for p in POSTS.iterdir() if p.is_dir()):
         source = post_dir / "index.qmd"
+        if source.exists() or (post_dir / "index.ipynb").exists():
+            slugs.append(post_dir.name)
         if not source.exists():
             continue  # .ipynb posts carry their own stored outputs
         text = source.read_text(errors="ignore")
@@ -170,6 +216,8 @@ def main() -> int:
             problems += check_environment(post_dir.name, text, post_dir)
         if problems:
             failures[f"posts/{post_dir.name}/index.qmd"] = problems
+
+    failures.update(check_listed(slugs))
 
     stub_problems = check_kernel_stubs(pinned)
     if stub_problems:
