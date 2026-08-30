@@ -20,12 +20,14 @@ The official `anthropic` Python SDK talks to Claude through one method, `client.
 
 `Anthropic()` reads `ANTHROPIC_API_KEY` from the environment. Every request is stateless: resend the full `messages` list each turn.
 
-`messages` accepts two roles only:
+`messages` accepts two roles on this model:
 
 - **`user`** — the human turn, or a `tool_result` you are sending back.
 - **`assistant`** — a prior model turn you are replaying.
 
-There is no `"system"` role in that list. System instructions are a top-level `system` parameter (a string, or a list of text blocks). `max_tokens` is required. This post uses `claude-sonnet-5`, the current Sonnet API id.
+System instructions are a top-level `system` parameter, not a role in that list — a string, or a list of text blocks. `max_tokens` is required. This post uses `claude-sonnet-5`, the current Sonnet API id.
+
+The Opus-tier models take a third role. On `claude-opus-5`, `claude-opus-4-8`, `claude-fable-5` and `claude-mythos-5` you can append `{"role": "system", "content": ...}` inside `messages` to give the model a new operator instruction part-way through a conversation. Rewriting the top-level `system` would say the same thing and throw the cached prefix away with it; a message appended at the end does not. It cannot be the first entry, and it has to be either the last one or followed by an assistant turn. `claude-sonnet-5` rejects the role.
 
 ```{python}
 #| eval: false
@@ -76,9 +78,28 @@ A **server tool** (`web_search`, `web_fetch`, `code_execution`, and similar) run
 
 The loop for a client tool is always: request → `tool_use` → your code → `tool_result` → request again, with both the assistant turn and the result appended.
 
-## Example
+### Stop reasons
 
-The dict below is synthetic. Three invented refund rows stand in for an internal policy store a support bot would query. No live system is called; this post has no API key, so the cell is not executed.
+`stop_reason` says why the model stopped. It has six values, not two:
+
+- **`end_turn`** — finished on its own. Read the text.
+- **`stop_sequence`** — hit a stop sequence you configured. Also finished.
+- **`tool_use`** — wants tools run. The loop above.
+- **`max_tokens`** — cut off part-way. Retry with a bigger cap; do not read it as an answer.
+- **`pause_turn`** — a server tool hit its own iteration limit. Send the history back unchanged to resume.
+- **`refusal`** — declined on safety grounds. Only here is `stop_details` filled in; it is `null` for the other five.
+
+A loop written as `while response.stop_reason == "tool_use"` leaves four of those as though the model had finished, and hands the caller a partial answer with no error. [The Orchestrator-Worker Loop](../claude-architect-prep-week-1/) branches on all six and sets the budgets that stop a run going forever.
+
+### Tool runner
+
+The SDK will run that loop for you. Decorate a function with `@beta_tool`, pass it to `client.beta.messages.tool_runner(...)`, and call `runner.until_done()`. It dispatches the calls, appends the results, and returns the final message. The helper lives on `client.beta.messages`, so it needs the beta namespace.
+
+Write the loop by hand once, to see what the runner is doing. Use the runner in production.
+
+## A tool-use round trip
+
+The dict below is synthetic. Three invented refund rows stand in for an internal policy store a support bot would query. A real policy table would be confidential, and it would be out of date by the time you read this. Neither matters here: what the example shows is the shape of the blocks going in and out, not the rows. No live system is called; this post has no API key, so the cell is not executed.
 
 ```{python}
 #| eval: false
@@ -224,10 +245,12 @@ The SDK still has no vector store. Typical indexes for the Voyage vectors:
 Claude itself is not only `api.anthropic.com`. The same Python package exposes first-party plus cloud hosts:
 
 - **`Anthropic()`** — first-party Messages API.
-- **`AnthropicBedrock`** — Amazon Bedrock (`pip install "anthropic[bedrock]"`).
+- **`AnthropicAWS`** — Claude Platform on AWS (`anthropic[aws]`).
+- **`AnthropicBedrockMantle`** — Amazon Bedrock (`anthropic[bedrock]`). `AnthropicBedrock` still works, but it is the older `bedrock-runtime` InvokeModel path; new code wants the Mantle client.
 - **`AnthropicVertex`** — Google Vertex AI (`anthropic[vertex]`).
 - **`AnthropicFoundry`** — Microsoft Foundry.
-- **`AnthropicAWS`** — Claude Platform on AWS (`anthropic[aws]`).
+
+Who runs the service decides what you get. Claude Platform on AWS is Anthropic-operated: AWS sign-in and billing, the first-party API surface, same-day feature parity, and plain model ids. Bedrock and Vertex are partner-operated, so each has its own prices, its own release lag, and a smaller feature set — and Bedrock prefixes the model id (`anthropic.claude-sonnet-5`). Foundry bills through the Microsoft Marketplace at first-party rates.
 
 Voyage embeddings are a separate key: Voyage's API, or Voyage on AWS Marketplace. The vector store is a third bill — Pinecone, Qdrant Cloud, Weaviate Cloud, or pgvector on the Postgres you already pay for.
 
@@ -259,3 +282,4 @@ Messages. Stay. Stateless. Voyage. Embeds. Stores. Host. Voice. Needs. ElevenLab
 - [Anthropic cookbook: RAG](https://platform.claude.com/cookbook/capabilities-retrieval-augmented-generation-guide)
 - [Anthropic cookbook: ElevenLabs voice](https://platform.claude.com/cookbook/third-party-elevenlabs-low-latency-stt-claude-tts)
 - [Claude Code: Memory / CLAUDE.md](https://code.claude.com/docs/en/memory)
+- [Claude Certified Architect, Week 1: The Orchestrator-Worker Loop](../claude-architect-prep-week-1/) — this blog; the loop that branches on every `stop_reason` this post lists.

@@ -191,8 +191,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <ul>
   <li><a href="#messages" id="toc-messages" class="nav-link active" data-scroll-target="#messages"><span class="header-section-number">1</span> Messages</a></li>
   <li><a href="#content-blocks" id="toc-content-blocks" class="nav-link" data-scroll-target="#content-blocks"><span class="header-section-number">2</span> Content blocks</a></li>
-  <li><a href="#tools" id="toc-tools" class="nav-link" data-scroll-target="#tools"><span class="header-section-number">3</span> Tools</a></li>
-  <li><a href="#example" id="toc-example" class="nav-link" data-scroll-target="#example"><span class="header-section-number">4</span> Example</a></li>
+  <li><a href="#tools" id="toc-tools" class="nav-link" data-scroll-target="#tools"><span class="header-section-number">3</span> Tools</a>
+  <ul class="collapse">
+  <li><a href="#stop-reasons" id="toc-stop-reasons" class="nav-link" data-scroll-target="#stop-reasons"><span class="header-section-number">3.1</span> Stop reasons</a></li>
+  <li><a href="#tool-runner" id="toc-tool-runner" class="nav-link" data-scroll-target="#tool-runner"><span class="header-section-number">3.2</span> Tool runner</a></li>
+  </ul></li>
+  <li><a href="#a-tool-use-round-trip" id="toc-a-tool-use-round-trip" class="nav-link" data-scroll-target="#a-tool-use-round-trip"><span class="header-section-number">4</span> A tool-use round trip</a></li>
   <li><a href="#rag" id="toc-rag" class="nav-link" data-scroll-target="#rag"><span class="header-section-number">5</span> RAG</a>
   <ul class="collapse">
   <li><a href="#embeddings-and-stores" id="toc-embeddings-and-stores" class="nav-link" data-scroll-target="#embeddings-and-stores"><span class="header-section-number">5.1</span> Embeddings and stores</a></li>
@@ -221,13 +225,14 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="messages" class="level2" data-number="1">
 <h2 data-number="1" class="anchored" data-anchor-id="messages"><span class="header-section-number">1</span> Messages</h2>
 <p><code>Anthropic()</code> reads <code>ANTHROPIC_API_KEY</code> from the environment. Every request is stateless: resend the full <code>messages</code> list each turn.</p>
-<p><code>messages</code> accepts two roles only:</p>
+<p><code>messages</code> accepts two roles on this model:</p>
 <ul>
 <li><strong><code>user</code></strong> — the human turn, or a <code>tool_result</code> you are sending back.</li>
 <li><strong><code>assistant</code></strong> — a prior model turn you are replaying.</li>
 </ul>
-<p>There is no <code>"system"</code> role in that list. System instructions are a top-level <code>system</code> parameter (a string, or a list of text blocks). <code>max_tokens</code> is required. This post uses <code>claude-sonnet-5</code>, the current Sonnet API id.</p>
-<div id="377028ff" class="cell" data-execution_count="1">
+<p>System instructions are a top-level <code>system</code> parameter, not a role in that list — a string, or a list of text blocks. <code>max_tokens</code> is required. This post uses <code>claude-sonnet-5</code>, the current Sonnet API id.</p>
+<p>The Opus-tier models take a third role. On <code>claude-opus-5</code>, <code>claude-opus-4-8</code>, <code>claude-fable-5</code> and <code>claude-mythos-5</code> you can append <code>{"role": "system", "content": ...}</code> inside <code>messages</code> to give the model a new operator instruction part-way through a conversation. Rewriting the top-level <code>system</code> would say the same thing and throw the cached prefix away with it; a message appended at the end does not. It cannot be the first entry, and it has to be either the last one or followed by an assistant turn. <code>claude-sonnet-5</code> rejects the role.</p>
+<div id="4ee96f32" class="cell" data-execution_count="1">
 <div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> anthropic</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>client <span class="op">=</span> anthropic.Anthropic()</span>
@@ -254,7 +259,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <li><strong><code>tool_result</code></strong> — your follow-up: <code>tool_use_id</code> plus <code>content</code>.</li>
 <li><strong><code>thinking</code></strong> / <strong><code>redacted_thinking</code></strong> — reasoning blocks. Pass them back unchanged on the next turn if the API returned them.</li>
 </ul>
-<div id="a3e93039" class="cell" data-execution_count="2">
+<div id="b2026716" class="cell" data-execution_count="2">
 <div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> block <span class="kw">in</span> response.content:</span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> block.<span class="bu">type</span> <span class="op">==</span> <span class="st">"text"</span>:</span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>        <span class="bu">print</span>(block.text)</span>
@@ -268,11 +273,29 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>A <strong>client tool</strong> is a function you run. Pass <code>name</code>, <code>description</code>, and a JSON Schema <code>input_schema</code>. The model returns <code>stop_reason="tool_use"</code> and one or more <code>tool_use</code> blocks. You execute the function, then send a <code>user</code> message whose <code>content</code> is a <code>tool_result</code> whose <code>tool_use_id</code> matches.</p>
 <p>A <strong>server tool</strong> (<code>web_search</code>, <code>web_fetch</code>, <code>code_execution</code>, and similar) runs on Anthropic’s infrastructure. You declare it by <code>type</code> and <code>name</code>; you do not execute it or invent a <code>tool_result</code> for it.</p>
 <p>The loop for a client tool is always: request → <code>tool_use</code> → your code → <code>tool_result</code> → request again, with both the assistant turn and the result appended.</p>
+<section id="stop-reasons" class="level3" data-number="3.1">
+<h3 data-number="3.1" class="anchored" data-anchor-id="stop-reasons"><span class="header-section-number">3.1</span> Stop reasons</h3>
+<p><code>stop_reason</code> says why the model stopped. It has six values, not two:</p>
+<ul>
+<li><strong><code>end_turn</code></strong> — finished on its own. Read the text.</li>
+<li><strong><code>stop_sequence</code></strong> — hit a stop sequence you configured. Also finished.</li>
+<li><strong><code>tool_use</code></strong> — wants tools run. The loop above.</li>
+<li><strong><code>max_tokens</code></strong> — cut off part-way. Retry with a bigger cap; do not read it as an answer.</li>
+<li><strong><code>pause_turn</code></strong> — a server tool hit its own iteration limit. Send the history back unchanged to resume.</li>
+<li><strong><code>refusal</code></strong> — declined on safety grounds. Only here is <code>stop_details</code> filled in; it is <code>null</code> for the other five.</li>
+</ul>
+<p>A loop written as <code>while response.stop_reason == "tool_use"</code> leaves four of those as though the model had finished, and hands the caller a partial answer with no error. <a href="../claude-architect-prep-week-1/">The Orchestrator-Worker Loop</a> branches on all six and sets the budgets that stop a run going forever.</p>
 </section>
-<section id="example" class="level2" data-number="4">
-<h2 data-number="4" class="anchored" data-anchor-id="example"><span class="header-section-number">4</span> Example</h2>
-<p>The dict below is synthetic. Three invented refund rows stand in for an internal policy store a support bot would query. No live system is called; this post has no API key, so the cell is not executed.</p>
-<div id="693a4ead" class="cell" data-execution_count="3">
+<section id="tool-runner" class="level3" data-number="3.2">
+<h3 data-number="3.2" class="anchored" data-anchor-id="tool-runner"><span class="header-section-number">3.2</span> Tool runner</h3>
+<p>The SDK will run that loop for you. Decorate a function with <code>@beta_tool</code>, pass it to <code>client.beta.messages.tool_runner(...)</code>, and call <code>runner.until_done()</code>. It dispatches the calls, appends the results, and returns the final message. The helper lives on <code>client.beta.messages</code>, so it needs the beta namespace.</p>
+<p>Write the loop by hand once, to see what the runner is doing. Use the runner in production.</p>
+</section>
+</section>
+<section id="a-tool-use-round-trip" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="a-tool-use-round-trip"><span class="header-section-number">4</span> A tool-use round trip</h2>
+<p>The dict below is synthetic. Three invented refund rows stand in for an internal policy store a support bot would query. A real policy table would be confidential, and it would be out of date by the time you read this. Neither matters here: what the example shows is the shape of the blocks going in and out, not the rows. No live system is called; this post has no API key, so the cell is not executed.</p>
+<div id="6d8ec92c" class="cell" data-execution_count="3">
 <div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> anthropic</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>POLICIES <span class="op">=</span> {</span>
@@ -403,11 +426,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Claude itself is not only <code>api.anthropic.com</code>. The same Python package exposes first-party plus cloud hosts:</p>
 <ul>
 <li><strong><code>Anthropic()</code></strong> — first-party Messages API.</li>
-<li><strong><code>AnthropicBedrock</code></strong> — Amazon Bedrock (<code>pip install "anthropic[bedrock]"</code>).</li>
+<li><strong><code>AnthropicAWS</code></strong> — Claude Platform on AWS (<code>anthropic[aws]</code>).</li>
+<li><strong><code>AnthropicBedrockMantle</code></strong> — Amazon Bedrock (<code>anthropic[bedrock]</code>). <code>AnthropicBedrock</code> still works, but it is the older <code>bedrock-runtime</code> InvokeModel path; new code wants the Mantle client.</li>
 <li><strong><code>AnthropicVertex</code></strong> — Google Vertex AI (<code>anthropic[vertex]</code>).</li>
 <li><strong><code>AnthropicFoundry</code></strong> — Microsoft Foundry.</li>
-<li><strong><code>AnthropicAWS</code></strong> — Claude Platform on AWS (<code>anthropic[aws]</code>).</li>
 </ul>
+<p>Who runs the service decides what you get. Claude Platform on AWS is Anthropic-operated: AWS sign-in and billing, the first-party API surface, same-day feature parity, and plain model ids. Bedrock and Vertex are partner-operated, so each has its own prices, its own release lag, and a smaller feature set — and Bedrock prefixes the model id (<code>anthropic.claude-sonnet-5</code>). Foundry bills through the Microsoft Marketplace at first-party rates.</p>
 <p>Voyage embeddings are a separate key: Voyage’s API, or Voyage on AWS Marketplace. The vector store is a third bill — Pinecone, Qdrant Cloud, Weaviate Cloud, or pgvector on the Postgres you already pay for.</p>
 </section>
 </section>
@@ -435,6 +459,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <li><a href="https://platform.claude.com/cookbook/capabilities-retrieval-augmented-generation-guide">Anthropic cookbook: RAG</a></li>
 <li><a href="https://platform.claude.com/cookbook/third-party-elevenlabs-low-latency-stt-claude-tts">Anthropic cookbook: ElevenLabs voice</a></li>
 <li><a href="https://code.claude.com/docs/en/memory">Claude Code: Memory / CLAUDE.md</a></li>
+<li><a href="../claude-architect-prep-week-1/">Claude Certified Architect, Week 1: The Orchestrator-Worker Loop</a> — this blog; the loop that branches on every <code>stop_reason</code> this post lists.</li>
 </ul>
 
 
