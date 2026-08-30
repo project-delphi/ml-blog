@@ -24,6 +24,12 @@ The purpose sentence and one-word closer below have been applied to the 50 posts
   ```
 
   It must be true to *this* post's argument. A closer that merely restates the title is worse than none.
+- **Plain English, both registers.** Dry is not abstract. Register B's "do not try to make the text engaging" governs tone, not vocabulary — it never licenses writing in nouns.
+  - Everyday words over Latinate ones: "use" not "utilize", "breaks" not "invalidates", "stops" not "terminates", "throws away" not "discards".
+  - Active voice, and a verb doing the work: "the loop stops" beats "termination occurs".
+  - Short sentences. If a heavy clause sits between a subject and its verb, split it.
+  - Compress by cutting sentences, not by packing an argument into a noun phrase. "Making delegation a tool call rather than a special case means it inherits the error path" is shorter than the plain version and much harder to read.
+  - A jargon label — "least privilege", "blast radius", "context isolation", "state machine" — needs a plain restatement beside it, or a plain phrase in its place. Domain vocabulary lifted straight out of the source docs is the usual way this creeps in.
 - **Never invent first-person detail.** Personal essays land through specifics the author actually has. Write a scene in the second person or as a hypothetical someone; do not fabricate memories or citations.
 - **Always situate the data.** Any post that uses, plots, or mentions a dataset must say where it came from before doing anything with it: provenance, collector and motive, what this post asks of it, what a wrong answer would cost, and why this method fits this data. Synthetic data is not exempt: say it is synthetic, give the generating process, and say what real situation it stands in for.
 - **Do not change executable cell code** when restyling prose. Widgets, freeze figures, and `{python}` / `{pyodide}` bodies stay as they are.
