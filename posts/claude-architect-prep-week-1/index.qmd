@@ -198,6 +198,7 @@ if stop == "max_tokens":
         token_retries += 1
         turn_max_tokens *= 2
         messages.pop()  # discard the truncated turn before retrying
+        result.text = previous_text  # ... and the text it contributed
         log.warning("truncated; retrying at max_tokens=%d", turn_max_tokens)
         continue
     result.outcome = Outcome.TRUNCATED
@@ -234,12 +235,11 @@ A broken tool is something you tell the model, not an exception that tears down 
 ```python
 started = time.monotonic()
 try:
-    # A thread cannot be killed, so an abandoned handler keeps running
-    # to completion in the background -- but the loop is no longer
-    # hostage to it, which is the property that matters here.
-    future = self._pool.submit(lambda: tool.handler(**block.input))
-    output = future.result(timeout=tool.timeout_s)
-except FuturesTimeout:
+    output = _call_with_deadline(
+        lambda: tool.handler(**block.input),
+        tool.timeout_s,
+    )
+except TimeoutError:
     log.warning("%s exceeded %gs; abandoned", tool.name, tool.timeout_s)
     return _error_result(
         block.id,
@@ -292,8 +292,7 @@ granted = {t.get("name") for t in tools}
 tool_results: list[dict[str, Any]] = []
 terminal: tuple[Outcome, str] | None = None
 for block in calls:
-    result.tool_calls += 1
-    if result.tool_calls > budget.max_tool_calls:
+    if result.tool_calls >= budget.max_tool_calls:
         terminal = (
             Outcome.TURN_LIMIT,
             f"exceeded {budget.max_tool_calls} tool calls",
@@ -323,6 +322,7 @@ for block in calls:
         break
 
     try:
+        result.tool_calls += 1  # counted only when it actually runs
         tool_results.append(registry.dispatch(block, granted))
     except ToolAbort as exc:
         terminal = (Outcome.ABORTED, str(exc))

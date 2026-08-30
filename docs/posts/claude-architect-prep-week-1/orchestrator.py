@@ -26,10 +26,9 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -47,6 +46,37 @@ ORCHESTRATOR_MAX_TOKENS = 16_000
 # --------------------------------------------------------------------------- #
 # Tools
 # --------------------------------------------------------------------------- #
+
+
+def _call_with_deadline(fn: Callable[[], Any], timeout_s: float) -> Any:
+    """Run `fn`, giving up on it after `timeout_s` seconds.
+
+    A Python thread cannot be killed, so an abandoned handler runs to
+    completion in the background. Two details keep that from mattering:
+
+    * the thread is a **daemon**, so a handler blocked forever on a socket
+      cannot hold the interpreter open at exit;
+    * every call gets its **own** thread rather than a slot in a shared pool.
+      A bounded pool would lose a worker to each abandoned handler until it
+      had none left, and then time out every later tool without running it --
+      which reads as "every tool is broken".
+    """
+    box: dict[str, Any] = {}
+
+    def target() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the caller
+            box["error"] = exc
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    thread.join(timeout_s)
+    if thread.is_alive():
+        raise TimeoutError
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
 
 
 class ToolFailure(Exception):
@@ -100,34 +130,8 @@ class ToolRegistry:
     request if any id from the assistant turn goes unanswered.
     """
 
-    def __init__(self, tools: Iterable[Tool], max_parallel: int = 8) -> None:
+    def __init__(self, tools: Iterable[Tool]) -> None:
         self._tools = {tool.name: tool for tool in tools}
-        self._pool = ThreadPoolExecutor(max_workers=max_parallel)
-
-    def close(self) -> None:
-        """Release the handler pool. A long-lived service that builds a
-        registry per request leaks a pool and its threads without this.
-        """
-        self._pool.shutdown(wait=False)
-
-    def __enter__(self) -> ToolRegistry:
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.close()
-
-    @property
-    def names(self) -> frozenset[str]:
-        return frozenset(self._tools)
-
-    def params(self, names: Sequence[str] | None = None) -> list[ToolParam]:
-        """Tool definitions, optionally narrowed to a worker's subset.
-
-        Order is stable so the serialised tool list stays byte-identical across
-        requests; a reordered list invalidates the prompt cache prefix.
-        """
-        chosen = self._tools if names is None else {n: self._tools[n] for n in names}
-        return [chosen[name].to_param() for name in sorted(chosen)]
 
     def dispatch(
         self,
@@ -166,12 +170,11 @@ class ToolRegistry:
 
         started = time.monotonic()
         try:
-            # A thread cannot be killed, so an abandoned handler keeps running
-            # to completion in the background -- but the loop is no longer
-            # hostage to it, which is the property that matters here.
-            future = self._pool.submit(lambda: tool.handler(**block.input))
-            output = future.result(timeout=tool.timeout_s)
-        except FuturesTimeout:
+            output = _call_with_deadline(
+                lambda: tool.handler(**block.input),
+                tool.timeout_s,
+            )
+        except TimeoutError:
             log.warning("%s exceeded %gs; abandoned", tool.name, tool.timeout_s)
             return _error_result(
                 block.id,
@@ -326,6 +329,7 @@ def run_loop(
         # unconditionally would wipe it: the terminal turn of a stalled or
         # turn-limited run is a tool_use turn, which usually has no text at all,
         # and those are precisely the outcomes this exists to preserve.
+        previous_text = result.text
         if turn_text := _text_of(response):
             result.text = turn_text
 
@@ -355,6 +359,7 @@ def run_loop(
                 token_retries += 1
                 turn_max_tokens *= 2
                 messages.pop()  # discard the truncated turn before retrying
+                result.text = previous_text  # ... and the text it contributed
                 log.warning("truncated; retrying at max_tokens=%d", turn_max_tokens)
                 continue
             result.outcome = Outcome.TRUNCATED
@@ -387,8 +392,7 @@ def run_loop(
         tool_results: list[dict[str, Any]] = []
         terminal: tuple[Outcome, str] | None = None
         for block in calls:
-            result.tool_calls += 1
-            if result.tool_calls > budget.max_tool_calls:
+            if result.tool_calls >= budget.max_tool_calls:
                 terminal = (
                     Outcome.TURN_LIMIT,
                     f"exceeded {budget.max_tool_calls} tool calls",
@@ -418,6 +422,7 @@ def run_loop(
                 break
 
             try:
+                result.tool_calls += 1  # counted only when it actually runs
                 tool_results.append(registry.dispatch(block, granted))
             except ToolAbort as exc:
                 terminal = (Outcome.ABORTED, str(exc))

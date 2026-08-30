@@ -19,6 +19,11 @@ fi
 
 cmd=$(jq -r '.tool_input.command // ""')
 
+# Drop whole-line shell comments before matching. Without this the hook denies
+# CLAUDE.md's own documented preview-server cleanup, whose comment line quotes
+# `cd docs && python -m http.server` as the thing it is working around.
+cmd=$(printf '%s\n' "$cmd" | grep -v '^[[:space:]]*#' || true)
+
 # Only intervene when the interpreter is in *command position*: at the start of
 # the command, or right after a shell operator (`;`, `&&`, `||`, `|`, `(`, `{`, a
 # backtick), or behind `xargs` / `find -exec`,
@@ -37,13 +42,28 @@ cmd=$(jq -r '.tool_input.command // ""')
 # whose body has a line starting with `python3` is denied too. Write such files
 # with the Write tool.
 interp='(python|python3|python3\.[0-9]+|pip|pip3)'
-bare_re='(^|[;&|(){}`]|&&|\|\|)[[:space:]]*((env|nohup|time|exec|sudo|xargs)[[:space:]]+)*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*'"$interp"'([[:space:]]|$)'
+# Wrappers may carry their own flags: `xargs -n1 python3`, `sudo -H python3`.
+# `command` takes no flags here on purpose: `command -v python3` is a lookup,
+# not a run, and must stay allowed.
+wrapper='((((env|nohup|time|exec|sudo|xargs)([[:space:]]+-[^[:space:]]+)*)|command)[[:space:]]+)*'
+bare_re='(^|[;&|(){}`]|&&|\|\|)[[:space:]]*'"$wrapper"'([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*'"$interp"'([[:space:]]|$)'
 
 # `find ... -exec python3 {} \;` has no operator in front of the interpreter, so
 # it needs its own anchor rather than a wrapper entry in the pattern above.
 exec_re='-exec[[:space:]]+'"$interp"'([[:space:]]|$)'
 
-if ! printf '%s' "$cmd" | grep -Eq "$bare_re" && ! printf '%s' "$cmd" | grep -Eq "$exec_re"; then
+# `bash -c "python3 …"` hides the interpreter inside a quoted argument. Anchor
+# on a shell name so this does not swallow `grep -c python3 file`.
+shell_re='(bash|sh|zsh|dash|ksh)[[:space:]]+([^[:space:]]+[[:space:]]+)*-c[[:space:]]+.?'"$interp"'([[:space:]]|$)'
+
+matched=0
+for re in "$bare_re" "$exec_re" "$shell_re"; do
+  if printf '%s' "$cmd" | grep -Eq "$re"; then
+    matched=1
+    break
+  fi
+done
+if [ "$matched" -eq 0 ]; then
   exit 0
 fi
 

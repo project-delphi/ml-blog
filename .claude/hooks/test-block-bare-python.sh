@@ -41,6 +41,11 @@ check BLOCKED 'PYTHONPATH=. python3 run.py'
 check BLOCKED 'ls *.py | xargs python3 lint.py'
 check BLOCKED 'echo `python3 -c "print(1)"`'
 check BLOCKED 'find . -name "*.py" -exec python3 {} \;'
+check BLOCKED 'xargs -n1 python3 lint.py'
+check BLOCKED 'sudo -H python3 setup.py install'
+check BLOCKED 'command python3 x.py'
+check BLOCKED 'bash -c "python3 -c 1"'
+check BLOCKED "sh -c 'python3 foo.py'"
 
 echo
 echo "an interpreter that is actually named — allowed:"
@@ -62,6 +67,8 @@ check allowed 'pgrep -fl "http.server"'
 check allowed 'git commit -m "stop using python3 directly"'
 check allowed 'echo "run python3 yourself"'
 check allowed 'ls .venv/bin/python'
+check allowed 'grep -c python3 CLAUDE.md'
+check allowed '# cd docs && python -m http.server is what we avoid'
 
 echo
 if [ "$fails" -eq 0 ]; then
