@@ -27,7 +27,9 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -70,8 +72,12 @@ class Tool:
     description: str
     input_schema: Mapping[str, Any]
     handler: Callable[..., str]
-    #: Wall-clock ceiling reported to the model when the handler overruns.
+    #: Wall-clock ceiling. The handler is abandoned once it passes this.
     timeout_s: float = 30.0
+    #: `strict` makes the API validate input against the schema before the
+    #: handler sees it, but it requires a closed schema. Set False for a tool
+    #: that genuinely takes open-ended input.
+    strict: bool = True
 
     def to_param(self) -> ToolParam:
         # `strict` makes the API reject malformed input server-side, before a
@@ -81,7 +87,7 @@ class Tool:
             "name": self.name,
             "description": self.description,
             "input_schema": dict(self.input_schema),
-            "strict": True,
+            "strict": self.strict,
         }
 
 
@@ -94,8 +100,9 @@ class ToolRegistry:
     request if any id from the assistant turn goes unanswered.
     """
 
-    def __init__(self, tools: Iterable[Tool]) -> None:
+    def __init__(self, tools: Iterable[Tool], max_parallel: int = 8) -> None:
         self._tools = {tool.name: tool for tool in tools}
+        self._pool = ThreadPoolExecutor(max_workers=max_parallel)
 
     @property
     def names(self) -> frozenset[str]:
@@ -110,16 +117,30 @@ class ToolRegistry:
         chosen = self._tools if names is None else {n: self._tools[n] for n in names}
         return [chosen[name].to_param() for name in sorted(chosen)]
 
-    def dispatch(self, block: Any) -> dict[str, Any]:
-        """Run one `tool_use` block and return its `tool_result`."""
+    def dispatch(
+        self,
+        block: Any,
+        granted: Collection[str] | None = None,
+    ) -> dict[str, Any]:
+        """Run one `tool_use` block and return its `tool_result`.
+
+        `granted` is the set of names the caller actually offered the model.
+        Narrowing the *definitions* sent in a request is not access control --
+        a model can name a tool it was never shown, whether by hallucinating a
+        name it saw in an earlier result or because injected text told it to.
+        The registry is the only place that can refuse, so it does.
+        """
         # `block.input` is already-parsed JSON. Never string-match the
         # serialised form: escaping of Unicode and forward slashes varies.
+        visible = self._tools.keys() if granted is None else granted
         tool = self._tools.get(block.name)
-        if tool is None:
+        if tool is None or block.name not in visible:
+            # Report only the names this caller was granted; listing the rest
+            # hands the model a directory of tools it must not reach.
             return _error_result(
                 block.id,
                 f"No tool named {block.name!r}. Available: "
-                f"{', '.join(sorted(self._tools))}.",
+                f"{', '.join(sorted(visible))}.",
             )
 
         try:
@@ -133,7 +154,18 @@ class ToolRegistry:
 
         started = time.monotonic()
         try:
-            output = tool.handler(**block.input)
+            # A thread cannot be killed, so an abandoned handler keeps running
+            # to completion in the background -- but the loop is no longer
+            # hostage to it, which is the property that matters here.
+            future = self._pool.submit(lambda: tool.handler(**block.input))
+            output = future.result(timeout=tool.timeout_s)
+        except FuturesTimeout:
+            log.warning("%s exceeded %gs; abandoned", tool.name, tool.timeout_s)
+            return _error_result(
+                block.id,
+                f"{tool.name} did not finish within {tool.timeout_s:g}s and was "
+                "abandoned. Narrow the request and try again.",
+            )
         except ToolFailure as exc:
             log.warning("%s failed: %s", tool.name, exc)
             return _error_result(block.id, str(exc))
@@ -146,16 +178,7 @@ class ToolRegistry:
                 f"{tool.name} failed with {type(exc).__name__}: {exc}",
             )
 
-        elapsed = time.monotonic() - started
-        if elapsed > tool.timeout_s:
-            # The handler finished, but too late to be trusted by a caller that
-            # has already been waiting. Report it rather than pretend.
-            log.warning("%s overran: %.1fs > %.1fs", tool.name, elapsed, tool.timeout_s)
-            return _error_result(
-                block.id,
-                f"{tool.name} took {elapsed:.1f}s, over its {tool.timeout_s:.0f}s "
-                "budget. Narrow the request and try again.",
-            )
+        log.debug("%s ran in %.2fs", tool.name, time.monotonic() - started)
 
         return {
             "type": "tool_result",
@@ -284,13 +307,15 @@ def run_loop(
         # Append the whole content list, never just the text. Dropping the
         # thinking and tool_use blocks breaks the next request.
         messages.append({"role": "assistant", "content": response.content})
+        # Recorded on every turn, not just the happy path: a run that stalls or
+        # runs out of turns still did work, and the caller wants what it said.
+        result.text = _text_of(response)
 
         stop = response.stop_reason
         log.debug("turn %d stop_reason=%s", result.turns, stop)
 
         if stop in ("end_turn", "stop_sequence"):
             result.outcome = Outcome.COMPLETED
-            result.text = _text_of(response)
             return result
 
         if stop == "refusal":
@@ -315,7 +340,6 @@ def run_loop(
                 log.warning("truncated; retrying at max_tokens=%d", turn_max_tokens)
                 continue
             result.outcome = Outcome.TRUNCATED
-            result.text = _text_of(response)
             result.detail = f"still truncated after {token_retries} retry(ies)"
             return result
 
@@ -341,14 +365,18 @@ def run_loop(
 
         # --- stop_reason == "tool_use" -------------------------------------
         calls = [b for b in response.content if b.type == "tool_use"]
+        granted = {t.get("name") for t in tools}
         tool_results: list[dict[str, Any]] = []
         stalled_on: str | None = None
+        terminal: tuple[Outcome, str] | None = None
         for block in calls:
             result.tool_calls += 1
             if result.tool_calls > budget.max_tool_calls:
-                result.outcome = Outcome.TURN_LIMIT
-                result.detail = f"exceeded {budget.max_tool_calls} tool calls"
-                return result
+                terminal = (
+                    Outcome.TURN_LIMIT,
+                    f"exceeded {budget.max_tool_calls} tool calls",
+                )
+                break
 
             # An agent that repeats a call verbatim is not making progress; it
             # is usually re-reading a resource whose result it misread. Say so
@@ -370,17 +398,30 @@ def run_loop(
                 continue
 
             try:
-                tool_results.append(registry.dispatch(block))
+                tool_results.append(registry.dispatch(block, granted))
             except ToolAbort as exc:
-                result.outcome = Outcome.ABORTED
-                result.detail = str(exc)
+                terminal = (Outcome.ABORTED, str(exc))
                 log.error("aborted by %s: %s", block.name, exc)
-                return result
+                break
+
+        # Whatever happened, every tool_use id in this turn needs a result or
+        # the history cannot be resent -- so answer the blocks that never ran
+        # before handing it back. This is why the loop breaks rather than
+        # returning from inside the loop.
+        answered = {r["tool_use_id"] for r in tool_results}
+        tool_results.extend(
+            _error_result(b.id, "Not run: the loop stopped part-way through this turn.")
+            for b in calls
+            if b.id not in answered
+        )
 
         # All results go back in one user message. Splitting them across
         # several messages trains the model out of parallel tool calls.
         messages.append({"role": "user", "content": tool_results})
 
+        if terminal is not None:
+            result.outcome, result.detail = terminal
+            return result
         if stalled_on is not None:
             result.outcome = Outcome.STALLED
             result.detail = stalled_on
@@ -439,6 +480,7 @@ def orchestrate(
     "tools provided and report the result concisely.",
     orchestrator_budget: Budget = Budget(max_turns=8, max_tool_calls=12),
     worker_budget: Budget = Budget(),
+    max_workers: int = 6,
     model: str = MODEL,
 ) -> RunResult:
     """Run a planner whose only tool spawns bounded worker loops.
@@ -452,8 +494,11 @@ def orchestrate(
 
     def delegate(task: str, tools: list[str]) -> str:
         spend["workers"] += 1
-        if spend["workers"] > orchestrator_budget.max_tool_calls:
-            raise ToolAbort("worker budget exhausted")
+        if spend["workers"] > max_workers:
+            # Its own ceiling, deliberately below the planner's tool-call cap.
+            # Sharing that cap made this unreachable: run_loop stops before it
+            # dispatches the call that would exceed it.
+            raise ToolAbort(f"worker budget exhausted after {max_workers} workers")
 
         unknown = [name for name in tools if name not in registry.names]
         if unknown:
@@ -463,7 +508,7 @@ def orchestrate(
             client,
             system=worker_system,
             messages=[{"role": "user", "content": task}],
-            tools=registry.params(tools),
+            tools=registry.params(tools),  # run_loop enforces this grant
             registry=registry,
             budget=worker_budget,
             model=model,

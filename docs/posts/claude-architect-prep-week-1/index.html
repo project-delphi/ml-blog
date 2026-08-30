@@ -362,7 +362,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Each <code>tool_use</code> block names a tool and carries already-parsed JSON input.</p>
 <ul>
 <li>Check the input before you run anything. <code>strict: true</code> on the tool definition makes the API reject bad input before it ever reaches your handler.</li>
-<li>Run the blocks from one turn at the same time, where the handlers allow it.</li>
+<li>One turn can carry several <code>tool_use</code> blocks. Running them concurrently is the point of that, though the loop below dispatches them in order to keep the error path readable.</li>
 <li>Never match on the raw JSON text; models escape Unicode and forward slashes differently.</li>
 </ul>
 </section>
@@ -458,54 +458,52 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> stop <span class="kw">in</span> (<span class="st">"end_turn"</span>, <span class="st">"stop_sequence"</span>):</span>
 <span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    result.outcome <span class="op">=</span> Outcome.COMPLETED</span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    result.text <span class="op">=</span> _text_of(response)</span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> result</span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> stop <span class="op">==</span> <span class="st">"refusal"</span>:</span>
-<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>    <span class="co"># `stop_details` is populated only for refusals; guard before use.</span></span>
-<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>    details <span class="op">=</span> response.stop_details</span>
-<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>    result.outcome <span class="op">=</span> Outcome.REFUSED</span>
-<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>    result.detail <span class="op">=</span> <span class="bu">getattr</span>(details, <span class="st">"explanation"</span>, <span class="va">None</span>) <span class="kw">or</span> <span class="st">"no explanation"</span></span>
-<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>    log.error(</span>
-<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>        <span class="st">"refused (</span><span class="sc">%s</span><span class="st">): </span><span class="sc">%s</span><span class="st">"</span>,</span>
-<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>        <span class="bu">getattr</span>(details, <span class="st">"category"</span>, <span class="va">None</span>),</span>
-<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>        result.detail,</span>
-<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>    )</span>
-<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> result</span>
-<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> stop <span class="op">==</span> <span class="st">"max_tokens"</span>:</span>
-<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>    <span class="co"># Output was cut mid-sentence. Continuing as if it were complete is</span></span>
-<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>    <span class="co"># how a half-written tool argument reaches a database.</span></span>
-<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> token_retries <span class="op">&lt;</span> budget.max_token_retries:</span>
-<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>        token_retries <span class="op">+=</span> <span class="dv">1</span></span>
-<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>        turn_max_tokens <span class="op">*=</span> <span class="dv">2</span></span>
-<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>        messages.pop()  <span class="co"># discard the truncated turn before retrying</span></span>
-<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>        log.warning(<span class="st">"truncated; retrying at max_tokens=</span><span class="sc">%d</span><span class="st">"</span>, turn_max_tokens)</span>
-<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>        <span class="cf">continue</span></span>
-<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>    result.outcome <span class="op">=</span> Outcome.TRUNCATED</span>
-<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>    result.text <span class="op">=</span> _text_of(response)</span>
-<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>    result.detail <span class="op">=</span> <span class="ss">f"still truncated after </span><span class="sc">{</span>token_retries<span class="sc">}</span><span class="ss"> retry(ies)"</span></span>
-<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> result</span>
-<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> stop <span class="op">==</span> <span class="st">"pause_turn"</span>:</span>
-<span id="cb3-36"><a href="#cb3-36" aria-hidden="true" tabindex="-1"></a>    <span class="co"># A server-side tool (web search, code execution) hit its own</span></span>
-<span id="cb3-37"><a href="#cb3-37" aria-hidden="true" tabindex="-1"></a>    <span class="co"># iteration limit. Re-send the history unchanged -- the API sees the</span></span>
-<span id="cb3-38"><a href="#cb3-38" aria-hidden="true" tabindex="-1"></a>    <span class="co"># trailing server_tool_use block and resumes; an added "continue"</span></span>
-<span id="cb3-39"><a href="#cb3-39" aria-hidden="true" tabindex="-1"></a>    <span class="co"># message confuses it.</span></span>
-<span id="cb3-40"><a href="#cb3-40" aria-hidden="true" tabindex="-1"></a>    pause_resumes <span class="op">+=</span> <span class="dv">1</span></span>
-<span id="cb3-41"><a href="#cb3-41" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> pause_resumes <span class="op">&gt;</span> budget.max_pause_resumes:</span>
-<span id="cb3-42"><a href="#cb3-42" aria-hidden="true" tabindex="-1"></a>        result.outcome <span class="op">=</span> Outcome.TURN_LIMIT</span>
-<span id="cb3-43"><a href="#cb3-43" aria-hidden="true" tabindex="-1"></a>        result.detail <span class="op">=</span> <span class="ss">f"paused </span><span class="sc">{</span>pause_resumes<span class="sc">}</span><span class="ss"> times without finishing"</span></span>
-<span id="cb3-44"><a href="#cb3-44" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> result</span>
-<span id="cb3-45"><a href="#cb3-45" aria-hidden="true" tabindex="-1"></a>    <span class="cf">continue</span></span>
-<span id="cb3-46"><a href="#cb3-46" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-47"><a href="#cb3-47" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> stop <span class="op">!=</span> <span class="st">"tool_use"</span>:</span>
-<span id="cb3-48"><a href="#cb3-48" aria-hidden="true" tabindex="-1"></a>    <span class="co"># A reason added to the API after this code was written. Stopping</span></span>
-<span id="cb3-49"><a href="#cb3-49" aria-hidden="true" tabindex="-1"></a>    <span class="co"># is the honest response; falling through would invent an answer.</span></span>
-<span id="cb3-50"><a href="#cb3-50" aria-hidden="true" tabindex="-1"></a>    result.outcome <span class="op">=</span> Outcome.UNKNOWN_STOP</span>
-<span id="cb3-51"><a href="#cb3-51" aria-hidden="true" tabindex="-1"></a>    result.detail <span class="op">=</span> <span class="ss">f"unhandled stop_reason </span><span class="sc">{</span>stop<span class="sc">!r}</span><span class="ss">"</span></span>
-<span id="cb3-52"><a href="#cb3-52" aria-hidden="true" tabindex="-1"></a>    log.error(result.detail)</span>
-<span id="cb3-53"><a href="#cb3-53" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> result</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> result</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> stop <span class="op">==</span> <span class="st">"refusal"</span>:</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>    <span class="co"># `stop_details` is populated only for refusals; guard before use.</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>    details <span class="op">=</span> response.stop_details</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>    result.outcome <span class="op">=</span> Outcome.REFUSED</span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>    result.detail <span class="op">=</span> <span class="bu">getattr</span>(details, <span class="st">"explanation"</span>, <span class="va">None</span>) <span class="kw">or</span> <span class="st">"no explanation"</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>    log.error(</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>        <span class="st">"refused (</span><span class="sc">%s</span><span class="st">): </span><span class="sc">%s</span><span class="st">"</span>,</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>        <span class="bu">getattr</span>(details, <span class="st">"category"</span>, <span class="va">None</span>),</span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>        result.detail,</span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> result</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> stop <span class="op">==</span> <span class="st">"max_tokens"</span>:</span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>    <span class="co"># Output was cut mid-sentence. Continuing as if it were complete is</span></span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>    <span class="co"># how a half-written tool argument reaches a database.</span></span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> token_retries <span class="op">&lt;</span> budget.max_token_retries:</span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>        token_retries <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>        turn_max_tokens <span class="op">*=</span> <span class="dv">2</span></span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>        messages.pop()  <span class="co"># discard the truncated turn before retrying</span></span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>        log.warning(<span class="st">"truncated; retrying at max_tokens=</span><span class="sc">%d</span><span class="st">"</span>, turn_max_tokens)</span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>        <span class="cf">continue</span></span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>    result.outcome <span class="op">=</span> Outcome.TRUNCATED</span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>    result.detail <span class="op">=</span> <span class="ss">f"still truncated after </span><span class="sc">{</span>token_retries<span class="sc">}</span><span class="ss"> retry(ies)"</span></span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> result</span>
+<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> stop <span class="op">==</span> <span class="st">"pause_turn"</span>:</span>
+<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a>    <span class="co"># A server-side tool (web search, code execution) hit its own</span></span>
+<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a>    <span class="co"># iteration limit. Re-send the history unchanged -- the API sees the</span></span>
+<span id="cb3-36"><a href="#cb3-36" aria-hidden="true" tabindex="-1"></a>    <span class="co"># trailing server_tool_use block and resumes; an added "continue"</span></span>
+<span id="cb3-37"><a href="#cb3-37" aria-hidden="true" tabindex="-1"></a>    <span class="co"># message confuses it.</span></span>
+<span id="cb3-38"><a href="#cb3-38" aria-hidden="true" tabindex="-1"></a>    pause_resumes <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb3-39"><a href="#cb3-39" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> pause_resumes <span class="op">&gt;</span> budget.max_pause_resumes:</span>
+<span id="cb3-40"><a href="#cb3-40" aria-hidden="true" tabindex="-1"></a>        result.outcome <span class="op">=</span> Outcome.TURN_LIMIT</span>
+<span id="cb3-41"><a href="#cb3-41" aria-hidden="true" tabindex="-1"></a>        result.detail <span class="op">=</span> <span class="ss">f"paused </span><span class="sc">{</span>pause_resumes<span class="sc">}</span><span class="ss"> times without finishing"</span></span>
+<span id="cb3-42"><a href="#cb3-42" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> result</span>
+<span id="cb3-43"><a href="#cb3-43" aria-hidden="true" tabindex="-1"></a>    <span class="cf">continue</span></span>
+<span id="cb3-44"><a href="#cb3-44" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-45"><a href="#cb3-45" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> stop <span class="op">!=</span> <span class="st">"tool_use"</span>:</span>
+<span id="cb3-46"><a href="#cb3-46" aria-hidden="true" tabindex="-1"></a>    <span class="co"># A reason added to the API after this code was written. Stopping</span></span>
+<span id="cb3-47"><a href="#cb3-47" aria-hidden="true" tabindex="-1"></a>    <span class="co"># is the honest response; falling through would invent an answer.</span></span>
+<span id="cb3-48"><a href="#cb3-48" aria-hidden="true" tabindex="-1"></a>    result.outcome <span class="op">=</span> Outcome.UNKNOWN_STOP</span>
+<span id="cb3-49"><a href="#cb3-49" aria-hidden="true" tabindex="-1"></a>    result.detail <span class="op">=</span> <span class="ss">f"unhandled stop_reason </span><span class="sc">{</span>stop<span class="sc">!r}</span><span class="ss">"</span></span>
+<span id="cb3-50"><a href="#cb3-50" aria-hidden="true" tabindex="-1"></a>    log.error(result.detail)</span>
+<span id="cb3-51"><a href="#cb3-51" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> result</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 <p>Note the <code>messages.pop()</code>. The cut-off turn is thrown away before the retry. Leave it in and the retry just adds a second turn carrying on from half a sentence.</p>
 </section>
 <section id="tool-execution-and-errors" class="level2" data-number="6">
@@ -513,35 +511,37 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>A broken tool is something you tell the model, not an exception that tears down the loop. Whatever goes wrong — no such tool, bad arguments, the handler blew up, it took too long — comes back as a <code>tool_result</code> marked <code>is_error: True</code>. The model reads it and tries something else.</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>started <span class="op">=</span> time.monotonic()</span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="cf">try</span>:</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    output <span class="op">=</span> tool.handler(<span class="op">**</span>block.<span class="bu">input</span>)</span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="cf">except</span> ToolFailure <span class="im">as</span> exc:</span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    log.warning(<span class="st">"</span><span class="sc">%s</span><span class="st"> failed: </span><span class="sc">%s</span><span class="st">"</span>, tool.name, exc)</span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> _error_result(block.<span class="bu">id</span>, <span class="bu">str</span>(exc))</span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="cf">except</span> ToolAbort:</span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">raise</span></span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="cf">except</span> <span class="pp">Exception</span> <span class="im">as</span> exc:  <span class="co"># noqa: BLE001 - a handler bug must not kill the run</span></span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>    log.exception(<span class="st">"</span><span class="sc">%s</span><span class="st"> raised"</span>, tool.name)</span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> _error_result(</span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>        block.<span class="bu">id</span>,</span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>        <span class="ss">f"</span><span class="sc">{</span>tool<span class="sc">.</span>name<span class="sc">}</span><span class="ss"> failed with </span><span class="sc">{</span><span class="bu">type</span>(exc)<span class="sc">.</span><span class="va">__name__</span><span class="sc">}</span><span class="ss">: </span><span class="sc">{</span>exc<span class="sc">}</span><span class="ss">"</span>,</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    <span class="co"># A thread cannot be killed, so an abandoned handler keeps running</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="co"># to completion in the background -- but the loop is no longer</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="co"># hostage to it, which is the property that matters here.</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    future <span class="op">=</span> <span class="va">self</span>._pool.submit(<span class="kw">lambda</span>: tool.handler(<span class="op">**</span>block.<span class="bu">input</span>))</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    output <span class="op">=</span> future.result(timeout<span class="op">=</span>tool.timeout_s)</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="cf">except</span> FuturesTimeout:</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    log.warning(<span class="st">"</span><span class="sc">%s</span><span class="st"> exceeded </span><span class="sc">%g</span><span class="st">s; abandoned"</span>, tool.name, tool.timeout_s)</span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> _error_result(</span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>        block.<span class="bu">id</span>,</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>        <span class="ss">f"</span><span class="sc">{</span>tool<span class="sc">.</span>name<span class="sc">}</span><span class="ss"> did not finish within </span><span class="sc">{</span>tool<span class="sc">.</span>timeout_s<span class="sc">:g}</span><span class="ss">s and was "</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>        <span class="st">"abandoned. Narrow the request and try again."</span>,</span>
 <span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>    )</span>
-<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>elapsed <span class="op">=</span> time.monotonic() <span class="op">-</span> started</span>
-<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> elapsed <span class="op">&gt;</span> tool.timeout_s:</span>
-<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>    <span class="co"># The handler finished, but too late to be trusted by a caller that</span></span>
-<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>    <span class="co"># has already been waiting. Report it rather than pretend.</span></span>
-<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a>    log.warning(<span class="st">"</span><span class="sc">%s</span><span class="st"> overran: </span><span class="sc">%.1f</span><span class="st">s &gt; </span><span class="sc">%.1f</span><span class="st">s"</span>, tool.name, elapsed, tool.timeout_s)</span>
-<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> _error_result(</span>
-<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a>        block.<span class="bu">id</span>,</span>
-<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a>        <span class="ss">f"</span><span class="sc">{</span>tool<span class="sc">.</span>name<span class="sc">}</span><span class="ss"> took </span><span class="sc">{</span>elapsed<span class="sc">:.1f}</span><span class="ss">s, over its </span><span class="sc">{</span>tool<span class="sc">.</span>timeout_s<span class="sc">:.0f}</span><span class="ss">s "</span></span>
-<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a>        <span class="st">"budget. Narrow the request and try again."</span>,</span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a><span class="cf">except</span> ToolFailure <span class="im">as</span> exc:</span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>    log.warning(<span class="st">"</span><span class="sc">%s</span><span class="st"> failed: </span><span class="sc">%s</span><span class="st">"</span>, tool.name, exc)</span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> _error_result(block.<span class="bu">id</span>, <span class="bu">str</span>(exc))</span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a><span class="cf">except</span> ToolAbort:</span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">raise</span></span>
+<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a><span class="cf">except</span> <span class="pp">Exception</span> <span class="im">as</span> exc:  <span class="co"># noqa: BLE001 - a handler bug must not kill the run</span></span>
+<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>    log.exception(<span class="st">"</span><span class="sc">%s</span><span class="st"> raised"</span>, tool.name)</span>
+<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> _error_result(</span>
+<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a>        block.<span class="bu">id</span>,</span>
+<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a>        <span class="ss">f"</span><span class="sc">{</span>tool<span class="sc">.</span>name<span class="sc">}</span><span class="ss"> failed with </span><span class="sc">{</span><span class="bu">type</span>(exc)<span class="sc">.</span><span class="va">__name__</span><span class="sc">}</span><span class="ss">: </span><span class="sc">{</span>exc<span class="sc">}</span><span class="ss">"</span>,</span>
 <span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a>    )</span>
 <span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a><span class="cf">return</span> {</span>
-<span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a>    <span class="st">"type"</span>: <span class="st">"tool_result"</span>,</span>
-<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a>    <span class="st">"tool_use_id"</span>: block.<span class="bu">id</span>,</span>
-<span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a>    <span class="st">"content"</span>: output <span class="cf">if</span> <span class="bu">isinstance</span>(output, <span class="bu">str</span>) <span class="cf">else</span> json.dumps(output),</span>
-<span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a>}</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a>log.debug(<span class="st">"</span><span class="sc">%s</span><span class="st"> ran in </span><span class="sc">%.2f</span><span class="st">s"</span>, tool.name, time.monotonic() <span class="op">-</span> started)</span>
+<span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a><span class="cf">return</span> {</span>
+<span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a>    <span class="st">"type"</span>: <span class="st">"tool_result"</span>,</span>
+<span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a>    <span class="st">"tool_use_id"</span>: block.<span class="bu">id</span>,</span>
+<span id="cb4-32"><a href="#cb4-32" aria-hidden="true" tabindex="-1"></a>    <span class="st">"content"</span>: output <span class="cf">if</span> <span class="bu">isinstance</span>(output, <span class="bu">str</span>) <span class="cf">else</span> json.dumps(output),</span>
+<span id="cb4-33"><a href="#cb4-33" aria-hidden="true" tabindex="-1"></a>}</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 <p><code>ToolAbort</code> is the exception: dead credentials, a missing binary, a tripped breaker. The model cannot fix any of those, so the run stops instead of retrying against something that is already broken.</p>
 <p>Error results carry the same <code>tool_use_id</code> as any other:</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> _error_result(tool_use_id: <span class="bu">str</span>, message: <span class="bu">str</span>) <span class="op">-&gt;</span> <span class="bu">dict</span>[<span class="bu">str</span>, Any]:</span>
@@ -557,45 +557,67 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Two limits in the <code>tool_use</code> branch stop a run going forever: a hard cap on tool calls, and a check for repeats.</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co"># --- stop_reason == "tool_use" -------------------------------------</span></span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>calls <span class="op">=</span> [b <span class="cf">for</span> b <span class="kw">in</span> response.content <span class="cf">if</span> b.<span class="bu">type</span> <span class="op">==</span> <span class="st">"tool_use"</span>]</span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>tool_results: <span class="bu">list</span>[<span class="bu">dict</span>[<span class="bu">str</span>, Any]] <span class="op">=</span> []</span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>stalled_on: <span class="bu">str</span> <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span></span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> block <span class="kw">in</span> calls:</span>
-<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>    result.tool_calls <span class="op">+=</span> <span class="dv">1</span></span>
-<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> result.tool_calls <span class="op">&gt;</span> budget.max_tool_calls:</span>
-<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>        result.outcome <span class="op">=</span> Outcome.TURN_LIMIT</span>
-<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>        result.detail <span class="op">=</span> <span class="ss">f"exceeded </span><span class="sc">{</span>budget<span class="sc">.</span>max_tool_calls<span class="sc">}</span><span class="ss"> tool calls"</span></span>
-<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> result</span>
-<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>    <span class="co"># An agent that repeats a call verbatim is not making progress; it</span></span>
-<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>    <span class="co"># is usually re-reading a resource whose result it misread. Say so</span></span>
-<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>    <span class="co"># in-band before the turn ceiling burns the whole budget.</span></span>
-<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a>    signature <span class="op">=</span> (block.name, json.dumps(block.<span class="bu">input</span>, sort_keys<span class="op">=</span><span class="va">True</span>))</span>
-<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a>    seen_calls[signature] <span class="op">=</span> seen_calls.get(signature, <span class="dv">0</span>) <span class="op">+</span> <span class="dv">1</span></span>
-<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> seen_calls[signature] <span class="op">&gt;</span> budget.max_repeats:</span>
-<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Answer the block anyway -- every tool_use id in the turn needs</span></span>
-<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a>        <span class="co"># a result or the history cannot be resent -- then stop.</span></span>
-<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a>        tool_results.append(</span>
-<span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a>            _error_result(</span>
-<span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a>                block.<span class="bu">id</span>,</span>
-<span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a>                <span class="ss">f"</span><span class="sc">{</span>block<span class="sc">.</span>name<span class="sc">}</span><span class="ss"> has already been called with these exact "</span></span>
-<span id="cb6-24"><a href="#cb6-24" aria-hidden="true" tabindex="-1"></a>                <span class="st">"arguments and returned the same result. Use a different "</span></span>
-<span id="cb6-25"><a href="#cb6-25" aria-hidden="true" tabindex="-1"></a>                <span class="st">"approach or state what is blocking you."</span>,</span>
-<span id="cb6-26"><a href="#cb6-26" aria-hidden="true" tabindex="-1"></a>            ),</span>
-<span id="cb6-27"><a href="#cb6-27" aria-hidden="true" tabindex="-1"></a>        )</span>
-<span id="cb6-28"><a href="#cb6-28" aria-hidden="true" tabindex="-1"></a>        stalled_on <span class="op">=</span> <span class="ss">f"</span><span class="sc">{</span>block<span class="sc">.</span>name<span class="sc">}</span><span class="ss"> repeated </span><span class="sc">{</span>seen_calls[signature]<span class="sc">}</span><span class="ss"> times"</span></span>
-<span id="cb6-29"><a href="#cb6-29" aria-hidden="true" tabindex="-1"></a>        <span class="cf">continue</span></span>
-<span id="cb6-30"><a href="#cb6-30" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-31"><a href="#cb6-31" aria-hidden="true" tabindex="-1"></a>    <span class="cf">try</span>:</span>
-<span id="cb6-32"><a href="#cb6-32" aria-hidden="true" tabindex="-1"></a>        tool_results.append(registry.dispatch(block))</span>
-<span id="cb6-33"><a href="#cb6-33" aria-hidden="true" tabindex="-1"></a>    <span class="cf">except</span> ToolAbort <span class="im">as</span> exc:</span>
-<span id="cb6-34"><a href="#cb6-34" aria-hidden="true" tabindex="-1"></a>        result.outcome <span class="op">=</span> Outcome.ABORTED</span>
-<span id="cb6-35"><a href="#cb6-35" aria-hidden="true" tabindex="-1"></a>        result.detail <span class="op">=</span> <span class="bu">str</span>(exc)</span>
-<span id="cb6-36"><a href="#cb6-36" aria-hidden="true" tabindex="-1"></a>        log.error(<span class="st">"aborted by </span><span class="sc">%s</span><span class="st">: </span><span class="sc">%s</span><span class="st">"</span>, block.name, exc)</span>
-<span id="cb6-37"><a href="#cb6-37" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> result</span>
-<span id="cb6-38"><a href="#cb6-38" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-39"><a href="#cb6-39" aria-hidden="true" tabindex="-1"></a><span class="co"># All results go back in one user message. Splitting them across</span></span>
-<span id="cb6-40"><a href="#cb6-40" aria-hidden="true" tabindex="-1"></a><span class="co"># several messages trains the model out of parallel tool calls.</span></span>
-<span id="cb6-41"><a href="#cb6-41" aria-hidden="true" tabindex="-1"></a>messages.append({<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: tool_results})</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>granted <span class="op">=</span> {t.get(<span class="st">"name"</span>) <span class="cf">for</span> t <span class="kw">in</span> tools}</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>tool_results: <span class="bu">list</span>[<span class="bu">dict</span>[<span class="bu">str</span>, Any]] <span class="op">=</span> []</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>stalled_on: <span class="bu">str</span> <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>terminal: <span class="bu">tuple</span>[Outcome, <span class="bu">str</span>] <span class="op">|</span> <span class="va">None</span> <span class="op">=</span> <span class="va">None</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> block <span class="kw">in</span> calls:</span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>    result.tool_calls <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> result.tool_calls <span class="op">&gt;</span> budget.max_tool_calls:</span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>        terminal <span class="op">=</span> (</span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>            Outcome.TURN_LIMIT,</span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>            <span class="ss">f"exceeded </span><span class="sc">{</span>budget<span class="sc">.</span>max_tool_calls<span class="sc">}</span><span class="ss"> tool calls"</span>,</span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>        )</span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span></span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a>    <span class="co"># An agent that repeats a call verbatim is not making progress; it</span></span>
+<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a>    <span class="co"># is usually re-reading a resource whose result it misread. Say so</span></span>
+<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a>    <span class="co"># in-band before the turn ceiling burns the whole budget.</span></span>
+<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a>    signature <span class="op">=</span> (block.name, json.dumps(block.<span class="bu">input</span>, sort_keys<span class="op">=</span><span class="va">True</span>))</span>
+<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a>    seen_calls[signature] <span class="op">=</span> seen_calls.get(signature, <span class="dv">0</span>) <span class="op">+</span> <span class="dv">1</span></span>
+<span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> seen_calls[signature] <span class="op">&gt;</span> budget.max_repeats:</span>
+<span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Answer the block anyway -- every tool_use id in the turn needs</span></span>
+<span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a>        <span class="co"># a result or the history cannot be resent -- then stop.</span></span>
+<span id="cb6-24"><a href="#cb6-24" aria-hidden="true" tabindex="-1"></a>        tool_results.append(</span>
+<span id="cb6-25"><a href="#cb6-25" aria-hidden="true" tabindex="-1"></a>            _error_result(</span>
+<span id="cb6-26"><a href="#cb6-26" aria-hidden="true" tabindex="-1"></a>                block.<span class="bu">id</span>,</span>
+<span id="cb6-27"><a href="#cb6-27" aria-hidden="true" tabindex="-1"></a>                <span class="ss">f"</span><span class="sc">{</span>block<span class="sc">.</span>name<span class="sc">}</span><span class="ss"> has already been called with these exact "</span></span>
+<span id="cb6-28"><a href="#cb6-28" aria-hidden="true" tabindex="-1"></a>                <span class="st">"arguments and returned the same result. Use a different "</span></span>
+<span id="cb6-29"><a href="#cb6-29" aria-hidden="true" tabindex="-1"></a>                <span class="st">"approach or state what is blocking you."</span>,</span>
+<span id="cb6-30"><a href="#cb6-30" aria-hidden="true" tabindex="-1"></a>            ),</span>
+<span id="cb6-31"><a href="#cb6-31" aria-hidden="true" tabindex="-1"></a>        )</span>
+<span id="cb6-32"><a href="#cb6-32" aria-hidden="true" tabindex="-1"></a>        stalled_on <span class="op">=</span> <span class="ss">f"</span><span class="sc">{</span>block<span class="sc">.</span>name<span class="sc">}</span><span class="ss"> repeated </span><span class="sc">{</span>seen_calls[signature]<span class="sc">}</span><span class="ss"> times"</span></span>
+<span id="cb6-33"><a href="#cb6-33" aria-hidden="true" tabindex="-1"></a>        <span class="cf">continue</span></span>
+<span id="cb6-34"><a href="#cb6-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-35"><a href="#cb6-35" aria-hidden="true" tabindex="-1"></a>    <span class="cf">try</span>:</span>
+<span id="cb6-36"><a href="#cb6-36" aria-hidden="true" tabindex="-1"></a>        tool_results.append(registry.dispatch(block, granted))</span>
+<span id="cb6-37"><a href="#cb6-37" aria-hidden="true" tabindex="-1"></a>    <span class="cf">except</span> ToolAbort <span class="im">as</span> exc:</span>
+<span id="cb6-38"><a href="#cb6-38" aria-hidden="true" tabindex="-1"></a>        terminal <span class="op">=</span> (Outcome.ABORTED, <span class="bu">str</span>(exc))</span>
+<span id="cb6-39"><a href="#cb6-39" aria-hidden="true" tabindex="-1"></a>        log.error(<span class="st">"aborted by </span><span class="sc">%s</span><span class="st">: </span><span class="sc">%s</span><span class="st">"</span>, block.name, exc)</span>
+<span id="cb6-40"><a href="#cb6-40" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span></span>
+<span id="cb6-41"><a href="#cb6-41" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-42"><a href="#cb6-42" aria-hidden="true" tabindex="-1"></a><span class="co"># Whatever happened, every tool_use id in this turn needs a result or</span></span>
+<span id="cb6-43"><a href="#cb6-43" aria-hidden="true" tabindex="-1"></a><span class="co"># the history cannot be resent -- so answer the blocks that never ran</span></span>
+<span id="cb6-44"><a href="#cb6-44" aria-hidden="true" tabindex="-1"></a><span class="co"># before handing it back. This is why the loop breaks rather than</span></span>
+<span id="cb6-45"><a href="#cb6-45" aria-hidden="true" tabindex="-1"></a><span class="co"># returning from inside the loop.</span></span>
+<span id="cb6-46"><a href="#cb6-46" aria-hidden="true" tabindex="-1"></a>answered <span class="op">=</span> {r[<span class="st">"tool_use_id"</span>] <span class="cf">for</span> r <span class="kw">in</span> tool_results}</span>
+<span id="cb6-47"><a href="#cb6-47" aria-hidden="true" tabindex="-1"></a>tool_results.extend(</span>
+<span id="cb6-48"><a href="#cb6-48" aria-hidden="true" tabindex="-1"></a>    _error_result(b.<span class="bu">id</span>, <span class="st">"Not run: the loop stopped part-way through this turn."</span>)</span>
+<span id="cb6-49"><a href="#cb6-49" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> b <span class="kw">in</span> calls</span>
+<span id="cb6-50"><a href="#cb6-50" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> b.<span class="bu">id</span> <span class="kw">not</span> <span class="kw">in</span> answered</span>
+<span id="cb6-51"><a href="#cb6-51" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb6-52"><a href="#cb6-52" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-53"><a href="#cb6-53" aria-hidden="true" tabindex="-1"></a><span class="co"># All results go back in one user message. Splitting them across</span></span>
+<span id="cb6-54"><a href="#cb6-54" aria-hidden="true" tabindex="-1"></a><span class="co"># several messages trains the model out of parallel tool calls.</span></span>
+<span id="cb6-55"><a href="#cb6-55" aria-hidden="true" tabindex="-1"></a>messages.append({<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: tool_results})</span>
+<span id="cb6-56"><a href="#cb6-56" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-57"><a href="#cb6-57" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> terminal <span class="kw">is</span> <span class="kw">not</span> <span class="va">None</span>:</span>
+<span id="cb6-58"><a href="#cb6-58" aria-hidden="true" tabindex="-1"></a>    result.outcome, result.detail <span class="op">=</span> terminal</span>
+<span id="cb6-59"><a href="#cb6-59" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> result</span>
+<span id="cb6-60"><a href="#cb6-60" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> stalled_on <span class="kw">is</span> <span class="kw">not</span> <span class="va">None</span>:</span>
+<span id="cb6-61"><a href="#cb6-61" aria-hidden="true" tabindex="-1"></a>    result.outcome <span class="op">=</span> Outcome.STALLED</span>
+<span id="cb6-62"><a href="#cb6-62" aria-hidden="true" tabindex="-1"></a>    result.detail <span class="op">=</span> stalled_on</span>
+<span id="cb6-63"><a href="#cb6-63" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> result</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 <p>The repeat check is the cheaper of the two. An agent calling the same tool with the same arguments is stuck, usually re-reading something whose answer it misread the first time. Saying so in the tool result gives it a chance to recover before the turn limit eats the whole budget.</p>
 </section>
 <section id="delegation-as-a-tool-call" class="level2" data-number="8">
@@ -603,34 +625,37 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>The orchestrator has one tool, and it starts a worker loop. Because handing off work is a plain tool call and not a special case, it gets the whole error path above for free: a worker that gets stuck, cut off, or refused comes back as an <code>is_error</code> result the planner can work around.</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> delegate(task: <span class="bu">str</span>, tools: <span class="bu">list</span>[<span class="bu">str</span>]) <span class="op">-&gt;</span> <span class="bu">str</span>:</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    spend[<span class="st">"workers"</span>] <span class="op">+=</span> <span class="dv">1</span></span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> spend[<span class="st">"workers"</span>] <span class="op">&gt;</span> orchestrator_budget.max_tool_calls:</span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> ToolAbort(<span class="st">"worker budget exhausted"</span>)</span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>    unknown <span class="op">=</span> [name <span class="cf">for</span> name <span class="kw">in</span> tools <span class="cf">if</span> name <span class="kw">not</span> <span class="kw">in</span> registry.names]</span>
-<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> unknown:</span>
-<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> ToolFailure(<span class="ss">f"no such tool(s): </span><span class="sc">{</span><span class="st">', '</span><span class="sc">.</span>join(unknown)<span class="sc">}</span><span class="ss">"</span>)</span>
-<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>    worker <span class="op">=</span> run_loop(</span>
-<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>        client,</span>
-<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>        system<span class="op">=</span>worker_system,</span>
-<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a>        messages<span class="op">=</span>[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: task}],</span>
-<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>        tools<span class="op">=</span>registry.params(tools),</span>
-<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>        registry<span class="op">=</span>registry,</span>
-<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a>        budget<span class="op">=</span>worker_budget,</span>
-<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a>        model<span class="op">=</span>model,</span>
-<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a>    )</span>
-<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">not</span> worker.ok:</span>
-<span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Surfaced to the planner as a tool failure, with the outcome name</span></span>
-<span id="cb7-21"><a href="#cb7-21" aria-hidden="true" tabindex="-1"></a>        <span class="co"># so it can distinguish "ran out of turns" from "was refused".</span></span>
-<span id="cb7-22"><a href="#cb7-22" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> ToolFailure(</span>
-<span id="cb7-23"><a href="#cb7-23" aria-hidden="true" tabindex="-1"></a>            <span class="ss">f"worker ended as </span><span class="sc">{</span>worker<span class="sc">.</span>outcome<span class="sc">.</span>value<span class="sc">}</span><span class="ss"> (</span><span class="sc">{</span>worker<span class="sc">.</span>detail<span class="sc">}</span><span class="ss">). "</span></span>
-<span id="cb7-24"><a href="#cb7-24" aria-hidden="true" tabindex="-1"></a>            <span class="ss">f"Partial output: </span><span class="sc">{</span>worker<span class="sc">.</span>text[:<span class="dv">500</span>] <span class="kw">or</span> <span class="st">'(none)'</span><span class="sc">}</span><span class="ss">"</span>,</span>
-<span id="cb7-25"><a href="#cb7-25" aria-hidden="true" tabindex="-1"></a>        )</span>
-<span id="cb7-26"><a href="#cb7-26" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> worker.text</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> spend[<span class="st">"workers"</span>] <span class="op">&gt;</span> max_workers:</span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Its own ceiling, deliberately below the planner's tool-call cap.</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Sharing that cap made this unreachable: run_loop stops before it</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>        <span class="co"># dispatches the call that would exceed it.</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> ToolAbort(<span class="ss">f"worker budget exhausted after </span><span class="sc">{</span>max_workers<span class="sc">}</span><span class="ss"> workers"</span>)</span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>    unknown <span class="op">=</span> [name <span class="cf">for</span> name <span class="kw">in</span> tools <span class="cf">if</span> name <span class="kw">not</span> <span class="kw">in</span> registry.names]</span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> unknown:</span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> ToolFailure(<span class="ss">f"no such tool(s): </span><span class="sc">{</span><span class="st">', '</span><span class="sc">.</span>join(unknown)<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a>    worker <span class="op">=</span> run_loop(</span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>        client,</span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>        system<span class="op">=</span>worker_system,</span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a>        messages<span class="op">=</span>[{<span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: task}],</span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a>        tools<span class="op">=</span>registry.params(tools),  <span class="co"># run_loop enforces this grant</span></span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a>        registry<span class="op">=</span>registry,</span>
+<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a>        budget<span class="op">=</span>worker_budget,</span>
+<span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a>        model<span class="op">=</span>model,</span>
+<span id="cb7-21"><a href="#cb7-21" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb7-22"><a href="#cb7-22" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">not</span> worker.ok:</span>
+<span id="cb7-23"><a href="#cb7-23" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Surfaced to the planner as a tool failure, with the outcome name</span></span>
+<span id="cb7-24"><a href="#cb7-24" aria-hidden="true" tabindex="-1"></a>        <span class="co"># so it can distinguish "ran out of turns" from "was refused".</span></span>
+<span id="cb7-25"><a href="#cb7-25" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> ToolFailure(</span>
+<span id="cb7-26"><a href="#cb7-26" aria-hidden="true" tabindex="-1"></a>            <span class="ss">f"worker ended as </span><span class="sc">{</span>worker<span class="sc">.</span>outcome<span class="sc">.</span>value<span class="sc">}</span><span class="ss"> (</span><span class="sc">{</span>worker<span class="sc">.</span>detail<span class="sc">}</span><span class="ss">). "</span></span>
+<span id="cb7-27"><a href="#cb7-27" aria-hidden="true" tabindex="-1"></a>            <span class="ss">f"Partial output: </span><span class="sc">{</span>worker<span class="sc">.</span>text[:<span class="dv">500</span>] <span class="kw">or</span> <span class="st">'(none)'</span><span class="sc">}</span><span class="ss">"</span>,</span>
+<span id="cb7-28"><a href="#cb7-28" aria-hidden="true" tabindex="-1"></a>        )</span>
+<span id="cb7-29"><a href="#cb7-29" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> worker.text</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 <p>Two things fall out of this.</p>
 <ul>
 <li><strong>The worker starts clean.</strong> It sees the <code>task</code> string and nothing else, so a long planner history never bloats worker requests.</li>
-<li><strong>Each worker gets only what it needs.</strong> The planner names the tools that worker may call. A worker that only summarises cannot touch a write tool, because it was never handed one.</li>
+<li><strong>Each worker gets only what it needs.</strong> The planner names the tools that worker may call, and <code>run_loop</code> derives the allowed set from the definitions it sent, so a call to anything else comes back refused. Narrowing the definitions alone would not do it: a model can name a tool it was never shown, either by hallucinating a name from an earlier result or because injected text told it to.</li>
 </ul>
 </section>
 <section id="anti-patterns-and-production-failure-modes" class="level2" data-number="9">
