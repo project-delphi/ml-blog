@@ -154,7 +154,7 @@ class Outcome(str, Enum):
     UNKNOWN_STOP = "unknown_stop"  # a stop_reason this code has never seen
 
 
-@dataclass
+@dataclass(frozen=True)
 class Budget:
     """Ceilings the model cannot see and therefore cannot talk its way past."""
 
@@ -290,7 +290,6 @@ Two limits in the `tool_use` branch stop a run going forever: a hard cap on tool
 calls = [b for b in response.content if b.type == "tool_use"]
 granted = {t.get("name") for t in tools}
 tool_results: list[dict[str, Any]] = []
-stalled_on: str | None = None
 terminal: tuple[Outcome, str] | None = None
 for block in calls:
     result.tool_calls += 1
@@ -317,8 +316,11 @@ for block in calls:
                 "approach or state what is blocking you.",
             ),
         )
-        stalled_on = f"{block.name} repeated {seen_calls[signature]} times"
-        continue
+        terminal = (
+            Outcome.STALLED,
+            f"{block.name} repeated {seen_calls[signature]} times",
+        )
+        break
 
     try:
         tool_results.append(registry.dispatch(block, granted))
@@ -327,7 +329,7 @@ for block in calls:
         log.error("aborted by %s: %s", block.name, exc)
         break
 
-# Whatever happened, every tool_use id in this turn needs a result or
+# However the turn ended, every tool_use id in it needs a result or
 # the history cannot be resent -- so answer the blocks that never ran
 # before handing it back. This is why the loop breaks rather than
 # returning from inside the loop.
@@ -344,10 +346,6 @@ messages.append({"role": "user", "content": tool_results})
 
 if terminal is not None:
     result.outcome, result.detail = terminal
-    return result
-if stalled_on is not None:
-    result.outcome = Outcome.STALLED
-    result.detail = stalled_on
     return result
 ```
 

@@ -38,6 +38,9 @@ check BLOCKED 'make check-posts; python3 -c "print(1)"'
 check BLOCKED 'cat x.json | python3 -m json.tool'
 check BLOCKED 'env PYTHONPATH=. python3 run.py'
 check BLOCKED 'PYTHONPATH=. python3 run.py'
+check BLOCKED 'ls *.py | xargs python3 lint.py'
+check BLOCKED 'echo `python3 -c "print(1)"`'
+check BLOCKED 'find . -name "*.py" -exec python3 {} \;'
 
 echo
 echo "an interpreter that is actually named — allowed:"

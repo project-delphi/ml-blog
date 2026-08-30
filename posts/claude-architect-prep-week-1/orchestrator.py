@@ -104,6 +104,18 @@ class ToolRegistry:
         self._tools = {tool.name: tool for tool in tools}
         self._pool = ThreadPoolExecutor(max_workers=max_parallel)
 
+    def close(self) -> None:
+        """Release the handler pool. A long-lived service that builds a
+        registry per request leaks a pool and its threads without this.
+        """
+        self._pool.shutdown(wait=False)
+
+    def __enter__(self) -> ToolRegistry:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
     @property
     def names(self) -> frozenset[str]:
         return frozenset(self._tools)
@@ -202,7 +214,10 @@ class ToolRegistry:
                 f"missing required field(s): {', '.join(sorted(missing))}",
             )
         unknown = set(supplied) - set(properties)
-        if unknown and not tool.input_schema.get("additionalProperties", False):
+        # Absent means "extras allowed" in JSON Schema. A `strict` tool has to
+        # declare `additionalProperties: false` anyway, so honouring the real
+        # default here is what lets an open schema stay open.
+        if unknown and not tool.input_schema.get("additionalProperties", True):
             raise ToolFailure(f"unknown field(s): {', '.join(sorted(unknown))}")
 
 
@@ -232,7 +247,7 @@ class Outcome(str, Enum):
     UNKNOWN_STOP = "unknown_stop"  # a stop_reason this code has never seen
 
 
-@dataclass
+@dataclass(frozen=True)
 class Budget:
     """Ceilings the model cannot see and therefore cannot talk its way past."""
 
@@ -307,9 +322,12 @@ def run_loop(
         # Append the whole content list, never just the text. Dropping the
         # thinking and tool_use blocks breaks the next request.
         messages.append({"role": "assistant", "content": response.content})
-        # Recorded on every turn, not just the happy path: a run that stalls or
-        # runs out of turns still did work, and the caller wants what it said.
-        result.text = _text_of(response)
+        # Keep the most recent turn that actually said something. Assigning
+        # unconditionally would wipe it: the terminal turn of a stalled or
+        # turn-limited run is a tool_use turn, which usually has no text at all,
+        # and those are precisely the outcomes this exists to preserve.
+        if turn_text := _text_of(response):
+            result.text = turn_text
 
         stop = response.stop_reason
         log.debug("turn %d stop_reason=%s", result.turns, stop)
@@ -367,7 +385,6 @@ def run_loop(
         calls = [b for b in response.content if b.type == "tool_use"]
         granted = {t.get("name") for t in tools}
         tool_results: list[dict[str, Any]] = []
-        stalled_on: str | None = None
         terminal: tuple[Outcome, str] | None = None
         for block in calls:
             result.tool_calls += 1
@@ -394,8 +411,11 @@ def run_loop(
                         "approach or state what is blocking you.",
                     ),
                 )
-                stalled_on = f"{block.name} repeated {seen_calls[signature]} times"
-                continue
+                terminal = (
+                    Outcome.STALLED,
+                    f"{block.name} repeated {seen_calls[signature]} times",
+                )
+                break
 
             try:
                 tool_results.append(registry.dispatch(block, granted))
@@ -404,7 +424,7 @@ def run_loop(
                 log.error("aborted by %s: %s", block.name, exc)
                 break
 
-        # Whatever happened, every tool_use id in this turn needs a result or
+        # However the turn ended, every tool_use id in it needs a result or
         # the history cannot be resent -- so answer the blocks that never ran
         # before handing it back. This is why the loop breaks rather than
         # returning from inside the loop.
@@ -421,10 +441,6 @@ def run_loop(
 
         if terminal is not None:
             result.outcome, result.detail = terminal
-            return result
-        if stalled_on is not None:
-            result.outcome = Outcome.STALLED
-            result.detail = stalled_on
             return result
 
     result.detail = f"hit the {budget.max_turns}-turn ceiling"

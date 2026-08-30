@@ -20,7 +20,8 @@ fi
 cmd=$(jq -r '.tool_input.command // ""')
 
 # Only intervene when the interpreter is in *command position*: at the start of
-# the command, or right after a shell operator (`;`, `&&`, `||`, `|`, `(`, `{`),
+# the command, or right after a shell operator (`;`, `&&`, `||`, `|`, `(`, `{`, a
+# backtick), or behind `xargs` / `find -exec`,
 # optionally behind a wrapper like `env` / `nohup` / `time` / `exec` and any
 # leading VAR=value assignments.
 #
@@ -35,9 +36,14 @@ cmd=$(jq -r '.tool_input.command // ""')
 # Like block-main-commit.sh, this matches the raw command text, so a heredoc
 # whose body has a line starting with `python3` is denied too. Write such files
 # with the Write tool.
-bare_re='(^|[;&|(){}]|&&|\|\|)[[:space:]]*((env|nohup|time|exec|sudo)[[:space:]]+)*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(python|python3|python3\.[0-9]+|pip|pip3)([[:space:]]|$)'
+interp='(python|python3|python3\.[0-9]+|pip|pip3)'
+bare_re='(^|[;&|(){}`]|&&|\|\|)[[:space:]]*((env|nohup|time|exec|sudo|xargs)[[:space:]]+)*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*'"$interp"'([[:space:]]|$)'
 
-if ! printf '%s' "$cmd" | grep -Eq "$bare_re"; then
+# `find ... -exec python3 {} \;` has no operator in front of the interpreter, so
+# it needs its own anchor rather than a wrapper entry in the pattern above.
+exec_re='-exec[[:space:]]+'"$interp"'([[:space:]]|$)'
+
+if ! printf '%s' "$cmd" | grep -Eq "$bare_re" && ! printf '%s' "$cmd" | grep -Eq "$exec_re"; then
   exit 0
 fi
 
