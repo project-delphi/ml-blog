@@ -142,8 +142,9 @@ def check_freeze(slug: str, source: Path, executes: bool) -> list[str]:
 def listed_slugs() -> set[str] | None:
     """Read the slugs the built site actually lists, or None if unbuilt."""
     if not LISTINGS.exists():
-        # A fresh clone has no docs/ yet. Nothing to compare against, and a
-        # checker that is red on arrival gets ignored.
+        # docs/ is tracked, so this file is normally present on every
+        # clone. Guard anyway: a tree with docs/ deleted should get a
+        # skipped check, not a crash from a checker it did not ask for.
         return None
     slugs = set()
     for listing in json.loads(LISTINGS.read_text()):
