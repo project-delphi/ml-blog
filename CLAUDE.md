@@ -17,6 +17,8 @@ The product here is prose. The tooling below exists to get prose onto the web wi
 
 Do not restyle a Register A post into Register B unless the author asked for that sweep. Do not restyle a Register B post back into claim-heading narrative.
 
+**Plain English, both registers.** Dry is not the same as abstract, and Register B's "do not try to make it engaging" is not a licence to write in nouns. Everyday words over Latinate ones — "use" not "utilize", "breaks" not "invalidates", "stops" not "terminates". Active voice. Short sentences: if a heavy clause sits between a subject and its verb, split it. Compress by cutting sentences, never by packing an argument into a noun phrase ("making delegation a tool call means it inherits the error path"). A jargon label — "least privilege", "blast radius", "context isolation" — needs a plain restatement beside it or a plain phrase instead of it.
+
 ### Register A (summary)
 
 Write so a smart reader who has never met the topic follows every sentence on the first pass.
@@ -24,7 +26,7 @@ Write so a smart reader who has never met the topic follows every sentence on th
 - Open on a plain-English sentence saying what the post is for — but say the thing, don't announce that you are about to ("In this post we will…" stays banned). In an essay it keeps the essay's voice.
 - Explain the idea before you name it.
 - Warm up before the mechanics; never open a section with code, a bullet list, or a table.
-- Everyday words over Latinate ones; active voice; one idea per paragraph.
+- One idea per paragraph.
 - Headings state claims so the ToC reconstructs the argument. Each section's first sentence links back; its last names the gap the next section fills. Close by returning to the opening claim. Caveats go inline where the objection occurs.
 
 `STYLE.md` carries two calibration examples (cross-validation, the bootstrap). Read the tone off those rather than guessing at it.
@@ -72,7 +74,7 @@ If a post cites papers, books, docs, datasets, or other posts as sources, end wi
 
 **Never commit to `main`.** Every change — new post, edit, one-line typo — goes: feature branch → commit (source *and* re-rendered `docs/` together) → push → PR with a real description → review → merge. The `ship-pr` skill automates this.
 
-This is enforced. `.claude/settings.json` registers a `PreToolUse` hook on `Bash` running `.claude/hooks/block-main-commit.sh`, which denies a command that reaches `git commit` while HEAD is on `main`/`master`. It anchors on `commit` being the actual git subcommand, so compound forms (`git add -A && git commit …`) are caught while commands that merely mention the word (`git help commit`, `grep -r commit`) pass. It does match on the raw command text, though, so a heredoc that writes `git commit` into a file is denied too — write such files with the Write tool. Branching first passes; switching onto `main` is not an escape hatch. To override deliberately, work from your own terminal or disable the hook via `/hooks`.
+This is enforced. `.claude/settings.json` registers `PreToolUse` hooks on `Bash`; the first, `.claude/hooks/block-main-commit.sh`, denies a command that reaches `git commit` while HEAD is on `main`/`master`. It anchors on `commit` being the actual git subcommand, so compound forms (`git add -A && git commit …`) are caught while commands that merely mention the word (`git help commit`, `grep -r commit`) pass. It does match on the raw command text, though, so a heredoc that writes `git commit` into a file is denied too — write such files with the Write tool. Branching first passes; switching onto `main` is not an escape hatch. To override deliberately, work from your own terminal or disable the hook via `/hooks`.
 
 **Hand back a localhost preview link whenever a unit of work is complete** — a clickable URL, not just "done": the URL `quarto preview posts/<slug>/index.qmd` prints, or `http://localhost:8000/posts/<slug>/index.html` from the static server below.
 
@@ -94,12 +96,14 @@ With the server gone there is no localhost link left to give, so that final repl
 
 ## Commands
 
+**Never run `python`, `python3`, or `pip` bare** — that resolves to Homebrew's interpreter, not this repo's. It applies to throwaway one-liners, stdlib-only scripts like `scripts/check_posts.py`, and `-m http.server` too. Always name the interpreter: `.venv/bin/python`, `.venv-<slug>/bin/python`, or `uv run`. This is enforced: `.claude/hooks/block-bare-python.sh` denies a bare interpreter in command position, while leaving `uv run python`, an explicit venv path, and commands that merely name one (`which python3`) alone.
+
 - **Render one post**: `quarto render posts/<slug>/index.qmd`. Narrow blast radius, but it **always executes that post's code** — `freeze` is honoured only on a *project* render. Needs the post's real venv.
 - **Render the whole site**: `QUARTO_PYTHON="$(pwd)/.venv/bin/python" quarto render .` (`make quatro` runs the bare form). Deletes and rebuilds `docs/`, but *respects* `freeze: auto` — it re-executes only posts whose **source md5 changed** since their `_freeze/` record was written, which today is none. The right tool for anything site-wide: nav, theme, `_quarto.yml`, a stale `search.json`.
   - `QUARTO_PYTHON` is not optional. A bare `quarto render .` resolves a Python that cannot see `--user`-registered kernelspecs and dies on the first post pinning a named kernel — after it has already deleted `docs/`. Recover with `git checkout -- docs`.
   - Kernelspecs resolve while Quarto *indexes* the project, before it consults `_freeze/`. A missing kernel fails the whole render, frozen output or not. On a fresh clone run `make kernels-stub` first.
-- **Preview**: prefer `quarto preview posts/<slug>/index.qmd` — a whole-project preview indexes every post. Or serve the built output: `python -m http.server 8000 --directory docs`.
-- **Checks** (there is no test suite): `make check-posts` runs `scripts/check_posts.py` — stdlib-only, so it works on any interpreter — verifying that code posts pin a kernel + `requirements.txt`, that every pinned kernel appears in `make kernels-stub`, and that no post's frozen output has drifted from its source. Run it before any full render. `.claude/hooks/test-block-main-commit.sh` asserts the commit hook's allow/block matrix; run it after touching that hook.
+- **Preview**: prefer `quarto preview posts/<slug>/index.qmd` — a whole-project preview indexes every post. Or serve the built output: `.venv/bin/python -m http.server 8000 --directory docs`.
+- **Checks** (there is no test suite): `make check-posts` runs `scripts/check_posts.py` — stdlib-only, so it works on any interpreter — verifying that code posts pin a kernel + `requirements.txt`, that every pinned kernel appears in `make kernels-stub`, and that no post's frozen output has drifted from its source. Run it before any full render. `.claude/hooks/test-block-main-commit.sh` and `.claude/hooks/test-block-bare-python.sh` assert those hooks' allow/block matrices; run the matching one after touching a hook.
 - **`make install`**: `uv sync` the base dev/lint toolchain into `.venv` (no per-post ML deps). Installs from the committed `uv.lock` rather than re-resolving, and *prunes* anything not in the lock — hand-installed extras will not survive. `make lock` regenerates the lock without touching `.venv`. `requires-python = ">=3.11"`; raise it rather than lower it, since lowering re-forks the lock across interpreter versions.
 - **Lint**: black, ruff, mypy, pyupgrade, commitizen, codespell are configured in `.pre-commit-config.yaml` and `pyproject.toml`, but hooks aren't installed — run them manually, scoped to the files you touched: `pre-commit run --files <paths>`. **Not `--all-files`**: the repo carries years of pre-existing lint debt, so that rewrites ~235 unrelated files into your diff.
 
@@ -117,7 +121,7 @@ Posts are dependency-isolated: `pyproject.toml` carries only dev/lint tooling, n
 
 ### Building a post venv
 
-**Never install into or execute with the system Python** — a bare `python`/`pip` is the system one and will pollute it (or fail on externally-managed environments). Target the venv explicitly rather than relying on activation:
+Per the rule under Commands, never install with a bare `pip` — it pollutes the system Python or fails outright on an externally-managed one. Target the venv explicitly rather than relying on activation:
 
 ```bash
 uv venv .venv-<slug>
