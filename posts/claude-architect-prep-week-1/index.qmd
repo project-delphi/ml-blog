@@ -19,7 +19,7 @@ An agent loop is a `while` loop around one API call. Each time round, the model 
 
 These are notes from the first of a few weeks studying for the Claude Certified Architect – Foundations exam. Its biggest topic is Agentic Architecture and Orchestration.
 
-The full implementation is [`orchestrator.py`](./orchestrator.py), in this post's directory. Every code block below is copied straight out of it; the only change is the indentation.
+The full implementation is [`orchestrator.py`](./orchestrator.py), in this post's directory. Apart from the single-call example below, every code block is copied straight out of it; the only change is the indentation.
 
 I learned to think this way at [SoFi](https://www.sofi.com/) (Social Finance, Inc.), building apps that use LLMs to take over repetitive regulatory work. Nobody reads the loop's output there before it goes into a filing. A wrong answer that looks finished does more damage than a crash.
 
@@ -47,6 +47,38 @@ Prompting and agent design break in different places. Moving from one to the oth
 This does not make prompting matter less. It moves where it matters. The prompt is still a lever, and a wider one than plain text: [Soft Prompts vs. Hard Prompts](../soft-vs-hard-prompts/) starts a prompt exactly on GPT-2's vocabulary and, sixty gradient steps later, it has drifted somewhere no sentence can reach. But no prompt of either kind tells your code what to do when the model stops mid-sentence.
 
 So the model's output stops being an answer. It becomes an **instruction to your code**, and the rest of this post is about reading it correctly.
+
+## A single Messages API call
+
+The API is stateless, so every call carries the whole conversation. This is the call the loop wraps.
+
+```python
+import anthropic
+
+client = anthropic.Anthropic()  # ANTHROPIC_API_KEY, or an `ant auth login` profile
+
+response = client.messages.create(
+    model="claude-opus-5",
+    max_tokens=4096,
+    system="Answer in one sentence.",
+    messages=[{"role": "user", "content": "Why should an agent loop check stop_reason?"}],
+)
+
+print(response.stop_reason)          # "end_turn"
+print(response.usage.output_tokens)
+
+for block in response.content:       # a list of typed blocks, not a string
+    if block.type == "text":
+        print(block.text)
+```
+
+Three things in that response matter later.
+
+- `stop_reason` rides on every response. The next sections are the six values it can take, and what each one needs your code to do.
+- `content` is a list of typed blocks, not a string. On `claude-opus-5` thinking is on by default, so the list can hold `thinking` blocks beside `text` ones — which is why the loop checks `block.type`, and why it appends the whole list rather than the text.
+- `messages` is the entire history, sent again every call. Nothing is kept server-side.
+
+The loop that wraps this call is the one [LLM Agents from First Principles](../llm-agents-from-first-principles/) builds from scratch, against a raw model with its own text parsing. The Messages API changes what is hard: a tool call arrives as a typed `tool_use` block instead of text to be picked apart, so the parsing step disappears and the branching step is what is left to get right.
 
 ## The four-stage lifecycle
 
@@ -368,4 +400,5 @@ Stop. Reasons. Branch. Errors. Return. Inline. Budgets. Bound. Loops. Delegate. 
 - [anthropic-sdk-python](https://github.com/anthropics/anthropic-sdk-python) — the SDK, including `client.beta.messages.tool_runner`.
 - *Claude Certified Architect – Foundations exam guide* (Anthropic) — where the 27% figure above comes from.
 - [Soft Prompts vs. Hard Prompts](../soft-vs-hard-prompts/) — this blog; the hard-versus-soft prompt distinction used above.
+- [LLM Agents from First Principles](../llm-agents-from-first-principles/) — this blog; the same loop built from scratch against a raw model.
 - [`orchestrator.py`](./orchestrator.py) — the full code the blocks above are copied from.
