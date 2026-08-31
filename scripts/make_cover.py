@@ -40,7 +40,7 @@ USER_AGENT = "ml-blog-cover-bot/1.0 (https://github.com/project-delphi/ml-blog)"
 # LicenseShortName values Wikimedia returns. NC is rejected even when it only
 # appears on a second prong (Commons reports one short name for multi-licensed
 # files). ND is rejected because fit_cover center-crops. GFDL is not in the
-# CLAUDE.md allowlist.
+# AGENTS.md allowlist.
 ALLOWED_LICENSE_PREFIXES = (
     "public domain",
     "cc0",
@@ -522,7 +522,7 @@ def main(argv: list[str] | None = None) -> int:
     slug = args.post.rstrip("/").split("/")[-1]
     if args.source or args.commons:
         # An explicit --source/--commons still defaults to the slug's recorded
-        # fit. Otherwise the invocation CLAUDE.md documents would silently
+        # fit. Otherwise the invocation AGENTS.md documents would silently
         # re-crop a post that had been pinned to contain.
         fit = args.fit or recorded_fit(slug)
         if args.source:

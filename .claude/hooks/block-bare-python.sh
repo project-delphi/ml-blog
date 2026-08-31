@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Blocks a bare `python` / `python3` / `pip` in command position.
 # Wired up as a PreToolUse hook on Bash in .claude/settings.json.
-# Policy lives in CLAUDE.md: name the interpreter, never inherit one.
+# Policy lives in AGENTS.md: name the interpreter, never inherit one.
 #
 # A bare `python3` on this machine is Homebrew's, not this repo's. It is wrong
 # even for a throwaway one-liner or a stdlib-only script, because "it does not
@@ -20,7 +20,7 @@ fi
 cmd=$(jq -r '.tool_input.command // ""')
 
 # Drop whole-line shell comments before matching. Without this the hook denies
-# CLAUDE.md's own documented preview-server cleanup, whose comment line quotes
+# AGENTS.md's own documented preview-server cleanup, whose comment line quotes
 # `cd docs && python -m http.server` as the thing it is working around.
 cmd=$(printf '%s\n' "$cmd" | grep -v '^[[:space:]]*#' || true)
 
@@ -71,6 +71,6 @@ jq -n '{
   hookSpecificOutput: {
     hookEventName: "PreToolUse",
     permissionDecision: "deny",
-    permissionDecisionReason: "Refusing to run a bare `python`/`python3`/`pip` — that is Homebrew'"'"'s interpreter, not this repo'"'"'s (see CLAUDE.md § Commands). Name one explicitly: `.venv/bin/python`, `.venv-<slug>/bin/python`, or `uv run python`. Install with `uv pip install --python .venv-<slug>/bin/python`, never bare `pip`. This holds for one-liners, stdlib-only scripts like scripts/check_posts.py, and `-m http.server` too."
+    permissionDecisionReason: "Refusing to run a bare `python`/`python3`/`pip` — that is Homebrew'"'"'s interpreter, not this repo'"'"'s (see AGENTS.md). Name one explicitly: `.venv/bin/python`, `.venv-<slug>/bin/python`, or `uv run python`. Install with `uv pip install --python .venv-<slug>/bin/python`, never bare `pip`. This holds for one-liners, stdlib-only scripts like scripts/check_posts.py, and `-m http.server` too."
   }
 }'

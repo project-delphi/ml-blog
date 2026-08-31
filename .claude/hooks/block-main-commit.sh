@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Blocks `git commit` while HEAD is on main/master.
 # Wired up as a PreToolUse hook on Bash in .claude/settings.json.
-# Policy lives in CLAUDE.md: feature branch -> PR -> review -> merge.
+# Policy lives in AGENTS.md: feature branch -> PR -> review -> merge.
 set -uo pipefail
 
 # Fail open rather than breaking every Bash call, but say so — a policy hook
@@ -41,6 +41,6 @@ jq -n --arg b "$branch" '{
   hookSpecificOutput: {
     hookEventName: "PreToolUse",
     permissionDecision: "deny",
-    permissionDecisionReason: ("Refusing to commit directly to \($b) — this repo requires feature branch -> PR -> review -> merge (see CLAUDE.md). Create a branch first (`git switch -c <slug>`), then commit there. The /ship-pr skill does the whole loop.")
+    permissionDecisionReason: ("Refusing to commit directly to \($b) — this repo requires feature branch -> PR -> review -> merge (see AGENTS.md). Create a branch first (`git switch -c <slug>`), then commit there. The /ship-pr skill does the whole loop.")
   }
 }'

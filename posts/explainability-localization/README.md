@@ -36,7 +36,7 @@ data/cache/            model checkpoint, gitignored
 ## Re-running it
 
 The post needs its own virtualenv and a registered Jupyter kernel, per the
-convention in `../../CLAUDE.md`. Never the system Python.
+convention in `../../AGENTS.md`. Never the system Python.
 
 ```sh
 make venv       # creates ../../.venv-explainability, installs, registers the kernel

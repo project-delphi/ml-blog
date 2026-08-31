@@ -10,12 +10,12 @@ Essays on machine learning, statistics, and the tooling around them — by Ravi 
 
 ## What's here
 
-96 posts written since February 2024 (88 Quarto `.qmd`, 8 Jupyter `.ipynb`), each one
+105 posts written since February 2024 (97 Quarto `.qmd`, 8 Jupyter `.ipynb`), each one
 self-contained under `posts/<slug>/`. The recurring threads are machine learning and
 statistics, NLP and LLMs, mathematics — linear algebra, shape analysis, topology —
 data engineering, and developer tooling.
 
-36 of them execute their own code at render time and carry a pinned environment, so
+40 of them execute their own code at render time and carry a pinned environment, so
 for those the numbers and figures on the site are the ones the committed source
 produces. The rest display code without running it, ship stored notebook outputs, or
 predate the convention.
@@ -46,6 +46,7 @@ scripts/          check_posts.py, the repo's only check
 .claude/hooks/    block-main-commit.sh — refuses any commit while HEAD is on main
 _quarto.yml       site config; index.qmd is the post listing
 Makefile          install / kernel / kernels-stub / check-posts / quatro (render)
+AGENTS.md         the working rules for coding agents; CLAUDE.md points at it
 ```
 
 ## Working on the blog
@@ -110,8 +111,8 @@ Dependencies are isolated per post; `pyproject.toml` carries only dev/lint tooli
   their output committed. Quarto never executes these and `_freeze/` doesn't cover
   them.
 
-[`CLAUDE.md`](CLAUDE.md) has the full recipe for building a post venv, and the reasons
-each step is there.
+[`ENVIRONMENTS.md`](ENVIRONMENTS.md) has the full recipe for building a post venv, and
+the reasons each step is there.
 
 ### Two rules that bite
 
@@ -128,16 +129,21 @@ each step is there.
   a kernel and a `requirements.txt`, that every pinned kernel appears in
   `make kernels-stub`, and that no post's frozen output has drifted from its source.
   Stdlib-only, so it runs on any interpreter.
-- `pre-commit run --files <your paths>` for lint (black, ruff, mypy, pyupgrade,
-  codespell). Scope it to what you changed — `--all-files` rewrites a few hundred
-  files of pre-existing lint debt.
+- `.venv/bin/pre-commit run --files <your paths>` for lint (black, ruff, mypy,
+  pyupgrade). It is not on `PATH`, and the hooks are not installed into `.git/hooks/`,
+  so nothing runs automatically on commit. Scope it to what you changed —
+  `--all-files` rewrites a few hundred files of pre-existing lint debt. For spelling,
+  `uvx codespell <file>`: it is configured in `pyproject.toml` but no hook runs it.
 
 There is no test suite.
 
 ## Further reading
 
-- [`CLAUDE.md`](CLAUDE.md) — architecture, the venv tiers, why `_freeze/` is
-  committed, and the failure each build step prevents.
+- [`AGENTS.md`](AGENTS.md) — the working rules: branch policy, rendering, why
+  `_freeze/` is committed, and the traps `.gitignore` sets. `CLAUDE.md` is a pointer
+  to it, so coding agents pick it up automatically.
+- [`ENVIRONMENTS.md`](ENVIRONMENTS.md) — the venv tiers, the build recipes, and the
+  failure each step prevents.
 - [`STYLE.md`](STYLE.md) — the prose rules for posts.
 
 ## License

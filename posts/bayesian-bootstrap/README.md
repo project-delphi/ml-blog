@@ -32,7 +32,7 @@ data/cache/            parquet/npz caches, gitignored
 ## Rendering
 
 The post needs its own virtualenv and a registered Jupyter kernel, per the
-convention in `../../CLAUDE.md`. Never the system Python.
+convention in `../../AGENTS.md`. Never the system Python.
 
 ```sh
 make venv     # creates ../../.venv-bayesian-bootstrap, installs, registers the kernel

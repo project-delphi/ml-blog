@@ -37,7 +37,7 @@ data/raw/              MovieLens download, gitignored
 ## Rendering
 
 The post needs its own virtualenv and a registered Jupyter kernel, per the
-convention in `../../CLAUDE.md`. Never the system Python.
+convention in `../../AGENTS.md`. Never the system Python.
 
 ```sh
 make venv     # creates ../../.venv-svd, installs, registers the kernel

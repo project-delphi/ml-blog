@@ -9,13 +9,21 @@ Pick one before writing or editing a post.
 
 Personal posts currently in Register A regardless of date: `cheapest-ladder-is-shortest`, `brian-ripley-rousseeuw-prize`, `nvidia-buys-the-pyg-team`, `first-industry-job`, `consciousness-recursive-prediction`. Do not convert those to Register B.
 
-These rules do **not** license a rewrite of the five legacy posts — `data-types`, `features-importance-after-clustering`, `poor-persons-bayesian`, `post-with-code`, `working-with-quarto` (the `LEGACY_NO_ENV` set in `scripts/check_posts.py`). Quarto keys frozen output on an md5 of the source, so even a one-word prose fix there invalidates the `_freeze/` record and makes the next project render try to execute a post that has no environment to execute in. To bring one of those up to either register, build it a venv + kernel + `requirements.txt` and drop its `LEGACY_NO_ENV` entry first, as CLAUDE.md describes.
+These rules do **not** license a rewrite of the five legacy posts — `data-types`, `features-importance-after-clustering`, `poor-persons-bayesian`, `post-with-code`, `working-with-quarto` (the `LEGACY_NO_ENV` set in `scripts/check_posts.py`). Quarto keys frozen output on an md5 of the source, so even a one-word prose fix there invalidates the `_freeze/` record and makes the next project render try to execute a post that has no environment to execute in. To bring one of those up to either register, build it a venv + kernel + `requirements.txt` and drop its `LEGACY_NO_ENV` entry first, as AGENTS.md describes.
 
-The purpose sentence and one-word closer below have been applied to the 50 posts with no `_freeze/` record (42 `.qmd`, 8 `.ipynb`) — the ones a project render rebuilds without executing anything. The other 51 posts, the freeze-backed ones, have **not** been swept: editing one invalidates its frozen output and forces a re-execution, so that pass has to be done kernel by kernel with the venvs to hand. `tensor-factorizations` and `uses-of-tensor-factorizations` are the exceptions — they already carry both, being where the convention started. Count the two sets before sizing that sweep (`ls -d posts/*/`, `ls -d _freeze/posts/*/`) rather than trusting these numbers, which go stale with every new post. Do not assume the corpus is uniform yet.
+The purpose sentence and one-word closer below have been applied to the posts with no `_freeze/` record — the ones a project render rebuilds without executing anything (52 of 105 at the last count, of which 8 are `.ipynb`). The freeze-backed posts have **not** been swept: editing one invalidates its frozen output and forces a re-execution, so that pass has to be done kernel by kernel with the venvs to hand. `tensor-factorizations` and `uses-of-tensor-factorizations` are the exceptions — they already carry both, being where the convention started. Count the two sets before sizing that sweep (`ls -d posts/*/`, `ls -d _freeze/posts/*/`) rather than trusting these numbers, which go stale with every new post. Do not assume the corpus is uniform yet.
 
 ## Shared rules (both registers)
 
 - **Purpose sentence first.** The first prose sentence of the body says what the post is for, in plain English — what question it answers, or what the reader will be able to do afterwards. It sits immediately after the `![Title](./cover.png)` line (and after any "Made with…" credit block), before the first heading. This is not a licence for the `In this post we will…` / `This article explores…` formula: say the thing, don't announce that you are about to. Where a post already opens on a sentence that does this, leave it.
+- **Give the opening an on-ramp.** Banning the "in this post we will…" preamble is not
+  licence to open on a cold assertion. A bare claim asks the reader to care before
+  giving them a reason to. Open on something the reader already does or notices, say
+  why it is strange rather than obvious, and only then bring in the evidence and the
+  question the post answers — and do the same at the top of a section that reaches for
+  a new idea. "First principles" means *deriving* the framing from what the reader
+  already has, not citing it. Budget words for this; it is worth going over a length
+  target to keep it.
 - **One-word closer last.** Every post ends on a single line of one-word sentences that summarises it and lands its consequence: eight to twelve tokens, each a single capitalised word ending in a period, reading as two to four telegraphic clauses. It is a *new* final line — the existing last paragraph stays. It goes before `## References` where one exists.
 
   ```
@@ -24,6 +32,12 @@ The purpose sentence and one-word closer below have been applied to the 50 posts
   ```
 
   It must be true to *this* post's argument. A closer that merely restates the title is worse than none.
+- **Two or three concepts per post, at most.** One main idea, plus one or two that
+  support it. Name them in a sentence each before writing; if you cannot, the post has
+  no spine yet. A fourth idea that needs its own definition, figure, or worked example
+  is a second post — link to it rather than folding it in. This is a budget on ideas,
+  not on length: a post may take as many words as one idea honestly needs. The usual
+  failure is a survey that names eight techniques and explains none of them.
 - **Plain English, both registers.** Dry is not abstract. Register B's "do not try to make the text engaging" governs tone, not vocabulary — it never licenses writing in nouns.
   - Everyday words over Latinate ones: "use" not "utilize", "breaks" not "invalidates", "stops" not "terminates", "throws away" not "discards".
   - Active voice, and a verb doing the work: "the loop stops" beats "termination occurs".
@@ -33,6 +47,22 @@ The purpose sentence and one-word closer below have been applied to the 50 posts
 - **Never invent first-person detail.** Personal essays land through specifics the author actually has. Write a scene in the second person or as a hypothetical someone; do not fabricate memories or citations.
 - **Always situate the data.** Any post that uses, plots, or mentions a dataset must say where it came from before doing anything with it: provenance, collector and motive, what this post asks of it, what a wrong answer would cost, and why this method fits this data. Synthetic data is not exempt: say it is synthetic, give the generating process, and say what real situation it stands in for.
 - **Do not change executable cell code** when restyling prose. Widgets, freeze figures, and `{python}` / `{pyodide}` bodies stay as they are.
+- **Check the post against itself before shipping.** Three defects live *between*
+  artifacts, so every per-artifact check — the render, `make check-posts`, lint — passes
+  while the post argues against itself. Each has been shipped here at least once.
+  - *An artifact that teaches the opposite of the prose.* Enumerate every instruction
+    the post aims at the reader ("raise n to 12 and watch the band rise"), execute each
+    one, and confirm the stated consequence. Watch for artifacts that appear only at the
+    setting the post recommends. When a widget contradicts the prose, suspect the model
+    behind it before the rendering.
+  - *A worked example that contradicts the conclusion.* A sample transcript can parse,
+    compute correctly, and still show the opposite of what the results block and the
+    close both claim. Grep the distinctive string — a case id, a claim, a number — and
+    read every hit in argument order.
+  - *A heading that contradicts its own section.* Read the headings alone, in order,
+    reading every word through the post's dominant metaphor rather than its literal
+    sense: in a post built on ladders, a threshold "below" the old one reads as a lower
+    bar, not an earlier one.
 - **References last.** If the post cites papers, books, docs, datasets, or other posts as sources, end with a `## References` section: a short bulleted list of those sources (author/year or title + link). Collect only sources the post already names or links — do not invent citations. Skip the section when there are none. This heading is an allowed topic label in Register A. Inline links in the body may stay; the list at the end is the bibliography.
 
 ---
