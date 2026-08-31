@@ -55,7 +55,10 @@ allow/block matrix; run the matching one after touching a hook.
    [Widget sidecars are outside the freeze hash](#widget-sidecars-are-outside-the-freeze-hash).
 5. **Re-render with the project render.** Editing the source changes its md5, so
    `freeze: auto` re-executes that one post and nothing else, and the same pass
-   refreshes `search.json`, which any prose edit leaves stale. Use the
+   refreshes `search.json`, which any prose edit leaves stale. That re-execution needs
+   the post's **real** `.venv-<slug>` — on a clone where `make kernels-stub` registered
+   a dependency-free stub under that kernel name, the render fails with
+   `ModuleNotFoundError` after deleting `docs/` (`ENVIRONMENTS.md`). Use the
    single-document render only while iterating. Then `make check-posts`, then read
    [Before you ship a post](#before-you-ship-a-post).
 6. **Ship** on a branch with `docs/` in the same commit. The `ship-pr` skill automates
@@ -75,9 +78,11 @@ they cannot be re-rendered at all. See [Why `_freeze/` is committed](#why-_freez
 4. If it runs code, build its venv and kernel, commit `requirements.txt`, and add the
    kernel name to `kernels-stub` in the `Makefile` (`ENVIRONMENTS.md`).
 5. If it reads a data file at render time, un-ignore that directory in `.gitignore`
-   **and** add the slug to the `check-added-large-files` exclude in
-   `.pre-commit-config.yaml` — the cap is 500 kB, so the lint run rejects the file
-   otherwise. Copy the shape of the three existing carve-outs.
+   **and** add the slug to three excludes in `.pre-commit-config.yaml`:
+   `check-added-large-files` (a 500 kB cap that would reject the file),
+   `trailing-whitespace` and `end-of-file-fixer` (which would rewrite cached upstream
+   bytes so the committed copy no longer matches a fresh fetch). Copy the shape of the
+   three existing carve-outs.
 6. **Finish with a project render.** A single-document render writes only
    `docs/posts/<slug>/`, so the post goes live at its own URL while staying invisible on
    the home page and in search. `make check-posts` fails when a post is missing from
@@ -135,8 +140,11 @@ There is no test suite. `make check-posts` runs `scripts/check_posts.py`, which 
 that a code post pins a dedicated kernel (not the shared `python3`) and a
 `requirements.txt`, that every pinned kernel appears in `make kernels-stub`, that no
 post's frozen output has drifted from its source, and that every post appears in
-`docs/listings.json`. Run it before any full render. It is the one sanctioned bare
-`python3`: the checker is stdlib-only so it runs on a clone with no `.venv`.
+`docs/listings.json`. Run it before any full render, and run it **through `make`** —
+the recipe's bare `python3` is the only one in the repo, kept deliberately because the
+checker is stdlib-only and must work on a clone with no `.venv`. Typing
+`python3 scripts/check_posts.py` yourself is denied by the hook, which never sees the
+interpreter inside a `make` recipe.
 
 Lint is manual — the pre-commit hooks are **not** installed into `.git/hooks/`, so a
 plain commit is never pre-vetted:
@@ -190,8 +198,11 @@ Six posts render an interactive widget by reading a sibling `widgets.js` (and us
 
 Quarto hashes `index.qmd` **alone**. Editing a sidecar therefore leaves `_freeze/`
 valid, and a project render keeps serving the old bundle with no warning. After changing
-either file, re-render that post explicitly or delete `_freeze/posts/<slug>/` before
-committing.
+either file, **re-render that post explicitly** before committing. Do not reach for
+deleting `_freeze/posts/<slug>/` instead: `check_freeze` returns clean when a
+non-legacy record is simply absent, so `make check-posts` stays green while `docs/`
+still serves the old bundle, and the next project render has to execute the post for
+real — media pipeline and all.
 
 A different mechanism handles browser-run Python exercises: the vendored
 `_extensions/r-wasm/live/`, used only by `numpy-to-jax`, via `engine: jupyter`,
