@@ -380,7 +380,7 @@ window.Quarto = {
 <ul>
 <li><strong>Provenance.</strong> The City of Chicago open data portal, “Crimes — 2001 to Present” (Socrata resource <code>ijzp-q8t2</code>), a public extract of the police department’s records-management system.</li>
 <li><strong>Collector and motive.</strong> Reported incidents, entered by the Chicago Police Department and published under the city’s open-data programme. These are <em>reports</em>, not offences: reporting rates vary by area and by offence type, and the portal says so.</li>
-<li><strong>What this post uses.</strong> All of 2023 for community areas 1–24 and the eight most common offence types, binned to <span class="math inline">\(52 \times 24 \times 8\)</span> — week by area by type, 44,388 incidents. Written to <code>data/chicago_counts.npz</code> and committed, so a render never hits the API.</li>
+<li><strong>What this post uses.</strong> All of 2023 for community areas 1–24 and the eight most common offence types, binned to <span class="math inline">\(52 \times 24 \times 8\)</span> — week by area by type. The bins are 52 whole weeks, so the one leftover day of the year is dropped rather than making the last bin longer than the rest. Written to <code>data/chicago_counts.npz</code> and committed, so a render never hits the API; the incident count is printed by the cell below.</li>
 <li><strong>What this post asks of it.</strong> Estimate the covariance of a weekly array, which is what a forecast needs before it can put an interval on anything.</li>
 <li><strong>What being wrong costs.</strong> Covariance estimates drive patrol allocation and resource forecasting. A model that is confident in the wrong places sends people to the wrong places.</li>
 <li><strong>Why a structured inverse.</strong> Flattened, one week is a 192-dimensional vector and there are 52 weeks. The dense covariance is singular by construction. A precision that factorises across modes is estimable from the same data — and, as the last section notes, that is a modelling assumption rather than an algebraic inverse.</li>
@@ -579,16 +579,17 @@ Figure&nbsp;2: One t-product solve versus 103 independent 2D deconvolutions. The
 <summary>Code</summary>
 <div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>cube, meta <span class="op">=</span> D.pavia_crop()</span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>n, bands <span class="op">=</span> cube.shape[<span class="dv">0</span>], cube.shape[<span class="dv">2</span>]</span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>A <span class="op">=</span> D.blur_operator(n, bands, width<span class="op">=</span><span class="fl">1.4</span>, leak<span class="op">=</span><span class="fl">0.12</span>)</span>
-<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>rng <span class="op">=</span> np.random.default_rng(T.SEED)</span>
-<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>observed <span class="op">=</span> T.tprod(A, cube)</span>
-<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>observed <span class="op">=</span> observed <span class="op">+</span> rng.normal(<span class="dv">0</span>, <span class="fl">1e-3</span> <span class="op">*</span> observed.std(), observed.shape)</span>
-<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"crop </span><span class="sc">{</span>cube<span class="sc">.</span>shape<span class="sc">}</span><span class="ss"> from the </span><span class="sc">{</span><span class="bu">tuple</span>(meta[<span class="st">'full_shape'</span>])<span class="sc">}</span><span class="ss"> scene at origin </span><span class="sc">{</span>meta[<span class="st">'origin'</span>]<span class="sc">}</span><span class="ss">"</span>)</span>
-<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"operator </span><span class="sc">{</span>A<span class="sc">.</span>shape<span class="sc">}</span><span class="ss">: spatial smear in slice 0, </span><span class="sc">{</span><span class="fl">0.12</span><span class="sc">:.0%}</span><span class="ss"> band leak in slices 1 and -1"</span>)</span>
-<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"operator as a tensor:            </span><span class="sc">{</span>A<span class="sc">.</span>nbytes <span class="op">/</span> <span class="fl">1e6</span><span class="sc">:6.1f}</span><span class="ss"> MB"</span>)</span>
-<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"same operator unfolded (block circulant): </span><span class="sc">{</span>(n <span class="op">*</span> bands) <span class="op">**</span> <span class="dv">2</span> <span class="op">*</span> <span class="dv">8</span> <span class="op">/</span> <span class="fl">1e9</span><span class="sc">:6.1f}</span><span class="ss"> GB"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>LEAK <span class="op">=</span> <span class="fl">0.12</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>A <span class="op">=</span> D.blur_operator(n, bands, width<span class="op">=</span><span class="fl">1.4</span>, leak<span class="op">=</span>LEAK)</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>rng <span class="op">=</span> np.random.default_rng(T.SEED)</span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>observed <span class="op">=</span> T.tprod(A, cube)</span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>observed <span class="op">=</span> observed <span class="op">+</span> rng.normal(<span class="dv">0</span>, <span class="fl">1e-3</span> <span class="op">*</span> observed.std(), observed.shape)</span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"crop </span><span class="sc">{</span>cube<span class="sc">.</span>shape<span class="sc">}</span><span class="ss"> from the </span><span class="sc">{</span><span class="bu">tuple</span>(meta[<span class="st">'full_shape'</span>])<span class="sc">}</span><span class="ss"> scene at origin </span><span class="sc">{</span>meta[<span class="st">'origin'</span>]<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"operator </span><span class="sc">{</span>A<span class="sc">.</span>shape<span class="sc">}</span><span class="ss">: spatial smear in slice 0, </span><span class="sc">{</span>LEAK<span class="sc">:.0%}</span><span class="ss"> band leak in slices 1 and -1"</span>)</span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"operator as a tensor:            </span><span class="sc">{</span>A<span class="sc">.</span>nbytes <span class="op">/</span> <span class="fl">1e6</span><span class="sc">:6.1f}</span><span class="ss"> MB"</span>)</span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"same operator unfolded (block circulant): </span><span class="sc">{</span>(n <span class="op">*</span> bands) <span class="op">**</span> <span class="dv">2</span> <span class="op">*</span> <span class="dv">8</span> <span class="op">/</span> <span class="fl">1e9</span><span class="sc">:6.1f}</span><span class="ss"> GB"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output cell-output-stdout">
 <pre><code>crop (128, 128, 103) from the (610, 340, 103) scene at origin [150, 100]
@@ -661,39 +662,40 @@ t-solve          1e-04     0.0376     1.79°     0.14</code></pre>
 <span id="cb17-16"><a href="#cb17-16" aria-hidden="true" tabindex="-1"></a>gap <span class="op">=</span> sam[<span class="st">"band-by-band"</span>] <span class="op">-</span> sam[<span class="st">"t-solve"</span>]</span>
 <span id="cb17-17"><a href="#cb17-17" aria-hidden="true" tabindex="-1"></a>interior <span class="op">=</span> np.zeros_like(gap, dtype<span class="op">=</span><span class="bu">bool</span>)</span>
 <span id="cb17-18"><a href="#cb17-18" aria-hidden="true" tabindex="-1"></a>interior[<span class="dv">8</span>:<span class="op">-</span><span class="dv">8</span>, <span class="dv">8</span>:<span class="op">-</span><span class="dv">8</span>] <span class="op">=</span> <span class="va">True</span></span>
-<span id="cb17-19"><a href="#cb17-19" aria-hidden="true" tabindex="-1"></a>ranked <span class="op">=</span> np.argsort(np.where(interior, gap, <span class="op">-</span>np.inf).ravel())</span>
-<span id="cb17-20"><a href="#cb17-20" aria-hidden="true" tabindex="-1"></a>px, py <span class="op">=</span> np.unravel_index(ranked[<span class="bu">int</span>(<span class="fl">0.97</span> <span class="op">*</span> interior.<span class="bu">sum</span>())], (n, n))</span>
-<span id="cb17-21"><a href="#cb17-21" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb17-22"><a href="#cb17-22" aria-hidden="true" tabindex="-1"></a>fig, axes <span class="op">=</span> plt.subplots(<span class="dv">2</span>, <span class="dv">4</span>, figsize<span class="op">=</span>(<span class="dv">11</span>, <span class="fl">6.0</span>), height_ratios<span class="op">=</span>[<span class="fl">1.35</span>, <span class="dv">1</span>])</span>
-<span id="cb17-23"><a href="#cb17-23" aria-hidden="true" tabindex="-1"></a>fig.subplots_adjust(hspace<span class="op">=</span><span class="fl">0.28</span>)</span>
-<span id="cb17-24"><a href="#cb17-24" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> ax, (name, data) <span class="kw">in</span> <span class="bu">zip</span>(</span>
-<span id="cb17-25"><a href="#cb17-25" aria-hidden="true" tabindex="-1"></a>    axes[<span class="dv">0</span>], [(<span class="st">"clean"</span>, cube), (<span class="st">"observed"</span>, observed), <span class="op">*</span>recovered.items()]</span>
-<span id="cb17-26"><a href="#cb17-26" aria-hidden="true" tabindex="-1"></a>):</span>
-<span id="cb17-27"><a href="#cb17-27" aria-hidden="true" tabindex="-1"></a>    ax.imshow(rgb(data))</span>
-<span id="cb17-28"><a href="#cb17-28" aria-hidden="true" tabindex="-1"></a>    title <span class="op">=</span> name <span class="cf">if</span> name <span class="op">==</span> <span class="st">"clean"</span> <span class="cf">else</span> <span class="ss">f"</span><span class="sc">{</span>name<span class="sc">}</span><span class="ch">\n</span><span class="ss">relative error </span><span class="sc">{</span>relative(data)<span class="sc">:.3f}</span><span class="ss">"</span></span>
-<span id="cb17-29"><a href="#cb17-29" aria-hidden="true" tabindex="-1"></a>    ax.set_title(title)</span>
-<span id="cb17-30"><a href="#cb17-30" aria-hidden="true" tabindex="-1"></a>    ax.plot(py, px, <span class="st">"o"</span>, mfc<span class="op">=</span><span class="st">"none"</span>, mec<span class="op">=</span>GOLD, mew<span class="op">=</span><span class="fl">1.8</span>, ms<span class="op">=</span><span class="dv">13</span>)</span>
-<span id="cb17-31"><a href="#cb17-31" aria-hidden="true" tabindex="-1"></a>    ax.set_xticks([])</span>
-<span id="cb17-32"><a href="#cb17-32" aria-hidden="true" tabindex="-1"></a>    ax.set_yticks([])</span>
-<span id="cb17-33"><a href="#cb17-33" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb17-34"><a href="#cb17-34" aria-hidden="true" tabindex="-1"></a>spec <span class="op">=</span> axes[<span class="dv">1</span>][<span class="dv">0</span>]</span>
-<span id="cb17-35"><a href="#cb17-35" aria-hidden="true" tabindex="-1"></a>spec.plot(cube[px, py, :], color<span class="op">=</span>INK, lw<span class="op">=</span><span class="fl">2.0</span>, label<span class="op">=</span><span class="st">"clean"</span>, zorder<span class="op">=</span><span class="dv">3</span>)</span>
-<span id="cb17-36"><a href="#cb17-36" aria-hidden="true" tabindex="-1"></a>spec.plot(observed[px, py, :], color<span class="op">=</span>GOLD, lw<span class="op">=</span><span class="fl">1.2</span>, label<span class="op">=</span><span class="st">"observed"</span>)</span>
-<span id="cb17-37"><a href="#cb17-37" aria-hidden="true" tabindex="-1"></a>spec.plot(recovered[<span class="st">"band-by-band"</span>][px, py, :], color<span class="op">=</span>CORAL, lw<span class="op">=</span><span class="fl">1.3</span>, label<span class="op">=</span><span class="st">"band-by-band"</span>)</span>
-<span id="cb17-38"><a href="#cb17-38" aria-hidden="true" tabindex="-1"></a>spec.plot(recovered[<span class="st">"t-solve"</span>][px, py, :], color<span class="op">=</span>TEAL, lw<span class="op">=</span><span class="fl">1.3</span>, label<span class="op">=</span><span class="st">"t-solve"</span>)</span>
-<span id="cb17-39"><a href="#cb17-39" aria-hidden="true" tabindex="-1"></a>spec.set_title(<span class="ss">f"spectrum at the marked pixel (</span><span class="sc">{</span>px<span class="sc">}</span><span class="ss">, </span><span class="sc">{</span>py<span class="sc">}</span><span class="ss">)"</span>)</span>
-<span id="cb17-40"><a href="#cb17-40" aria-hidden="true" tabindex="-1"></a>spec.set_xlabel(<span class="st">"band"</span>)</span>
-<span id="cb17-41"><a href="#cb17-41" aria-hidden="true" tabindex="-1"></a>spec.set_ylabel(<span class="st">"reflectance"</span>)</span>
-<span id="cb17-42"><a href="#cb17-42" aria-hidden="true" tabindex="-1"></a>spec.legend(frameon<span class="op">=</span><span class="va">False</span>, fontsize<span class="op">=</span><span class="dv">7</span>)</span>
-<span id="cb17-43"><a href="#cb17-43" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb17-44"><a href="#cb17-44" aria-hidden="true" tabindex="-1"></a>vmax <span class="op">=</span> <span class="bu">float</span>(np.percentile(sam[<span class="st">"observed"</span>], <span class="dv">99</span>))</span>
-<span id="cb17-45"><a href="#cb17-45" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> ax, name <span class="kw">in</span> <span class="bu">zip</span>(axes[<span class="dv">1</span>][<span class="dv">1</span>:], [<span class="st">"observed"</span>, <span class="st">"band-by-band"</span>, <span class="st">"t-solve"</span>]):</span>
-<span id="cb17-46"><a href="#cb17-46" aria-hidden="true" tabindex="-1"></a>    im <span class="op">=</span> ax.imshow(sam[name], cmap<span class="op">=</span><span class="st">"inferno"</span>, vmin<span class="op">=</span><span class="dv">0</span>, vmax<span class="op">=</span>vmax)</span>
-<span id="cb17-47"><a href="#cb17-47" aria-hidden="true" tabindex="-1"></a>    ax.set_title(<span class="ss">f"</span><span class="sc">{</span>name<span class="sc">}</span><span class="ch">\n</span><span class="ss">mean SAM </span><span class="sc">{</span>sam[name]<span class="sc">.</span>mean()<span class="sc">:.2f}</span><span class="ss">°"</span>)</span>
-<span id="cb17-48"><a href="#cb17-48" aria-hidden="true" tabindex="-1"></a>    ax.set_xticks([])</span>
-<span id="cb17-49"><a href="#cb17-49" aria-hidden="true" tabindex="-1"></a>    ax.set_yticks([])</span>
-<span id="cb17-50"><a href="#cb17-50" aria-hidden="true" tabindex="-1"></a>fig.colorbar(im, ax<span class="op">=</span>axes[<span class="dv">1</span>][<span class="dv">1</span>:], shrink<span class="op">=</span><span class="fl">0.85</span>, label<span class="op">=</span><span class="st">"spectral angle (deg)"</span>)</span>
-<span id="cb17-51"><a href="#cb17-51" aria-hidden="true" tabindex="-1"></a>plt.show()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb17-19"><a href="#cb17-19" aria-hidden="true" tabindex="-1"></a><span class="co"># argsort puts the masked-out border pixels first, so index from the top.</span></span>
+<span id="cb17-20"><a href="#cb17-20" aria-hidden="true" tabindex="-1"></a>ranked <span class="op">=</span> np.argsort(np.where(interior, gap, <span class="op">-</span>np.inf).ravel())</span>
+<span id="cb17-21"><a href="#cb17-21" aria-hidden="true" tabindex="-1"></a>px, py <span class="op">=</span> np.unravel_index(ranked[<span class="op">-</span><span class="dv">1</span> <span class="op">-</span> <span class="bu">int</span>(<span class="fl">0.03</span> <span class="op">*</span> interior.<span class="bu">sum</span>())], (n, n))</span>
+<span id="cb17-22"><a href="#cb17-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-23"><a href="#cb17-23" aria-hidden="true" tabindex="-1"></a>fig, axes <span class="op">=</span> plt.subplots(<span class="dv">2</span>, <span class="dv">4</span>, figsize<span class="op">=</span>(<span class="dv">11</span>, <span class="fl">6.0</span>), height_ratios<span class="op">=</span>[<span class="fl">1.35</span>, <span class="dv">1</span>])</span>
+<span id="cb17-24"><a href="#cb17-24" aria-hidden="true" tabindex="-1"></a>fig.subplots_adjust(hspace<span class="op">=</span><span class="fl">0.28</span>)</span>
+<span id="cb17-25"><a href="#cb17-25" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> ax, (name, data) <span class="kw">in</span> <span class="bu">zip</span>(</span>
+<span id="cb17-26"><a href="#cb17-26" aria-hidden="true" tabindex="-1"></a>    axes[<span class="dv">0</span>], [(<span class="st">"clean"</span>, cube), (<span class="st">"observed"</span>, observed), <span class="op">*</span>recovered.items()]</span>
+<span id="cb17-27"><a href="#cb17-27" aria-hidden="true" tabindex="-1"></a>):</span>
+<span id="cb17-28"><a href="#cb17-28" aria-hidden="true" tabindex="-1"></a>    ax.imshow(rgb(data))</span>
+<span id="cb17-29"><a href="#cb17-29" aria-hidden="true" tabindex="-1"></a>    title <span class="op">=</span> name <span class="cf">if</span> name <span class="op">==</span> <span class="st">"clean"</span> <span class="cf">else</span> <span class="ss">f"</span><span class="sc">{</span>name<span class="sc">}</span><span class="ch">\n</span><span class="ss">relative error </span><span class="sc">{</span>relative(data)<span class="sc">:.3f}</span><span class="ss">"</span></span>
+<span id="cb17-30"><a href="#cb17-30" aria-hidden="true" tabindex="-1"></a>    ax.set_title(title)</span>
+<span id="cb17-31"><a href="#cb17-31" aria-hidden="true" tabindex="-1"></a>    ax.plot(py, px, <span class="st">"o"</span>, mfc<span class="op">=</span><span class="st">"none"</span>, mec<span class="op">=</span>GOLD, mew<span class="op">=</span><span class="fl">1.8</span>, ms<span class="op">=</span><span class="dv">13</span>)</span>
+<span id="cb17-32"><a href="#cb17-32" aria-hidden="true" tabindex="-1"></a>    ax.set_xticks([])</span>
+<span id="cb17-33"><a href="#cb17-33" aria-hidden="true" tabindex="-1"></a>    ax.set_yticks([])</span>
+<span id="cb17-34"><a href="#cb17-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-35"><a href="#cb17-35" aria-hidden="true" tabindex="-1"></a>spec <span class="op">=</span> axes[<span class="dv">1</span>][<span class="dv">0</span>]</span>
+<span id="cb17-36"><a href="#cb17-36" aria-hidden="true" tabindex="-1"></a>spec.plot(cube[px, py, :], color<span class="op">=</span>INK, lw<span class="op">=</span><span class="fl">2.0</span>, label<span class="op">=</span><span class="st">"clean"</span>, zorder<span class="op">=</span><span class="dv">3</span>)</span>
+<span id="cb17-37"><a href="#cb17-37" aria-hidden="true" tabindex="-1"></a>spec.plot(observed[px, py, :], color<span class="op">=</span>GOLD, lw<span class="op">=</span><span class="fl">1.2</span>, label<span class="op">=</span><span class="st">"observed"</span>)</span>
+<span id="cb17-38"><a href="#cb17-38" aria-hidden="true" tabindex="-1"></a>spec.plot(recovered[<span class="st">"band-by-band"</span>][px, py, :], color<span class="op">=</span>CORAL, lw<span class="op">=</span><span class="fl">1.3</span>, label<span class="op">=</span><span class="st">"band-by-band"</span>)</span>
+<span id="cb17-39"><a href="#cb17-39" aria-hidden="true" tabindex="-1"></a>spec.plot(recovered[<span class="st">"t-solve"</span>][px, py, :], color<span class="op">=</span>TEAL, lw<span class="op">=</span><span class="fl">1.3</span>, label<span class="op">=</span><span class="st">"t-solve"</span>)</span>
+<span id="cb17-40"><a href="#cb17-40" aria-hidden="true" tabindex="-1"></a>spec.set_title(<span class="ss">f"spectrum at the marked pixel (</span><span class="sc">{</span>px<span class="sc">}</span><span class="ss">, </span><span class="sc">{</span>py<span class="sc">}</span><span class="ss">)"</span>)</span>
+<span id="cb17-41"><a href="#cb17-41" aria-hidden="true" tabindex="-1"></a>spec.set_xlabel(<span class="st">"band"</span>)</span>
+<span id="cb17-42"><a href="#cb17-42" aria-hidden="true" tabindex="-1"></a>spec.set_ylabel(<span class="st">"reflectance"</span>)</span>
+<span id="cb17-43"><a href="#cb17-43" aria-hidden="true" tabindex="-1"></a>spec.legend(frameon<span class="op">=</span><span class="va">False</span>, fontsize<span class="op">=</span><span class="dv">7</span>)</span>
+<span id="cb17-44"><a href="#cb17-44" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-45"><a href="#cb17-45" aria-hidden="true" tabindex="-1"></a>vmax <span class="op">=</span> <span class="bu">float</span>(np.percentile(sam[<span class="st">"observed"</span>], <span class="dv">99</span>))</span>
+<span id="cb17-46"><a href="#cb17-46" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> ax, name <span class="kw">in</span> <span class="bu">zip</span>(axes[<span class="dv">1</span>][<span class="dv">1</span>:], [<span class="st">"observed"</span>, <span class="st">"band-by-band"</span>, <span class="st">"t-solve"</span>]):</span>
+<span id="cb17-47"><a href="#cb17-47" aria-hidden="true" tabindex="-1"></a>    im <span class="op">=</span> ax.imshow(sam[name], cmap<span class="op">=</span><span class="st">"inferno"</span>, vmin<span class="op">=</span><span class="dv">0</span>, vmax<span class="op">=</span>vmax)</span>
+<span id="cb17-48"><a href="#cb17-48" aria-hidden="true" tabindex="-1"></a>    ax.set_title(<span class="ss">f"</span><span class="sc">{</span>name<span class="sc">}</span><span class="ch">\n</span><span class="ss">mean SAM </span><span class="sc">{</span>sam[name]<span class="sc">.</span>mean()<span class="sc">:.2f}</span><span class="ss">°"</span>)</span>
+<span id="cb17-49"><a href="#cb17-49" aria-hidden="true" tabindex="-1"></a>    ax.set_xticks([])</span>
+<span id="cb17-50"><a href="#cb17-50" aria-hidden="true" tabindex="-1"></a>    ax.set_yticks([])</span>
+<span id="cb17-51"><a href="#cb17-51" aria-hidden="true" tabindex="-1"></a>fig.colorbar(im, ax<span class="op">=</span>axes[<span class="dv">1</span>][<span class="dv">1</span>:], shrink<span class="op">=</span><span class="fl">0.85</span>, label<span class="op">=</span><span class="st">"spectral angle (deg)"</span>)</span>
+<span id="cb17-52"><a href="#cb17-52" aria-hidden="true" tabindex="-1"></a>plt.show()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output cell-output-display">
 <div id="fig-hsi-restore" class="quarto-float quarto-figure quarto-figure-center anchored">
@@ -899,7 +901,7 @@ Figure&nbsp;6: One dense covariance over the flattened array, or one covariance 
 <span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>      <span class="ss">f"</span><span class="sc">{</span>np<span class="sc">.</span>linalg<span class="sc">.</span>matrix_rank(Ztr.reshape(<span class="bu">len</span>(Ztr), <span class="op">-</span><span class="dv">1</span>).T <span class="op">@</span> Ztr.reshape(<span class="bu">len</span>(Ztr), <span class="op">-</span><span class="dv">1</span>))<span class="sc">}</span><span class="ss"> of </span><span class="sc">{</span>dim<span class="sc">}</span><span class="ss">"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output cell-output-stdout">
-<pre><code>70,372 incidents, 2023, community areas 1-24
+<pre><code>70,182 incidents, 2023, community areas 1-24
 array (52, 24, 8) -&gt; 40 training weeks, 12 held out
 one week flattened is a 192-vector; the dense sample covariance has rank 39 of 192</code></pre>
 </div>
@@ -950,9 +952,9 @@ one week flattened is a 192-vector; the dense sample covariance has rank 39 of 1
 <div class="cell-output cell-output-stdout">
 <pre><code>model                             held-out log-lik  free params
 ---------------------------------------------------------------
-separable, area x type                      -193.1          336
-separable, variances only                   -191.1           32
-one variance for everything                 -192.5            1
+separable, area x type                      -192.7          336
+separable, variances only                   -191.2           32
+one variance for everything                 -192.7            1
 dense 192x192 + best ridge                  -202.2       18,528
 
 the dense model's ridge (1) was chosen on the held-out weeks themselves</code></pre>

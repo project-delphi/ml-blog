@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import tempfile
 import urllib.parse
 from datetime import date, datetime
 from pathlib import Path
@@ -62,14 +63,17 @@ def _download_resumable(url: str, dest: Path, attempts: int = 8) -> Path:
                 else:
                     resp.raise_for_status()
                     mode = "ab" if have else "wb"
-                total = have + int(resp.headers.get("Content-Length", 0))
+                length = resp.headers.get("Content-Length")
+                if length is None:
+                    raise RuntimeError("no Content-Length; cannot verify the download")
+                total = have + int(length)
                 with dest.open(mode) as fh:
                     for chunk in resp.iter_content(1 << 20):
                         fh.write(chunk)
             if total and dest.stat().st_size >= total:
                 print(f"      {dest.stat().st_size / 1e6:.1f} MB complete")
                 return dest
-        except requests.RequestException as err:
+        except (requests.RequestException, RuntimeError) as err:
             print(f"      dropped: {err}")
     raise RuntimeError(f"could not download {url} after {attempts} attempts")
 
@@ -80,9 +84,13 @@ def fetch_pavia() -> Path:
     if out.exists():
         print(f"kept  {out} ({out.stat().st_size / 1e6:.1f} MB)")
         return out
-    raw = OUT / "PaviaU.mat"  # gitignored scratch; only the crop is committed
-    _download_resumable(PAVIA_URL, raw)
-    cube = loadmat(raw)[PAVIA_KEY]
+    # Not under data/: the .gitignore carve-out un-ignores everything there,
+    # and this post is also exempt from the large-file hook, so a stray
+    # 34.8 MB scratch file would be committed with no warning.
+    with tempfile.TemporaryDirectory() as tmp:
+        raw = Path(tmp) / "PaviaU.mat"
+        _download_resumable(PAVIA_URL, raw)
+        cube = loadmat(raw)[PAVIA_KEY]
     print(f"      full cube {cube.shape} {cube.dtype}")
     r, c, n = CROP_ROW, CROP_COL, CROP_SIZE
     crop = cube[r : r + n, c : c + n, :].astype(np.float32)
@@ -96,7 +104,6 @@ def fetch_pavia() -> Path:
         source=np.array(PAVIA_URL),
         retrieved=np.array(date.today().isoformat()),
     )
-    raw.unlink()
     print(f"wrote {out} {crop.shape} ({out.stat().st_size / 1e6:.1f} MB)")
     return out
 
@@ -144,7 +151,9 @@ def fetch_chicago() -> Path:
             if kind is None or not area:
                 continue
             stamp = datetime.fromisoformat(row["date"])
-            week = min((stamp.timetuple().tm_yday - 1) // 7, 51)
+            week = (stamp.timetuple().tm_yday - 1) // 7
+            if week >= 52:  # the 1-2 days past 52 whole weeks
+                continue
             counts[week, int(area) - 1, kind] += 1
             total += 1
         offset += PAGE

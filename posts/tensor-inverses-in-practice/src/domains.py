@@ -278,10 +278,3 @@ def separable_quadform(Z: np.ndarray, covs: list[np.ndarray]) -> np.ndarray:
         w = np.linalg.inv(np.linalg.cholesky(cov))
         W = np.moveaxis(np.tensordot(w, W, axes=([1], [j + 1])), 0, j + 1)
     return (W**2).reshape(Z.shape[0], -1).sum(axis=1)
-
-
-def gaussian_loglik(X: np.ndarray, prec: np.ndarray, logdet: float) -> float:
-    """Mean log-likelihood per observation of rows of X under N(0, prec^-1)."""
-    d = X.shape[1]
-    quad = np.einsum("nd,de,ne->n", X, prec, X)
-    return float(np.mean(-0.5 * (d * np.log(2 * np.pi) - logdet + quad)))

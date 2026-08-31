@@ -103,7 +103,7 @@ Four problems, three sources: two downloaded, one a set of published material co
 
 - **Provenance.** The City of Chicago open data portal, "Crimes — 2001 to Present" (Socrata resource `ijzp-q8t2`), a public extract of the police department's records-management system.
 - **Collector and motive.** Reported incidents, entered by the Chicago Police Department and published under the city's open-data programme. These are *reports*, not offences: reporting rates vary by area and by offence type, and the portal says so.
-- **What this post uses.** All of 2023 for community areas 1–24 and the eight most common offence types, binned to $52 \times 24 \times 8$ — week by area by type, 44,388 incidents. Written to `data/chicago_counts.npz` and committed, so a render never hits the API.
+- **What this post uses.** All of 2023 for community areas 1–24 and the eight most common offence types, binned to $52 \times 24 \times 8$ — week by area by type. The bins are 52 whole weeks, so the one leftover day of the year is dropped rather than making the last bin longer than the rest. Written to `data/chicago_counts.npz` and committed, so a render never hits the API; the incident count is printed by the cell below.
 - **What this post asks of it.** Estimate the covariance of a weekly array, which is what a forecast needs before it can put an interval on anything.
 - **What being wrong costs.** Covariance estimates drive patrol allocation and resource forecasting. A model that is confident in the wrong places sends people to the wrong places.
 - **Why a structured inverse.** Flattened, one week is a 192-dimensional vector and there are 52 weeks. The dense covariance is singular by construction. A precision that factorises across modes is estimable from the same data — and, as the last section notes, that is a modelling assumption rather than an algebraic inverse.
@@ -242,14 +242,15 @@ The degradation has two parts. Optics smear each band across space, and the sens
 #| label: hsi-setup
 cube, meta = D.pavia_crop()
 n, bands = cube.shape[0], cube.shape[2]
-A = D.blur_operator(n, bands, width=1.4, leak=0.12)
+LEAK = 0.12
+A = D.blur_operator(n, bands, width=1.4, leak=LEAK)
 
 rng = np.random.default_rng(T.SEED)
 observed = T.tprod(A, cube)
 observed = observed + rng.normal(0, 1e-3 * observed.std(), observed.shape)
 
 print(f"crop {cube.shape} from the {tuple(meta['full_shape'])} scene at origin {meta['origin']}")
-print(f"operator {A.shape}: spatial smear in slice 0, {0.12:.0%} band leak in slices 1 and -1")
+print(f"operator {A.shape}: spatial smear in slice 0, {LEAK:.0%} band leak in slices 1 and -1")
 print(f"operator as a tensor:            {A.nbytes / 1e6:6.1f} MB")
 print(f"same operator unfolded (block circulant): {(n * bands) ** 2 * 8 / 1e9:6.1f} GB")
 ```
@@ -315,8 +316,9 @@ sam = {
 gap = sam["band-by-band"] - sam["t-solve"]
 interior = np.zeros_like(gap, dtype=bool)
 interior[8:-8, 8:-8] = True
+# argsort puts the masked-out border pixels first, so index from the top.
 ranked = np.argsort(np.where(interior, gap, -np.inf).ravel())
-px, py = np.unravel_index(ranked[int(0.97 * interior.sum())], (n, n))
+px, py = np.unravel_index(ranked[-1 - int(0.03 * interior.sum())], (n, n))
 
 fig, axes = plt.subplots(2, 4, figsize=(11, 6.0), height_ratios=[1.35, 1])
 fig.subplots_adjust(hspace=0.28)
