@@ -223,12 +223,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <figcaption>Parameter-Efficient Fine-Tuning with Hugging Face’s peft Library</figcaption>
 </figure>
 </div>
-<p>Fine-tuning GPT-2 with LoRA updates 294,912 of its 124 million parameters — 0.24% — and the result saves to a file of about one megabyte, against 523 MB for the base model. The obvious question is why that is not catastrophically worse than fine-tuning everything.</p>
+<p>Fine-tuning GPT-2 with LoRA updates 294,912 of its 124 million parameters — 0.24% — and the result saves to a file of about one megabyte, against 523 MB for the base model. The obvious question is why that is not catastrophically worse than updating every weight.</p>
 <p>The answer is a claim about the <em>update</em>, not the model. Full fine-tuning learns a weight change ΔW for each matrix, and the empirical observation behind LoRA is that this ΔW has low intrinsic rank: adapting a pretrained model to a task moves the weights in a small number of directions, even though the weights themselves are full-rank. So you do not need a full matrix to represent the change. You need two thin ones.</p>
 <p>Everything else — the memory savings, the swappable adapters, the fact that this scales to models you could never fully fine-tune — falls out of that.</p>
 <section id="the-update-is-a-product-of-two-thin-matrices" class="level2">
 <h2 class="anchored" data-anchor-id="the-update-is-a-product-of-two-thin-matrices">The update is a product of two thin matrices</h2>
-<p>Concretely, LoRA leaves the pretrained <code>W</code> frozen and learns <code>A</code> and <code>B</code> alongside it, where the effective weight during the forward pass is:</p>
+<p>LoRA leaves the pretrained <code>W</code> frozen and learns <code>A</code> and <code>B</code> alongside it, where the effective weight during the forward pass is:</p>
 <pre><code>W_eff = W + ΔW,   ΔW = B @ A</code></pre>
 <p>If <code>W</code> is <code>d × k</code>, then <code>A</code> is <code>r × k</code> and <code>B</code> is <code>d × r</code> for some rank <code>r</code> much smaller than either dimension. With <code>r = 8</code> on a 768-wide model, each adapted matrix costs <code>8 × 768 × 2 = 12,288</code> parameters instead of <code>768 × 768 = 589,824</code>. Only <code>A</code> and <code>B</code> receive gradients.</p>
 <p>Wrapping a model is two objects — a config describing the scheme, and <code>get_peft_model</code> to apply it:</p>
@@ -340,12 +340,12 @@ base model   :  522.7 MB
 ratio        :    461x smaller</code></pre>
 </div>
 </div>
-<p>Three files, and the weights among them are about a megabyte. This is the practical payoff and it is worth stating plainly: ten task-specific adaptations of one model cost 523 MB plus ten megabytes, not ten times 523 MB. Serving systems exploit exactly this — hold one base model resident, swap adapters per request.</p>
+<p>Three files, and the weights among them are about a megabyte. Ten task-specific adaptations of one model cost 523 MB plus ten megabytes, not ten times 523 MB. Serving systems exploit exactly this — hold one base model resident, swap adapters per request.</p>
 <p>The <code>adapter_config.json</code> is what makes it reloadable; it records the base model id and the rank, so <code>PeftModel.from_pretrained(base, save_dir)</code> knows what to reconstruct.</p>
 </section>
 <section id="prompt-tuning-changes-the-input-instead" class="level2">
 <h2 class="anchored" data-anchor-id="prompt-tuning-changes-the-input-instead">Prompt tuning changes the input instead</h2>
-<p>LoRA modifies matrices inside the transformer blocks. The main alternative leaves the entire network untouched and learns new <em>inputs</em> — a handful of continuous embedding vectors prepended to the sequence, optimized by gradient descent while everything downstream stays frozen:</p>
+<p>LoRA modifies matrices inside the transformer blocks. The main alternative leaves the network untouched and learns new <em>inputs</em> — a handful of continuous embedding vectors prepended to the sequence, optimized by gradient descent while the transformer blocks stay frozen:</p>
 <div id="36750a6c" class="cell" data-execution_count="3">
 <details class="code-fold">
 <summary>Code</summary>

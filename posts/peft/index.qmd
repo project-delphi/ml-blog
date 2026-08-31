@@ -15,7 +15,7 @@ format:
 
 ![Parameter-Efficient Fine-Tuning with Hugging Face's peft Library](./cover.png)
 
-Fine-tuning GPT-2 with LoRA updates 294,912 of its 124 million parameters — 0.24% — and the result saves to a file of about one megabyte, against 523 MB for the base model. The obvious question is why that is not catastrophically worse than fine-tuning everything.
+Fine-tuning GPT-2 with LoRA updates 294,912 of its 124 million parameters — 0.24% — and the result saves to a file of about one megabyte, against 523 MB for the base model. The obvious question is why that is not catastrophically worse than updating every weight.
 
 The answer is a claim about the *update*, not the model. Full fine-tuning learns a weight change ΔW for each matrix, and the empirical observation behind LoRA is that this ΔW has low intrinsic rank: adapting a pretrained model to a task moves the weights in a small number of directions, even though the weights themselves are full-rank. So you do not need a full matrix to represent the change. You need two thin ones.
 
@@ -23,7 +23,7 @@ Everything else — the memory savings, the swappable adapters, the fact that th
 
 ## The update is a product of two thin matrices
 
-Concretely, LoRA leaves the pretrained `W` frozen and learns `A` and `B` alongside it, where the effective weight during the forward pass is:
+LoRA leaves the pretrained `W` frozen and learns `A` and `B` alongside it, where the effective weight during the forward pass is:
 
 ```
 W_eff = W + ΔW,   ΔW = B @ A
@@ -86,13 +86,13 @@ print(f"base model   : {base_bytes / 1024**2:6.1f} MB")
 print(f"ratio        : {base_bytes / adapter_bytes:6.0f}x smaller")
 ```
 
-Three files, and the weights among them are about a megabyte. This is the practical payoff and it is worth stating plainly: ten task-specific adaptations of one model cost 523 MB plus ten megabytes, not ten times 523 MB. Serving systems exploit exactly this — hold one base model resident, swap adapters per request.
+Three files, and the weights among them are about a megabyte. Ten task-specific adaptations of one model cost 523 MB plus ten megabytes, not ten times 523 MB. Serving systems exploit exactly this — hold one base model resident, swap adapters per request.
 
 The `adapter_config.json` is what makes it reloadable; it records the base model id and the rank, so `PeftModel.from_pretrained(base, save_dir)` knows what to reconstruct.
 
 ## Prompt tuning changes the input instead
 
-LoRA modifies matrices inside the transformer blocks. The main alternative leaves the entire network untouched and learns new *inputs* — a handful of continuous embedding vectors prepended to the sequence, optimized by gradient descent while everything downstream stays frozen:
+LoRA modifies matrices inside the transformer blocks. The main alternative leaves the network untouched and learns new *inputs* — a handful of continuous embedding vectors prepended to the sequence, optimized by gradient descent while the transformer blocks stay frozen:
 
 ```{python}
 from peft import PromptTuningConfig

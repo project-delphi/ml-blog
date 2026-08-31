@@ -22,7 +22,7 @@ The purpose sentence and one-word closer below have been applied to the posts wi
   why it is strange rather than obvious, and only then bring in the evidence and the
   question the post answers — and do the same at the top of a section that reaches for
   a new idea. "First principles" means *deriving* the framing from what the reader
-  already has, not citing it. Budget words for this; it is worth going over a length
+  already has, not citing it. Budget words for this; go over a length
   target to keep it.
 - **One-word closer last.** Every post ends on a single line of one-word sentences that summarises it and lands its consequence: eight to twelve tokens, each a single capitalised word ending in a period, reading as two to four telegraphic clauses. It is a *new* final line — the existing last paragraph stays. It goes before `## References` where one exists.
 
@@ -36,14 +36,18 @@ The purpose sentence and one-word closer below have been applied to the posts wi
   support it. Name them in a sentence each before writing; if you cannot, the post has
   no spine yet. A fourth idea that needs its own definition, figure, or worked example
   is a second post — link to it rather than folding it in. This is a budget on ideas,
-  not on length: a post may take as many words as one idea honestly needs. The usual
-  failure is a survey that names eight techniques and explains none of them.
+  not on length: a post may take as many words as one idea needs. A survey that
+  names eight techniques and explains none of them has no spine.
 - **Plain English, both registers.** Dry is not abstract. Register B's "do not try to make the text engaging" governs tone, not vocabulary — it never licenses writing in nouns.
   - Everyday words over Latinate ones: "use" not "utilize", "breaks" not "invalidates", "stops" not "terminates", "throws away" not "discards".
   - Active voice, and a verb doing the work: "the loop stops" beats "termination occurs".
   - Short sentences. If a heavy clause sits between a subject and its verb, split it.
   - Compress by cutting sentences, not by packing an argument into a noun phrase. "Making delegation a tool call rather than a special case means it inherits the error path" is shorter than the plain version and much harder to read.
-  - A jargon label — "least privilege", "blast radius", "context isolation", "state machine" — needs a plain restatement beside it, or a plain phrase in its place. Domain vocabulary lifted straight out of the source docs is the usual way this creeps in.
+  - A jargon label — "least privilege", "blast radius", "context isolation", "state machine" — needs a plain restatement beside it, or a plain phrase in its place. Domain vocabulary lifted straight out of the source docs is how this creeps in.
+  - Name the thing. Vague universals, hedges, and signposts that stand in for a noun are filler: `everything` / `everything else`, `nothing here` / `nothing below` / `nothing in this`, `nothing else`, `the rest` / `the rest of this post`, `the whole` / `the entire` / `the whole point` / `the whole story`. Replace with the actual set, the specific object, or delete. Keep the word when it *is* the set (`sequence everything`; `the whole conversation` sent every call).
+  - Figure captions name what the panel shows, not the reading order. Cut `from left to right`, `left-to-right`, `top to bottom` as a tour. Keep `Left:` / `Right:` when they label two panels.
+  - Throat-clearing: the next sentence usually already does the work. Cut `the honest` (`the honest reading`, `the honest part`, `the honest headline`, `stated honestly`), `that is the point` / `the point is` / `this is the point of`, `worth stating` / `worth naming` / `worth noting` / `worth holding onto`, `Concretely,`, `does all the work`, `Keep this result in mind while reading the rest of the post`, `deliberately *not*` as a preamble before saying what the post is, and `which is why` / `which is what` when they restate the previous sentence. `by construction` stays in math ("zero by construction"); cut it when it only means "because we set it that way". Cut the contrast formula `X is not Y — it is Z` when Y was never in play.
+  - Old marketing diction is the same vice: `utilize`, `facilitate`, `seamless`, `robust` as praise, `powerful`, `journey`, `best practices`, `In this post/guide/article, we'll explore`.
 - **Never invent first-person detail.** Personal essays land through specifics the author actually has. Write a scene in the second person or as a hypothetical someone; do not fabricate memories or citations.
 - **Always situate the data.** Any post that uses, plots, or mentions a dataset must say where it came from before doing anything with it: provenance, collector and motive, what this post asks of it, what a wrong answer would cost, and why this method fits this data. Synthetic data is not exempt: say it is synthetic, give the generating process, and say what real situation it stands in for.
 - **Do not change executable cell code** when restyling prose. Widgets, freeze figures, and `{python}` / `{pyodide}` bodies stay as they are.
@@ -91,8 +95,8 @@ Apply this register to what you are already writing in that voice. It is not a m
 
 ### Sentences and words
 
-- Prefer short, direct sentences. Split the ones that stack clauses until the reader loses the subject before reaching the verb — two or more nested subordinate clauses is the usual tell.
-- This is not a ban on the long sentence, and it is not a licence to flatten the house voice. Clauses joined by em-dashes to gloss a term or hang a concrete case off an abstract claim read as one clear beat; both calibration examples below do it. Keep those. The target is the sentence you have to read twice, not the sentence that is merely long.
+- Prefer short, direct sentences. Split the ones that stack clauses until the reader loses the subject before reaching the verb — two or more nested subordinate clauses is the tell.
+- Long sentences are allowed when they stay one beat: an em-dash that glosses a term, or hangs a concrete case off an abstract claim. Both calibration examples below do that. Keep those. Cut the sentence you have to read twice, not the sentence that is long.
 - Editing an existing Register A post, match its register. These rules tighten prose; they do not convert a post to a different voice. Personal essays especially must not drift into guide voice — claims turning into requirements lists, headings into section labels.
 - Use everyday words over formal/Latinate ones where a simpler word exists: "use" not "utilize," "help" not "facilitate," "start" not "commence," "about" not "approximately."
 - Default to active voice ("the function returns X") over passive ("X is returned by the function").
