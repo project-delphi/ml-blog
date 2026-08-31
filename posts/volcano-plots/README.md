@@ -21,7 +21,7 @@ data/airway_de_results.csv   DESeq2 results for GSE52778, committed (2.4 MB)
 ## Rendering
 
 The post needs its own virtualenv and a registered Jupyter kernel, per the
-convention in `../../CLAUDE.md`. Never the system Python.
+convention in `../../AGENTS.md`. Never the system Python.
 
 ```sh
 uv venv ../../.venv-volcano --python 3.12

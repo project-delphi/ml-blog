@@ -99,4 +99,4 @@ the homepage listing) fails on an unrelated post — `posts/skills-vs-commands/`
 pins `jupyter: skills-vs-commands`, a kernel that is not registered locally. That
 is independent of this post, which uses the knitr engine and no Jupyter kernel at
 all, but it does mean the homepage listing cannot be regenerated until that kernel
-is registered (see the repo `CLAUDE.md` for the per-post venv/kernel convention).
+is registered (see the repo `AGENTS.md` for the per-post venv/kernel convention).

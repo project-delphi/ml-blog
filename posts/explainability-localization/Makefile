@@ -1,7 +1,7 @@
 # Build for "Explainability Is a Localization Problem"
 #
 # Everything runs through the post's dedicated virtualenv at the repo root, per
-# the convention in ../../CLAUDE.md. Never the system Python.
+# the convention in ../../AGENTS.md. Never the system Python.
 
 REPO    := $(shell cd ../.. && pwd)
 VENV    := $(REPO)/.venv-explainability

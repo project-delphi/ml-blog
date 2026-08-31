@@ -59,7 +59,7 @@ COMPUTE_LANGS = {"python", "r", "julia"}
 # fires only on NEW drift -- a checker that is red on arrival gets ignored.
 #
 # Shrink this list, never grow it: if you edit one of these posts, build it a
-# venv + kernel + requirements.txt per CLAUDE.md and delete its line. Editing
+# venv + kernel + requirements.txt per AGENTS.md and delete its line. Editing
 # the source invalidates its frozen output, so there is no third option.
 LEGACY_NO_ENV = {
     "data-types",
@@ -89,7 +89,7 @@ def check_environment(slug: str, text: str, post_dir: Path) -> list[str]:
     if not kernel:
         problems.append(
             "executes code but declares no `jupyter:` kernel, so it resolves to "
-            "system Python. Give it a .venv-<slug> and a named kernel (CLAUDE.md).",
+            "system Python. Give it a .venv-<slug> and a named kernel (AGENTS.md).",
         )
     elif kernel.group(1) == "python3":
         problems.append(
