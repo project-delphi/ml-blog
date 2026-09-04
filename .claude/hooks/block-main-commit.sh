@@ -31,7 +31,37 @@ if printf '%s' "${cmd%%commit*}" | grep -Eq "$create_re"; then
   exit 0
 fi
 
-branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
+# Judge the branch where the command will actually run, not where the hook does.
+# Every worktree has its own HEAD, and this repo keeps several
+# (`../ml-blog-<topic>`), so `cd ../ml-blog-foo && git commit` on a feature
+# branch would otherwise be denied for a `main` that belongs to a different
+# checkout. Only a leading `cd` and `git -C <path>` redirect the target; a path
+# that does not resolve to a work tree falls back to the hook's own cwd, so a
+# bogus or unreadable directory is still judged against main rather than waved
+# through.
+#
+# Both patterns read only the command's first line: a multi-line command (a
+# commit message spanning lines, say) would otherwise glue every later line
+# onto the path and resolve nothing.
+target=""
+if printf '%s' "$cmd" | head -n 1 | grep -Eq '^[[:space:]]*cd[[:space:]]'; then
+  target=$(printf '%s' "$cmd" | head -n 1 |
+    sed -E 's/^[[:space:]]*cd[[:space:]]+//; s/[[:space:]]*(&&|\|\||;).*$//' |
+    tr -d '\042\047')
+elif printf '%s' "${cmd%%commit*}" | head -n 1 | grep -Eq 'git[[:space:]]+-C[[:space:]]'; then
+  target=$(printf '%s' "${cmd%%commit*}" | head -n 1 |
+    sed -E 's/.*git[[:space:]]+-C[[:space:]]+//; s/[[:space:]].*$//' |
+    tr -d '\042\047')
+fi
+
+branch=""
+if [ -n "$target" ] && [ -d "$target" ]; then
+  branch=$(git -C "$target" rev-parse --abbrev-ref HEAD 2>/dev/null) || branch=""
+fi
+if [ -z "$branch" ]; then
+  branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
+fi
+
 case "$branch" in
   main | master) ;;
   *) exit 0 ;;
