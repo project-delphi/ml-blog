@@ -8,7 +8,7 @@
 
 <meta name="author" content="Ravi Kalia">
 <meta name="dcterms.date" content="2026-09-10">
-<meta name="description" content="A flat list plus a shape tuple is enough for shape, ndim, size, len, reshape, and transpose — no NumPy. Reshape keeps storage order; transpose does not.">
+<meta name="description" content="A flat list plus a shape tuple is enough for shape, ndim, size, len, reshape, transpose, and indexing — no NumPy. Reshape keeps storage order; transpose does not.">
 
 <title>A NumPy-like Tensor in Pure Python – Blog Directory</title>
 <style>
@@ -184,7 +184,7 @@ window.Quarto = {
       <h1 class="title">A NumPy-like Tensor in Pure Python</h1>
                   <div>
         <div class="description">
-          A flat list plus a shape tuple is enough for shape, ndim, size, len, reshape, and transpose — no NumPy. Reshape keeps storage order; transpose does not.
+          A flat list plus a shape tuple is enough for shape, ndim, size, len, reshape, transpose, and indexing — no NumPy. Reshape keeps storage order; transpose does not.
         </div>
       </div>
                           <div class="quarto-categories">
@@ -227,9 +227,10 @@ window.Quarto = {
   <li><a href="#counts" id="toc-counts" class="nav-link" data-scroll-target="#counts"><span class="header-section-number">2</span> Counts</a></li>
   <li><a href="#reshape" id="toc-reshape" class="nav-link" data-scroll-target="#reshape"><span class="header-section-number">3</span> Reshape</a></li>
   <li><a href="#transpose" id="toc-transpose" class="nav-link" data-scroll-target="#transpose"><span class="header-section-number">4</span> Transpose</a></li>
-  <li><a href="#constraints" id="toc-constraints" class="nav-link" data-scroll-target="#constraints"><span class="header-section-number">5</span> Constraints</a></li>
-  <li><a href="#class" id="toc-class" class="nav-link" data-scroll-target="#class"><span class="header-section-number">6</span> Class</a></li>
-  <li><a href="#references" id="toc-references" class="nav-link" data-scroll-target="#references"><span class="header-section-number">7</span> References</a></li>
+  <li><a href="#indexing" id="toc-indexing" class="nav-link" data-scroll-target="#indexing"><span class="header-section-number">5</span> Indexing</a></li>
+  <li><a href="#constraints" id="toc-constraints" class="nav-link" data-scroll-target="#constraints"><span class="header-section-number">6</span> Constraints</a></li>
+  <li><a href="#class" id="toc-class" class="nav-link" data-scroll-target="#class"><span class="header-section-number">7</span> Class</a></li>
+  <li><a href="#references" id="toc-references" class="nav-link" data-scroll-target="#references"><span class="header-section-number">8</span> References</a></li>
   </ul>
 <div class="toc-actions"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/numpy-like-tensor/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></nav>
     </div>
@@ -290,16 +291,44 @@ window.Quarto = {
 <span id="cb1-29"><a href="#cb1-29" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> index</span>
 <span id="cb1-30"><a href="#cb1-30" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-31"><a href="#cb1-31" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-32"><a href="#cb1-32" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Tensor:</span>
-<span id="cb1-33"><a href="#cb1-33" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, data, shape<span class="op">=</span><span class="va">None</span>):</span>
-<span id="cb1-34"><a href="#cb1-34" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> shape <span class="kw">is</span> <span class="va">None</span>:</span>
-<span id="cb1-35"><a href="#cb1-35" aria-hidden="true" tabindex="-1"></a>            data, shape <span class="op">=</span> _flatten_shape(data)</span>
-<span id="cb1-36"><a href="#cb1-36" aria-hidden="true" tabindex="-1"></a>        data <span class="op">=</span> <span class="bu">list</span>(data)</span>
-<span id="cb1-37"><a href="#cb1-37" aria-hidden="true" tabindex="-1"></a>        shape <span class="op">=</span> <span class="bu">tuple</span>(shape)</span>
-<span id="cb1-38"><a href="#cb1-38" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> prod(shape) <span class="op">!=</span> <span class="bu">len</span>(data):</span>
-<span id="cb1-39"><a href="#cb1-39" aria-hidden="true" tabindex="-1"></a>            <span class="cf">raise</span> <span class="pp">ValueError</span>(<span class="st">"shape does not match size"</span>)</span>
-<span id="cb1-40"><a href="#cb1-40" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>._data <span class="op">=</span> data</span>
-<span id="cb1-41"><a href="#cb1-41" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>._shape <span class="op">=</span> shape</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb1-32"><a href="#cb1-32" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> _pad_key(key, ndim):</span>
+<span id="cb1-33"><a href="#cb1-33" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">not</span> <span class="bu">isinstance</span>(key, <span class="bu">tuple</span>):</span>
+<span id="cb1-34"><a href="#cb1-34" aria-hidden="true" tabindex="-1"></a>        key <span class="op">=</span> (key,)</span>
+<span id="cb1-35"><a href="#cb1-35" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> key.count(<span class="va">Ellipsis</span>) <span class="op">&gt;</span> <span class="dv">1</span>:</span>
+<span id="cb1-36"><a href="#cb1-36" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> <span class="pp">IndexError</span>(<span class="st">"at most one ellipsis"</span>)</span>
+<span id="cb1-37"><a href="#cb1-37" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="va">Ellipsis</span> <span class="kw">in</span> key:</span>
+<span id="cb1-38"><a href="#cb1-38" aria-hidden="true" tabindex="-1"></a>        loc <span class="op">=</span> key.index(<span class="va">Ellipsis</span>)</span>
+<span id="cb1-39"><a href="#cb1-39" aria-hidden="true" tabindex="-1"></a>        n_fill <span class="op">=</span> ndim <span class="op">-</span> (<span class="bu">len</span>(key) <span class="op">-</span> <span class="dv">1</span>)</span>
+<span id="cb1-40"><a href="#cb1-40" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> n_fill <span class="op">&lt;</span> <span class="dv">0</span>:</span>
+<span id="cb1-41"><a href="#cb1-41" aria-hidden="true" tabindex="-1"></a>            <span class="cf">raise</span> <span class="pp">IndexError</span>(<span class="st">"too many indices"</span>)</span>
+<span id="cb1-42"><a href="#cb1-42" aria-hidden="true" tabindex="-1"></a>        key <span class="op">=</span> key[:loc] <span class="op">+</span> (<span class="bu">slice</span>(<span class="va">None</span>),) <span class="op">*</span> n_fill <span class="op">+</span> key[loc <span class="op">+</span> <span class="dv">1</span> :]</span>
+<span id="cb1-43"><a href="#cb1-43" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">len</span>(key) <span class="op">&gt;</span> ndim:</span>
+<span id="cb1-44"><a href="#cb1-44" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> <span class="pp">IndexError</span>(<span class="st">"too many indices"</span>)</span>
+<span id="cb1-45"><a href="#cb1-45" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">len</span>(key) <span class="op">&lt;</span> ndim:</span>
+<span id="cb1-46"><a href="#cb1-46" aria-hidden="true" tabindex="-1"></a>        key <span class="op">=</span> key <span class="op">+</span> (<span class="bu">slice</span>(<span class="va">None</span>),) <span class="op">*</span> (ndim <span class="op">-</span> <span class="bu">len</span>(key))</span>
+<span id="cb1-47"><a href="#cb1-47" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> key</span>
+<span id="cb1-48"><a href="#cb1-48" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-49"><a href="#cb1-49" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-50"><a href="#cb1-50" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> _axis_int(i, n):</span>
+<span id="cb1-51"><a href="#cb1-51" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">isinstance</span>(i, <span class="bu">bool</span>) <span class="kw">or</span> <span class="kw">not</span> <span class="bu">isinstance</span>(i, <span class="bu">int</span>):</span>
+<span id="cb1-52"><a href="#cb1-52" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> <span class="pp">TypeError</span>(<span class="st">"integer index expected"</span>)</span>
+<span id="cb1-53"><a href="#cb1-53" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> i <span class="op">&lt;</span> <span class="dv">0</span>:</span>
+<span id="cb1-54"><a href="#cb1-54" aria-hidden="true" tabindex="-1"></a>        i <span class="op">+=</span> n</span>
+<span id="cb1-55"><a href="#cb1-55" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> i <span class="op">&lt;</span> <span class="dv">0</span> <span class="kw">or</span> i <span class="op">&gt;=</span> n:</span>
+<span id="cb1-56"><a href="#cb1-56" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> <span class="pp">IndexError</span>(<span class="st">"index out of bounds"</span>)</span>
+<span id="cb1-57"><a href="#cb1-57" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> i</span>
+<span id="cb1-58"><a href="#cb1-58" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-59"><a href="#cb1-59" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-60"><a href="#cb1-60" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Tensor:</span>
+<span id="cb1-61"><a href="#cb1-61" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, data, shape<span class="op">=</span><span class="va">None</span>):</span>
+<span id="cb1-62"><a href="#cb1-62" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> shape <span class="kw">is</span> <span class="va">None</span>:</span>
+<span id="cb1-63"><a href="#cb1-63" aria-hidden="true" tabindex="-1"></a>            data, shape <span class="op">=</span> _flatten_shape(data)</span>
+<span id="cb1-64"><a href="#cb1-64" aria-hidden="true" tabindex="-1"></a>        data <span class="op">=</span> <span class="bu">list</span>(data)</span>
+<span id="cb1-65"><a href="#cb1-65" aria-hidden="true" tabindex="-1"></a>        shape <span class="op">=</span> <span class="bu">tuple</span>(shape)</span>
+<span id="cb1-66"><a href="#cb1-66" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> prod(shape) <span class="op">!=</span> <span class="bu">len</span>(data):</span>
+<span id="cb1-67"><a href="#cb1-67" aria-hidden="true" tabindex="-1"></a>            <span class="cf">raise</span> <span class="pp">ValueError</span>(<span class="st">"shape does not match size"</span>)</span>
+<span id="cb1-68"><a href="#cb1-68" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>._data <span class="op">=</span> data</span>
+<span id="cb1-69"><a href="#cb1-69" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>._shape <span class="op">=</span> shape</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </section>
 <section id="counts" class="level2" data-number="2">
 <h2 data-number="2" class="anchored" data-anchor-id="counts"><span class="header-section-number">2</span> Counts</h2>
@@ -370,98 +399,259 @@ Figure&nbsp;2: The same <span class="math inline">\(2\times 3\times 4\)</span> t
 </div>
 <p>The <span class="math inline">\(4\times 3\times 2\)</span> box matches the last reshape. The strip does not.</p>
 </section>
-<section id="constraints" class="level2" data-number="5">
-<h2 data-number="5" class="anchored" data-anchor-id="constraints"><span class="header-section-number">5</span> Constraints</h2>
-<p>No broadcasting, no slicing, no dtype, no views. Enough to see why NumPy treats shape as data. <a href="../numpy-to-jax/">NumPy to JAX</a> is the real API.</p>
+<section id="indexing" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="indexing"><span class="header-section-number">5</span> Indexing</h2>
+<p><code>__getitem__</code> reads values. Three forms. Every result is a copy.</p>
+<ul>
+<li><strong>Simple</strong> — an integer. That axis drops. <code>t[0]</code> has shape <code>(3, 4)</code>. <code>t[0, 2, 3]</code> is <code>11</code>.</li>
+<li><strong>Slicing</strong> — a <code>slice</code>. That axis stays. <code>t[:, 1]</code> is the middle row of both batches, shape <code>(2, 4)</code>. <code>t[0, :2, 1:3]</code> has shape <code>(2, 2)</code>.</li>
+<li><strong>Fancy</strong> — a list of integers gathers those positions. <code>t[[0, 1]]</code> is both batches. Two lists pick pairs, not a grid: <code>t[[0, 1], [2, 0], 0]</code> is <code>[8, 12]</code>. The <span class="math inline">\(2\times 2\)</span> block is a slice: <code>t[:2, :2, 0]</code>.</li>
+</ul>
+<div class="sourceCode" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> <span class="fu">__getitem__</span>(<span class="va">self</span>, key):</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>        key <span class="op">=</span> _pad_key(key, <span class="va">self</span>.ndim)</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>        kinds <span class="op">=</span> []</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>        coords <span class="op">=</span> []</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> k, n <span class="kw">in</span> <span class="bu">zip</span>(key, <span class="va">self</span>._shape):</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="bu">isinstance</span>(k, <span class="bu">list</span>):</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>                coords.append([_axis_int(i, n) <span class="cf">for</span> i <span class="kw">in</span> k])</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>                kinds.append(<span class="st">"fancy"</span>)</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>            <span class="cf">elif</span> <span class="bu">isinstance</span>(k, <span class="bu">slice</span>):</span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>                coords.append(<span class="bu">list</span>(<span class="bu">range</span>(<span class="op">*</span>k.indices(n))))</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>                kinds.append(<span class="st">"slice"</span>)</span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>            <span class="cf">elif</span> <span class="bu">isinstance</span>(k, <span class="bu">int</span>) <span class="kw">and</span> <span class="kw">not</span> <span class="bu">isinstance</span>(k, <span class="bu">bool</span>):</span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>                coords.append([_axis_int(k, n)])</span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>                kinds.append(<span class="st">"int"</span>)</span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>            <span class="cf">else</span>:</span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>                <span class="cf">raise</span> <span class="pp">TypeError</span>(<span class="st">"index must be an int, a slice, or a list of ints"</span>)</span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>        fancy <span class="op">=</span> [i <span class="cf">for</span> i, kind <span class="kw">in</span> <span class="bu">enumerate</span>(kinds) <span class="cf">if</span> kind <span class="op">==</span> <span class="st">"fancy"</span>]</span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> fancy:</span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a>            length <span class="op">=</span> <span class="bu">len</span>(coords[fancy[<span class="dv">0</span>]])</span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="bu">any</span>(<span class="bu">len</span>(coords[i]) <span class="op">!=</span> length <span class="cf">for</span> i <span class="kw">in</span> fancy):</span>
+<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a>                <span class="cf">raise</span> <span class="pp">IndexError</span>(<span class="st">"fancy lists must have the same length"</span>)</span>
+<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="bu">max</span>(fancy) <span class="op">-</span> <span class="bu">min</span>(fancy) <span class="op">+</span> <span class="dv">1</span> <span class="op">!=</span> <span class="bu">len</span>(fancy):</span>
+<span id="cb5-24"><a href="#cb5-24" aria-hidden="true" tabindex="-1"></a>                <span class="cf">raise</span> <span class="pp">IndexError</span>(<span class="st">"fancy axes must be adjacent"</span>)</span>
+<span id="cb5-25"><a href="#cb5-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-26"><a href="#cb5-26" aria-hidden="true" tabindex="-1"></a>        out_shape <span class="op">=</span> []</span>
+<span id="cb5-27"><a href="#cb5-27" aria-hidden="true" tabindex="-1"></a>        ax <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb5-28"><a href="#cb5-28" aria-hidden="true" tabindex="-1"></a>        <span class="cf">while</span> ax <span class="op">&lt;</span> <span class="va">self</span>.ndim:</span>
+<span id="cb5-29"><a href="#cb5-29" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> fancy <span class="kw">and</span> ax <span class="op">==</span> <span class="bu">min</span>(fancy):</span>
+<span id="cb5-30"><a href="#cb5-30" aria-hidden="true" tabindex="-1"></a>                out_shape.append(length)</span>
+<span id="cb5-31"><a href="#cb5-31" aria-hidden="true" tabindex="-1"></a>                ax <span class="op">=</span> <span class="bu">max</span>(fancy) <span class="op">+</span> <span class="dv">1</span></span>
+<span id="cb5-32"><a href="#cb5-32" aria-hidden="true" tabindex="-1"></a>                <span class="cf">continue</span></span>
+<span id="cb5-33"><a href="#cb5-33" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> kinds[ax] <span class="op">==</span> <span class="st">"slice"</span>:</span>
+<span id="cb5-34"><a href="#cb5-34" aria-hidden="true" tabindex="-1"></a>                out_shape.append(<span class="bu">len</span>(coords[ax]))</span>
+<span id="cb5-35"><a href="#cb5-35" aria-hidden="true" tabindex="-1"></a>            ax <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb5-36"><a href="#cb5-36" aria-hidden="true" tabindex="-1"></a>        out_shape <span class="op">=</span> <span class="bu">tuple</span>(out_shape)</span>
+<span id="cb5-37"><a href="#cb5-37" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-38"><a href="#cb5-38" aria-hidden="true" tabindex="-1"></a>        data <span class="op">=</span> []</span>
+<span id="cb5-39"><a href="#cb5-39" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-40"><a href="#cb5-40" aria-hidden="true" tabindex="-1"></a>        <span class="kw">def</span> fill(ax, p, multi):</span>
+<span id="cb5-41"><a href="#cb5-41" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> ax <span class="op">==</span> <span class="va">self</span>.ndim:</span>
+<span id="cb5-42"><a href="#cb5-42" aria-hidden="true" tabindex="-1"></a>                data.append(<span class="va">self</span>._data[_ravel(<span class="bu">tuple</span>(multi), <span class="va">self</span>._shape)])</span>
+<span id="cb5-43"><a href="#cb5-43" aria-hidden="true" tabindex="-1"></a>                <span class="cf">return</span></span>
+<span id="cb5-44"><a href="#cb5-44" aria-hidden="true" tabindex="-1"></a>            kind <span class="op">=</span> kinds[ax]</span>
+<span id="cb5-45"><a href="#cb5-45" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> kind <span class="op">==</span> <span class="st">"int"</span>:</span>
+<span id="cb5-46"><a href="#cb5-46" aria-hidden="true" tabindex="-1"></a>                fill(ax <span class="op">+</span> <span class="dv">1</span>, p, multi <span class="op">+</span> [coords[ax][<span class="dv">0</span>]])</span>
+<span id="cb5-47"><a href="#cb5-47" aria-hidden="true" tabindex="-1"></a>            <span class="cf">elif</span> kind <span class="op">==</span> <span class="st">"slice"</span>:</span>
+<span id="cb5-48"><a href="#cb5-48" aria-hidden="true" tabindex="-1"></a>                <span class="cf">for</span> i <span class="kw">in</span> coords[ax]:</span>
+<span id="cb5-49"><a href="#cb5-49" aria-hidden="true" tabindex="-1"></a>                    fill(ax <span class="op">+</span> <span class="dv">1</span>, p, multi <span class="op">+</span> [i])</span>
+<span id="cb5-50"><a href="#cb5-50" aria-hidden="true" tabindex="-1"></a>            <span class="cf">elif</span> ax <span class="op">==</span> <span class="bu">min</span>(fancy):</span>
+<span id="cb5-51"><a href="#cb5-51" aria-hidden="true" tabindex="-1"></a>                <span class="cf">for</span> q <span class="kw">in</span> <span class="bu">range</span>(length):</span>
+<span id="cb5-52"><a href="#cb5-52" aria-hidden="true" tabindex="-1"></a>                    fill(ax <span class="op">+</span> <span class="dv">1</span>, q, multi <span class="op">+</span> [coords[ax][q]])</span>
+<span id="cb5-53"><a href="#cb5-53" aria-hidden="true" tabindex="-1"></a>            <span class="cf">else</span>:</span>
+<span id="cb5-54"><a href="#cb5-54" aria-hidden="true" tabindex="-1"></a>                fill(ax <span class="op">+</span> <span class="dv">1</span>, p, multi <span class="op">+</span> [coords[ax][p]])</span>
+<span id="cb5-55"><a href="#cb5-55" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-56"><a href="#cb5-56" aria-hidden="true" tabindex="-1"></a>        fill(<span class="dv">0</span>, <span class="va">None</span>, [])</span>
+<span id="cb5-57"><a href="#cb5-57" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">not</span> out_shape:</span>
+<span id="cb5-58"><a href="#cb5-58" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> data[<span class="dv">0</span>]</span>
+<span id="cb5-59"><a href="#cb5-59" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> Tensor(data, out_shape)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </section>
-<section id="class" class="level2" data-number="6">
-<h2 data-number="6" class="anchored" data-anchor-id="class"><span class="header-section-number">6</span> Class</h2>
-<p>Markdown fences do not join. <code>reshape</code> and <code>transpose</code> are ordinary methods on <code>Tensor</code>:</p>
-<div class="sourceCode" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> math <span class="im">import</span> prod</span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> _flatten_shape(data):</span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">not</span> <span class="bu">isinstance</span>(data, <span class="bu">list</span>):</span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> [data], ()</span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">not</span> data:</span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> [], (<span class="dv">0</span>,)</span>
-<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>    parts <span class="op">=</span> [_flatten_shape(item) <span class="cf">for</span> item <span class="kw">in</span> data]</span>
-<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>    shape <span class="op">=</span> parts[<span class="dv">0</span>][<span class="dv">1</span>]</span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">any</span>(s <span class="op">!=</span> shape <span class="cf">for</span> _, s <span class="kw">in</span> parts):</span>
-<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> <span class="pp">ValueError</span>(<span class="st">"ragged nested list"</span>)</span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    flat <span class="op">=</span> [v <span class="cf">for</span> f, _ <span class="kw">in</span> parts <span class="cf">for</span> v <span class="kw">in</span> f]</span>
-<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> flat, (<span class="bu">len</span>(data),) <span class="op">+</span> shape</span>
-<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> _unravel(index, shape):</span>
-<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>    out <span class="op">=</span> []</span>
-<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> size <span class="kw">in</span> <span class="bu">reversed</span>(shape):</span>
-<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a>        out.append(index <span class="op">%</span> size)</span>
-<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a>        index <span class="op">//=</span> size</span>
-<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="bu">tuple</span>(<span class="bu">reversed</span>(out))</span>
-<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-24"><a href="#cb5-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-25"><a href="#cb5-25" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> _ravel(multi, shape):</span>
-<span id="cb5-26"><a href="#cb5-26" aria-hidden="true" tabindex="-1"></a>    index <span class="op">=</span> <span class="dv">0</span></span>
-<span id="cb5-27"><a href="#cb5-27" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> i, n <span class="kw">in</span> <span class="bu">zip</span>(multi, shape):</span>
-<span id="cb5-28"><a href="#cb5-28" aria-hidden="true" tabindex="-1"></a>        index <span class="op">=</span> index <span class="op">*</span> n <span class="op">+</span> i</span>
-<span id="cb5-29"><a href="#cb5-29" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> index</span>
-<span id="cb5-30"><a href="#cb5-30" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-31"><a href="#cb5-31" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-32"><a href="#cb5-32" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Tensor:</span>
-<span id="cb5-33"><a href="#cb5-33" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, data, shape<span class="op">=</span><span class="va">None</span>):</span>
-<span id="cb5-34"><a href="#cb5-34" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> shape <span class="kw">is</span> <span class="va">None</span>:</span>
-<span id="cb5-35"><a href="#cb5-35" aria-hidden="true" tabindex="-1"></a>            data, shape <span class="op">=</span> _flatten_shape(data)</span>
-<span id="cb5-36"><a href="#cb5-36" aria-hidden="true" tabindex="-1"></a>        data <span class="op">=</span> <span class="bu">list</span>(data)</span>
-<span id="cb5-37"><a href="#cb5-37" aria-hidden="true" tabindex="-1"></a>        shape <span class="op">=</span> <span class="bu">tuple</span>(shape)</span>
-<span id="cb5-38"><a href="#cb5-38" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> prod(shape) <span class="op">!=</span> <span class="bu">len</span>(data):</span>
-<span id="cb5-39"><a href="#cb5-39" aria-hidden="true" tabindex="-1"></a>            <span class="cf">raise</span> <span class="pp">ValueError</span>(<span class="st">"shape does not match size"</span>)</span>
-<span id="cb5-40"><a href="#cb5-40" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>._data <span class="op">=</span> data</span>
-<span id="cb5-41"><a href="#cb5-41" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>._shape <span class="op">=</span> shape</span>
-<span id="cb5-42"><a href="#cb5-42" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-43"><a href="#cb5-43" aria-hidden="true" tabindex="-1"></a>    <span class="at">@property</span></span>
-<span id="cb5-44"><a href="#cb5-44" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> shape(<span class="va">self</span>):</span>
-<span id="cb5-45"><a href="#cb5-45" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="va">self</span>._shape</span>
-<span id="cb5-46"><a href="#cb5-46" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-47"><a href="#cb5-47" aria-hidden="true" tabindex="-1"></a>    <span class="at">@property</span></span>
-<span id="cb5-48"><a href="#cb5-48" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> ndim(<span class="va">self</span>):</span>
-<span id="cb5-49"><a href="#cb5-49" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="bu">len</span>(<span class="va">self</span>._shape)</span>
-<span id="cb5-50"><a href="#cb5-50" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-51"><a href="#cb5-51" aria-hidden="true" tabindex="-1"></a>    <span class="at">@property</span></span>
-<span id="cb5-52"><a href="#cb5-52" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> size(<span class="va">self</span>):</span>
-<span id="cb5-53"><a href="#cb5-53" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> prod(<span class="va">self</span>._shape)</span>
-<span id="cb5-54"><a href="#cb5-54" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-55"><a href="#cb5-55" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> <span class="fu">__len__</span>(<span class="va">self</span>):</span>
-<span id="cb5-56"><a href="#cb5-56" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="va">self</span>._shape[<span class="dv">0</span>]</span>
-<span id="cb5-57"><a href="#cb5-57" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-58"><a href="#cb5-58" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> reshape(<span class="va">self</span>, <span class="op">*</span>shape):</span>
-<span id="cb5-59"><a href="#cb5-59" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> prod(shape) <span class="op">!=</span> <span class="va">self</span>.size:</span>
-<span id="cb5-60"><a href="#cb5-60" aria-hidden="true" tabindex="-1"></a>            <span class="cf">raise</span> <span class="pp">ValueError</span>(<span class="st">"size mismatch"</span>)</span>
-<span id="cb5-61"><a href="#cb5-61" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> Tensor(<span class="va">self</span>._data, shape)</span>
-<span id="cb5-62"><a href="#cb5-62" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-63"><a href="#cb5-63" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> transpose(<span class="va">self</span>, <span class="op">*</span>axes):</span>
-<span id="cb5-64"><a href="#cb5-64" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">not</span> axes:</span>
-<span id="cb5-65"><a href="#cb5-65" aria-hidden="true" tabindex="-1"></a>            axes <span class="op">=</span> <span class="bu">tuple</span>(<span class="bu">range</span>(<span class="va">self</span>.ndim <span class="op">-</span> <span class="dv">1</span>, <span class="op">-</span><span class="dv">1</span>, <span class="op">-</span><span class="dv">1</span>))</span>
-<span id="cb5-66"><a href="#cb5-66" aria-hidden="true" tabindex="-1"></a>        new_shape <span class="op">=</span> <span class="bu">tuple</span>(<span class="va">self</span>._shape[a] <span class="cf">for</span> a <span class="kw">in</span> axes)</span>
-<span id="cb5-67"><a href="#cb5-67" aria-hidden="true" tabindex="-1"></a>        out <span class="op">=</span> [<span class="va">None</span>] <span class="op">*</span> <span class="va">self</span>.size</span>
-<span id="cb5-68"><a href="#cb5-68" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> i, value <span class="kw">in</span> <span class="bu">enumerate</span>(<span class="va">self</span>._data):</span>
-<span id="cb5-69"><a href="#cb5-69" aria-hidden="true" tabindex="-1"></a>            old <span class="op">=</span> _unravel(i, <span class="va">self</span>._shape)</span>
-<span id="cb5-70"><a href="#cb5-70" aria-hidden="true" tabindex="-1"></a>            new <span class="op">=</span> <span class="bu">tuple</span>(old[a] <span class="cf">for</span> a <span class="kw">in</span> axes)</span>
-<span id="cb5-71"><a href="#cb5-71" aria-hidden="true" tabindex="-1"></a>            out[_ravel(new, new_shape)] <span class="op">=</span> value</span>
-<span id="cb5-72"><a href="#cb5-72" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> Tensor(out, new_shape)</span>
-<span id="cb5-73"><a href="#cb5-73" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-74"><a href="#cb5-74" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-75"><a href="#cb5-75" aria-hidden="true" tabindex="-1"></a>t <span class="op">=</span> Tensor(<span class="bu">list</span>(<span class="bu">range</span>(<span class="dv">24</span>)), (<span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>))</span>
-<span id="cb5-76"><a href="#cb5-76" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> t.shape <span class="op">==</span> (<span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>)</span>
-<span id="cb5-77"><a href="#cb5-77" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">len</span>(t) <span class="op">==</span> <span class="dv">2</span></span>
-<span id="cb5-78"><a href="#cb5-78" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> t.reshape(<span class="dv">4</span>, <span class="dv">3</span>, <span class="dv">2</span>)._data <span class="op">==</span> t._data</span>
-<span id="cb5-79"><a href="#cb5-79" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> t.transpose()._data <span class="op">!=</span> t._data</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<p>Storage. Order. Survives. Reshape. Transpose. Breaks. It. Shape. Is. Data.</p>
+<section id="constraints" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="constraints"><span class="header-section-number">6</span> Constraints</h2>
+<p>No broadcasting, no boolean mask, no newaxis, no views. Fancy axes must be adjacent. Enough to see why NumPy treats shape as data. <a href="../numpy-to-jax/">NumPy to JAX</a> is the real API.</p>
 </section>
-<section id="references" class="level2" data-number="7">
-<h2 data-number="7" class="anchored" data-anchor-id="references"><span class="header-section-number">7</span> References</h2>
+<section id="class" class="level2" data-number="7">
+<h2 data-number="7" class="anchored" data-anchor-id="class"><span class="header-section-number">7</span> Class</h2>
+<p>Markdown fences do not join. <code>reshape</code>, <code>transpose</code>, and <code>__getitem__</code> are ordinary methods on <code>Tensor</code>:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> math <span class="im">import</span> prod</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> _flatten_shape(data):</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">not</span> <span class="bu">isinstance</span>(data, <span class="bu">list</span>):</span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> [data], ()</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">not</span> data:</span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> [], (<span class="dv">0</span>,)</span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>    parts <span class="op">=</span> [_flatten_shape(item) <span class="cf">for</span> item <span class="kw">in</span> data]</span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>    shape <span class="op">=</span> parts[<span class="dv">0</span>][<span class="dv">1</span>]</span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">any</span>(s <span class="op">!=</span> shape <span class="cf">for</span> _, s <span class="kw">in</span> parts):</span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> <span class="pp">ValueError</span>(<span class="st">"ragged nested list"</span>)</span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>    flat <span class="op">=</span> [v <span class="cf">for</span> f, _ <span class="kw">in</span> parts <span class="cf">for</span> v <span class="kw">in</span> f]</span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> flat, (<span class="bu">len</span>(data),) <span class="op">+</span> shape</span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> _unravel(index, shape):</span>
+<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a>    out <span class="op">=</span> []</span>
+<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> size <span class="kw">in</span> <span class="bu">reversed</span>(shape):</span>
+<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a>        out.append(index <span class="op">%</span> size)</span>
+<span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a>        index <span class="op">//=</span> size</span>
+<span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="bu">tuple</span>(<span class="bu">reversed</span>(out))</span>
+<span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-24"><a href="#cb6-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-25"><a href="#cb6-25" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> _ravel(multi, shape):</span>
+<span id="cb6-26"><a href="#cb6-26" aria-hidden="true" tabindex="-1"></a>    index <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb6-27"><a href="#cb6-27" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> i, n <span class="kw">in</span> <span class="bu">zip</span>(multi, shape):</span>
+<span id="cb6-28"><a href="#cb6-28" aria-hidden="true" tabindex="-1"></a>        index <span class="op">=</span> index <span class="op">*</span> n <span class="op">+</span> i</span>
+<span id="cb6-29"><a href="#cb6-29" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> index</span>
+<span id="cb6-30"><a href="#cb6-30" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-31"><a href="#cb6-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-32"><a href="#cb6-32" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> _pad_key(key, ndim):</span>
+<span id="cb6-33"><a href="#cb6-33" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">not</span> <span class="bu">isinstance</span>(key, <span class="bu">tuple</span>):</span>
+<span id="cb6-34"><a href="#cb6-34" aria-hidden="true" tabindex="-1"></a>        key <span class="op">=</span> (key,)</span>
+<span id="cb6-35"><a href="#cb6-35" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> key.count(<span class="va">Ellipsis</span>) <span class="op">&gt;</span> <span class="dv">1</span>:</span>
+<span id="cb6-36"><a href="#cb6-36" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> <span class="pp">IndexError</span>(<span class="st">"at most one ellipsis"</span>)</span>
+<span id="cb6-37"><a href="#cb6-37" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="va">Ellipsis</span> <span class="kw">in</span> key:</span>
+<span id="cb6-38"><a href="#cb6-38" aria-hidden="true" tabindex="-1"></a>        loc <span class="op">=</span> key.index(<span class="va">Ellipsis</span>)</span>
+<span id="cb6-39"><a href="#cb6-39" aria-hidden="true" tabindex="-1"></a>        n_fill <span class="op">=</span> ndim <span class="op">-</span> (<span class="bu">len</span>(key) <span class="op">-</span> <span class="dv">1</span>)</span>
+<span id="cb6-40"><a href="#cb6-40" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> n_fill <span class="op">&lt;</span> <span class="dv">0</span>:</span>
+<span id="cb6-41"><a href="#cb6-41" aria-hidden="true" tabindex="-1"></a>            <span class="cf">raise</span> <span class="pp">IndexError</span>(<span class="st">"too many indices"</span>)</span>
+<span id="cb6-42"><a href="#cb6-42" aria-hidden="true" tabindex="-1"></a>        key <span class="op">=</span> key[:loc] <span class="op">+</span> (<span class="bu">slice</span>(<span class="va">None</span>),) <span class="op">*</span> n_fill <span class="op">+</span> key[loc <span class="op">+</span> <span class="dv">1</span> :]</span>
+<span id="cb6-43"><a href="#cb6-43" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">len</span>(key) <span class="op">&gt;</span> ndim:</span>
+<span id="cb6-44"><a href="#cb6-44" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> <span class="pp">IndexError</span>(<span class="st">"too many indices"</span>)</span>
+<span id="cb6-45"><a href="#cb6-45" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">len</span>(key) <span class="op">&lt;</span> ndim:</span>
+<span id="cb6-46"><a href="#cb6-46" aria-hidden="true" tabindex="-1"></a>        key <span class="op">=</span> key <span class="op">+</span> (<span class="bu">slice</span>(<span class="va">None</span>),) <span class="op">*</span> (ndim <span class="op">-</span> <span class="bu">len</span>(key))</span>
+<span id="cb6-47"><a href="#cb6-47" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> key</span>
+<span id="cb6-48"><a href="#cb6-48" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-49"><a href="#cb6-49" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-50"><a href="#cb6-50" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> _axis_int(i, n):</span>
+<span id="cb6-51"><a href="#cb6-51" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">isinstance</span>(i, <span class="bu">bool</span>) <span class="kw">or</span> <span class="kw">not</span> <span class="bu">isinstance</span>(i, <span class="bu">int</span>):</span>
+<span id="cb6-52"><a href="#cb6-52" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> <span class="pp">TypeError</span>(<span class="st">"integer index expected"</span>)</span>
+<span id="cb6-53"><a href="#cb6-53" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> i <span class="op">&lt;</span> <span class="dv">0</span>:</span>
+<span id="cb6-54"><a href="#cb6-54" aria-hidden="true" tabindex="-1"></a>        i <span class="op">+=</span> n</span>
+<span id="cb6-55"><a href="#cb6-55" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> i <span class="op">&lt;</span> <span class="dv">0</span> <span class="kw">or</span> i <span class="op">&gt;=</span> n:</span>
+<span id="cb6-56"><a href="#cb6-56" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> <span class="pp">IndexError</span>(<span class="st">"index out of bounds"</span>)</span>
+<span id="cb6-57"><a href="#cb6-57" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> i</span>
+<span id="cb6-58"><a href="#cb6-58" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-59"><a href="#cb6-59" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-60"><a href="#cb6-60" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Tensor:</span>
+<span id="cb6-61"><a href="#cb6-61" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, data, shape<span class="op">=</span><span class="va">None</span>):</span>
+<span id="cb6-62"><a href="#cb6-62" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> shape <span class="kw">is</span> <span class="va">None</span>:</span>
+<span id="cb6-63"><a href="#cb6-63" aria-hidden="true" tabindex="-1"></a>            data, shape <span class="op">=</span> _flatten_shape(data)</span>
+<span id="cb6-64"><a href="#cb6-64" aria-hidden="true" tabindex="-1"></a>        data <span class="op">=</span> <span class="bu">list</span>(data)</span>
+<span id="cb6-65"><a href="#cb6-65" aria-hidden="true" tabindex="-1"></a>        shape <span class="op">=</span> <span class="bu">tuple</span>(shape)</span>
+<span id="cb6-66"><a href="#cb6-66" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> prod(shape) <span class="op">!=</span> <span class="bu">len</span>(data):</span>
+<span id="cb6-67"><a href="#cb6-67" aria-hidden="true" tabindex="-1"></a>            <span class="cf">raise</span> <span class="pp">ValueError</span>(<span class="st">"shape does not match size"</span>)</span>
+<span id="cb6-68"><a href="#cb6-68" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>._data <span class="op">=</span> data</span>
+<span id="cb6-69"><a href="#cb6-69" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>._shape <span class="op">=</span> shape</span>
+<span id="cb6-70"><a href="#cb6-70" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-71"><a href="#cb6-71" aria-hidden="true" tabindex="-1"></a>    <span class="at">@property</span></span>
+<span id="cb6-72"><a href="#cb6-72" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> shape(<span class="va">self</span>):</span>
+<span id="cb6-73"><a href="#cb6-73" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="va">self</span>._shape</span>
+<span id="cb6-74"><a href="#cb6-74" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-75"><a href="#cb6-75" aria-hidden="true" tabindex="-1"></a>    <span class="at">@property</span></span>
+<span id="cb6-76"><a href="#cb6-76" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> ndim(<span class="va">self</span>):</span>
+<span id="cb6-77"><a href="#cb6-77" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="bu">len</span>(<span class="va">self</span>._shape)</span>
+<span id="cb6-78"><a href="#cb6-78" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-79"><a href="#cb6-79" aria-hidden="true" tabindex="-1"></a>    <span class="at">@property</span></span>
+<span id="cb6-80"><a href="#cb6-80" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> size(<span class="va">self</span>):</span>
+<span id="cb6-81"><a href="#cb6-81" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> prod(<span class="va">self</span>._shape)</span>
+<span id="cb6-82"><a href="#cb6-82" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-83"><a href="#cb6-83" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> <span class="fu">__len__</span>(<span class="va">self</span>):</span>
+<span id="cb6-84"><a href="#cb6-84" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="va">self</span>._shape[<span class="dv">0</span>]</span>
+<span id="cb6-85"><a href="#cb6-85" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-86"><a href="#cb6-86" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> reshape(<span class="va">self</span>, <span class="op">*</span>shape):</span>
+<span id="cb6-87"><a href="#cb6-87" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> prod(shape) <span class="op">!=</span> <span class="va">self</span>.size:</span>
+<span id="cb6-88"><a href="#cb6-88" aria-hidden="true" tabindex="-1"></a>            <span class="cf">raise</span> <span class="pp">ValueError</span>(<span class="st">"size mismatch"</span>)</span>
+<span id="cb6-89"><a href="#cb6-89" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> Tensor(<span class="va">self</span>._data, shape)</span>
+<span id="cb6-90"><a href="#cb6-90" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-91"><a href="#cb6-91" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> transpose(<span class="va">self</span>, <span class="op">*</span>axes):</span>
+<span id="cb6-92"><a href="#cb6-92" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">not</span> axes:</span>
+<span id="cb6-93"><a href="#cb6-93" aria-hidden="true" tabindex="-1"></a>            axes <span class="op">=</span> <span class="bu">tuple</span>(<span class="bu">range</span>(<span class="va">self</span>.ndim <span class="op">-</span> <span class="dv">1</span>, <span class="op">-</span><span class="dv">1</span>, <span class="op">-</span><span class="dv">1</span>))</span>
+<span id="cb6-94"><a href="#cb6-94" aria-hidden="true" tabindex="-1"></a>        new_shape <span class="op">=</span> <span class="bu">tuple</span>(<span class="va">self</span>._shape[a] <span class="cf">for</span> a <span class="kw">in</span> axes)</span>
+<span id="cb6-95"><a href="#cb6-95" aria-hidden="true" tabindex="-1"></a>        out <span class="op">=</span> [<span class="va">None</span>] <span class="op">*</span> <span class="va">self</span>.size</span>
+<span id="cb6-96"><a href="#cb6-96" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> i, value <span class="kw">in</span> <span class="bu">enumerate</span>(<span class="va">self</span>._data):</span>
+<span id="cb6-97"><a href="#cb6-97" aria-hidden="true" tabindex="-1"></a>            old <span class="op">=</span> _unravel(i, <span class="va">self</span>._shape)</span>
+<span id="cb6-98"><a href="#cb6-98" aria-hidden="true" tabindex="-1"></a>            new <span class="op">=</span> <span class="bu">tuple</span>(old[a] <span class="cf">for</span> a <span class="kw">in</span> axes)</span>
+<span id="cb6-99"><a href="#cb6-99" aria-hidden="true" tabindex="-1"></a>            out[_ravel(new, new_shape)] <span class="op">=</span> value</span>
+<span id="cb6-100"><a href="#cb6-100" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> Tensor(out, new_shape)</span>
+<span id="cb6-101"><a href="#cb6-101" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-102"><a href="#cb6-102" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> <span class="fu">__getitem__</span>(<span class="va">self</span>, key):</span>
+<span id="cb6-103"><a href="#cb6-103" aria-hidden="true" tabindex="-1"></a>        key <span class="op">=</span> _pad_key(key, <span class="va">self</span>.ndim)</span>
+<span id="cb6-104"><a href="#cb6-104" aria-hidden="true" tabindex="-1"></a>        kinds <span class="op">=</span> []</span>
+<span id="cb6-105"><a href="#cb6-105" aria-hidden="true" tabindex="-1"></a>        coords <span class="op">=</span> []</span>
+<span id="cb6-106"><a href="#cb6-106" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> k, n <span class="kw">in</span> <span class="bu">zip</span>(key, <span class="va">self</span>._shape):</span>
+<span id="cb6-107"><a href="#cb6-107" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="bu">isinstance</span>(k, <span class="bu">list</span>):</span>
+<span id="cb6-108"><a href="#cb6-108" aria-hidden="true" tabindex="-1"></a>                coords.append([_axis_int(i, n) <span class="cf">for</span> i <span class="kw">in</span> k])</span>
+<span id="cb6-109"><a href="#cb6-109" aria-hidden="true" tabindex="-1"></a>                kinds.append(<span class="st">"fancy"</span>)</span>
+<span id="cb6-110"><a href="#cb6-110" aria-hidden="true" tabindex="-1"></a>            <span class="cf">elif</span> <span class="bu">isinstance</span>(k, <span class="bu">slice</span>):</span>
+<span id="cb6-111"><a href="#cb6-111" aria-hidden="true" tabindex="-1"></a>                coords.append(<span class="bu">list</span>(<span class="bu">range</span>(<span class="op">*</span>k.indices(n))))</span>
+<span id="cb6-112"><a href="#cb6-112" aria-hidden="true" tabindex="-1"></a>                kinds.append(<span class="st">"slice"</span>)</span>
+<span id="cb6-113"><a href="#cb6-113" aria-hidden="true" tabindex="-1"></a>            <span class="cf">elif</span> <span class="bu">isinstance</span>(k, <span class="bu">int</span>) <span class="kw">and</span> <span class="kw">not</span> <span class="bu">isinstance</span>(k, <span class="bu">bool</span>):</span>
+<span id="cb6-114"><a href="#cb6-114" aria-hidden="true" tabindex="-1"></a>                coords.append([_axis_int(k, n)])</span>
+<span id="cb6-115"><a href="#cb6-115" aria-hidden="true" tabindex="-1"></a>                kinds.append(<span class="st">"int"</span>)</span>
+<span id="cb6-116"><a href="#cb6-116" aria-hidden="true" tabindex="-1"></a>            <span class="cf">else</span>:</span>
+<span id="cb6-117"><a href="#cb6-117" aria-hidden="true" tabindex="-1"></a>                <span class="cf">raise</span> <span class="pp">TypeError</span>(<span class="st">"index must be an int, a slice, or a list of ints"</span>)</span>
+<span id="cb6-118"><a href="#cb6-118" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-119"><a href="#cb6-119" aria-hidden="true" tabindex="-1"></a>        fancy <span class="op">=</span> [i <span class="cf">for</span> i, kind <span class="kw">in</span> <span class="bu">enumerate</span>(kinds) <span class="cf">if</span> kind <span class="op">==</span> <span class="st">"fancy"</span>]</span>
+<span id="cb6-120"><a href="#cb6-120" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> fancy:</span>
+<span id="cb6-121"><a href="#cb6-121" aria-hidden="true" tabindex="-1"></a>            length <span class="op">=</span> <span class="bu">len</span>(coords[fancy[<span class="dv">0</span>]])</span>
+<span id="cb6-122"><a href="#cb6-122" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="bu">any</span>(<span class="bu">len</span>(coords[i]) <span class="op">!=</span> length <span class="cf">for</span> i <span class="kw">in</span> fancy):</span>
+<span id="cb6-123"><a href="#cb6-123" aria-hidden="true" tabindex="-1"></a>                <span class="cf">raise</span> <span class="pp">IndexError</span>(<span class="st">"fancy lists must have the same length"</span>)</span>
+<span id="cb6-124"><a href="#cb6-124" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="bu">max</span>(fancy) <span class="op">-</span> <span class="bu">min</span>(fancy) <span class="op">+</span> <span class="dv">1</span> <span class="op">!=</span> <span class="bu">len</span>(fancy):</span>
+<span id="cb6-125"><a href="#cb6-125" aria-hidden="true" tabindex="-1"></a>                <span class="cf">raise</span> <span class="pp">IndexError</span>(<span class="st">"fancy axes must be adjacent"</span>)</span>
+<span id="cb6-126"><a href="#cb6-126" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-127"><a href="#cb6-127" aria-hidden="true" tabindex="-1"></a>        out_shape <span class="op">=</span> []</span>
+<span id="cb6-128"><a href="#cb6-128" aria-hidden="true" tabindex="-1"></a>        ax <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb6-129"><a href="#cb6-129" aria-hidden="true" tabindex="-1"></a>        <span class="cf">while</span> ax <span class="op">&lt;</span> <span class="va">self</span>.ndim:</span>
+<span id="cb6-130"><a href="#cb6-130" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> fancy <span class="kw">and</span> ax <span class="op">==</span> <span class="bu">min</span>(fancy):</span>
+<span id="cb6-131"><a href="#cb6-131" aria-hidden="true" tabindex="-1"></a>                out_shape.append(length)</span>
+<span id="cb6-132"><a href="#cb6-132" aria-hidden="true" tabindex="-1"></a>                ax <span class="op">=</span> <span class="bu">max</span>(fancy) <span class="op">+</span> <span class="dv">1</span></span>
+<span id="cb6-133"><a href="#cb6-133" aria-hidden="true" tabindex="-1"></a>                <span class="cf">continue</span></span>
+<span id="cb6-134"><a href="#cb6-134" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> kinds[ax] <span class="op">==</span> <span class="st">"slice"</span>:</span>
+<span id="cb6-135"><a href="#cb6-135" aria-hidden="true" tabindex="-1"></a>                out_shape.append(<span class="bu">len</span>(coords[ax]))</span>
+<span id="cb6-136"><a href="#cb6-136" aria-hidden="true" tabindex="-1"></a>            ax <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb6-137"><a href="#cb6-137" aria-hidden="true" tabindex="-1"></a>        out_shape <span class="op">=</span> <span class="bu">tuple</span>(out_shape)</span>
+<span id="cb6-138"><a href="#cb6-138" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-139"><a href="#cb6-139" aria-hidden="true" tabindex="-1"></a>        data <span class="op">=</span> []</span>
+<span id="cb6-140"><a href="#cb6-140" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-141"><a href="#cb6-141" aria-hidden="true" tabindex="-1"></a>        <span class="kw">def</span> fill(ax, p, multi):</span>
+<span id="cb6-142"><a href="#cb6-142" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> ax <span class="op">==</span> <span class="va">self</span>.ndim:</span>
+<span id="cb6-143"><a href="#cb6-143" aria-hidden="true" tabindex="-1"></a>                data.append(<span class="va">self</span>._data[_ravel(<span class="bu">tuple</span>(multi), <span class="va">self</span>._shape)])</span>
+<span id="cb6-144"><a href="#cb6-144" aria-hidden="true" tabindex="-1"></a>                <span class="cf">return</span></span>
+<span id="cb6-145"><a href="#cb6-145" aria-hidden="true" tabindex="-1"></a>            kind <span class="op">=</span> kinds[ax]</span>
+<span id="cb6-146"><a href="#cb6-146" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> kind <span class="op">==</span> <span class="st">"int"</span>:</span>
+<span id="cb6-147"><a href="#cb6-147" aria-hidden="true" tabindex="-1"></a>                fill(ax <span class="op">+</span> <span class="dv">1</span>, p, multi <span class="op">+</span> [coords[ax][<span class="dv">0</span>]])</span>
+<span id="cb6-148"><a href="#cb6-148" aria-hidden="true" tabindex="-1"></a>            <span class="cf">elif</span> kind <span class="op">==</span> <span class="st">"slice"</span>:</span>
+<span id="cb6-149"><a href="#cb6-149" aria-hidden="true" tabindex="-1"></a>                <span class="cf">for</span> i <span class="kw">in</span> coords[ax]:</span>
+<span id="cb6-150"><a href="#cb6-150" aria-hidden="true" tabindex="-1"></a>                    fill(ax <span class="op">+</span> <span class="dv">1</span>, p, multi <span class="op">+</span> [i])</span>
+<span id="cb6-151"><a href="#cb6-151" aria-hidden="true" tabindex="-1"></a>            <span class="cf">elif</span> ax <span class="op">==</span> <span class="bu">min</span>(fancy):</span>
+<span id="cb6-152"><a href="#cb6-152" aria-hidden="true" tabindex="-1"></a>                <span class="cf">for</span> q <span class="kw">in</span> <span class="bu">range</span>(length):</span>
+<span id="cb6-153"><a href="#cb6-153" aria-hidden="true" tabindex="-1"></a>                    fill(ax <span class="op">+</span> <span class="dv">1</span>, q, multi <span class="op">+</span> [coords[ax][q]])</span>
+<span id="cb6-154"><a href="#cb6-154" aria-hidden="true" tabindex="-1"></a>            <span class="cf">else</span>:</span>
+<span id="cb6-155"><a href="#cb6-155" aria-hidden="true" tabindex="-1"></a>                fill(ax <span class="op">+</span> <span class="dv">1</span>, p, multi <span class="op">+</span> [coords[ax][p]])</span>
+<span id="cb6-156"><a href="#cb6-156" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-157"><a href="#cb6-157" aria-hidden="true" tabindex="-1"></a>        fill(<span class="dv">0</span>, <span class="va">None</span>, [])</span>
+<span id="cb6-158"><a href="#cb6-158" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">not</span> out_shape:</span>
+<span id="cb6-159"><a href="#cb6-159" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> data[<span class="dv">0</span>]</span>
+<span id="cb6-160"><a href="#cb6-160" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> Tensor(data, out_shape)</span>
+<span id="cb6-161"><a href="#cb6-161" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-162"><a href="#cb6-162" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-163"><a href="#cb6-163" aria-hidden="true" tabindex="-1"></a>t <span class="op">=</span> Tensor(<span class="bu">list</span>(<span class="bu">range</span>(<span class="dv">24</span>)), (<span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>))</span>
+<span id="cb6-164"><a href="#cb6-164" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> t.shape <span class="op">==</span> (<span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>)</span>
+<span id="cb6-165"><a href="#cb6-165" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">len</span>(t) <span class="op">==</span> <span class="dv">2</span></span>
+<span id="cb6-166"><a href="#cb6-166" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> t.reshape(<span class="dv">4</span>, <span class="dv">3</span>, <span class="dv">2</span>)._data <span class="op">==</span> t._data</span>
+<span id="cb6-167"><a href="#cb6-167" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> t.transpose()._data <span class="op">!=</span> t._data</span>
+<span id="cb6-168"><a href="#cb6-168" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> t[<span class="dv">0</span>, <span class="dv">2</span>, <span class="dv">3</span>] <span class="op">==</span> <span class="dv">11</span></span>
+<span id="cb6-169"><a href="#cb6-169" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> t[:, <span class="dv">1</span>].shape <span class="op">==</span> (<span class="dv">2</span>, <span class="dv">4</span>)</span>
+<span id="cb6-170"><a href="#cb6-170" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> t[[<span class="dv">0</span>, <span class="dv">1</span>], [<span class="dv">2</span>, <span class="dv">0</span>], <span class="dv">0</span>]._data <span class="op">==</span> [<span class="dv">8</span>, <span class="dv">12</span>]</span>
+<span id="cb6-171"><a href="#cb6-171" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> t[:<span class="dv">2</span>, :<span class="dv">2</span>, <span class="dv">0</span>].shape <span class="op">==</span> (<span class="dv">2</span>, <span class="dv">2</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>Storage. Order. Survives. Reshape. Transpose. Breaks. It. Indexing. Copies. Out.</p>
+</section>
+<section id="references" class="level2" data-number="8">
+<h2 data-number="8" class="anchored" data-anchor-id="references"><span class="header-section-number">8</span> References</h2>
 <ul>
 <li>NumPy, <a href="https://numpy.org/doc/stable/reference/arrays.ndarray.html">The N-dimensional array (<code>ndarray</code>)</a>.</li>
+<li>NumPy, <a href="https://numpy.org/doc/stable/user/basics.indexing.html">Indexing on ndarrays</a>.</li>
 <li><a href="../numpy-to-jax/">NumPy to JAX</a> — this blog; <code>shape</code>, <code>ndim</code>, <code>size</code>, and <code>reshape</code> on the real array type.</li>
 </ul>
 
