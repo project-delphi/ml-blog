@@ -1,12 +1,12 @@
 ---
 title: "Neutrophil Metabolomes as a Matrix"
-subtitle: "Mild COVID neutrophils are not halfway from healthy to severe. A classifier will still separate the groups."
-description: "Seventy-five neutrophil metabolomes, three COVID labels. Fit a line through the group means before PCA, a classifier, or a tensor. Mild sits off that line. Use the leftover; do not score past it."
+subtitle: "Three COVID labels on 75 neutrophil profiles. Clustering does not recover them. A line through the group means is not a disease axis."
+description: "Seventy-five neutrophil metabolomes, three COVID labels. k-means, Ward, and a diagonal GMM with k=3 do not recover the labels. Averaging the groups and fitting a line through those means is well-defined and the wrong summary."
 author: "Ravi Kalia"
 date: "2026-09-10"
 categories: [Bioinformatics, Machine Learning, Linear Algebra]
 image: "./cover.png"
-tags: [metabolomics, neutrophils, COVID-19, PCA, tensors, LC-MS]
+tags: [metabolomics, neutrophils, COVID-19, clustering, PCA, tensors, LC-MS]
 jupyter: neutrophil-axis-blog
 resources:
   - cover.png
@@ -24,23 +24,31 @@ format:
     fig-dpi: 150
 ---
 
-![Neutrophil Metabolomes as a Matrix](./cover.png){fig-alt="Three group-mean points in a plane: Control and Severe on a line, Mild off that line."}
+![Neutrophil Metabolomes as a Matrix](./cover.png){fig-alt="Three PCA panels of 75 points, coloured by k-means, Ward, and GMM cluster, not by COVID label."}
 
-A classifier will separate these three COVID neutrophil groups. That is the easy trick. It does not mean mild disease sits on the road from healthy to severe.
+A classifier will separate these three COVID neutrophil groups. That is the easy trick. Clustering, which does not get the labels, does not recover the same partition.
 
-Seventy-five people, 285 metabolites, three labels. PCA, then a linear model, then — if the labels look like an extra axis — a tensor: that is the usual ML stack. The labels are tags on rows, the way train and test tags are. Stacking them into a cube fills two-thirds of the array with holes. A severity score that parks Mild at the midpoint mixes two kinds of change: metabolites that rise with disease, and metabolites that dip in Mild and bounce in Severe.
+Seventy-five people, 285 metabolites, three tags on rows. The usual next move is to average each tag and draw a line through those three points, then treat the leftover as a second disease direction. That geometry is always defined. It is not a model of the people. One Control profile already sits far from the Control mean. The clouds overlap. A line through the means never sees that.
 
-Li et al. (2023) isolated neutrophils from 75 people, extracted two million cells each, and deposited LC-MS peak areas as Metabolomics Workbench ST002477 (CC BY 4.0). They wanted the cell that kills, not plasma. The numbers are relative ion intensities, not counts and not fluxes. The job that fits the file is a line through three group means, then a look at what the line misses.
+Li et al. (2023) isolated neutrophils from 75 people, extracted two million cells each, and deposited LC-MS peak areas as Metabolomics Workbench ST002477 (CC BY 4.0). They wanted the cell that kills, not plasma. The numbers are relative ion intensities, not counts and not fluxes. The job that fits the file is whether the 75 rows form three blobs that match the labels.
 
 ```{python}
 #| echo: false
 #| output: false
+import os
+
+os.environ["LOKY_MAX_CPU_COUNT"] = "2"
+
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from PIL import Image
+from sklearn.cluster import AgglomerativeClustering, KMeans
 from sklearn.decomposition import PCA
+from sklearn.metrics import adjusted_rand_score, silhouette_score
+from sklearn.mixture import GaussianMixture
+from scipy import stats
 import matplotlib.pyplot as plt
 
 INK = "#1F2430"
@@ -50,6 +58,7 @@ CONTROL = "#2A9D8F"
 MILD = "#E9C46A"
 SEVERE = "#E07A5F"
 LINE = "#4A3AA7"
+CLUSTER_COLOURS = ("#4A3AA7", "#5F6672", "#C45C26")
 
 plt.rcParams.update(
     {
@@ -109,6 +118,45 @@ pca = PCA(n_components=2).fit(Z)
 pc_scores = pca.transform(Z)
 pc_var = pca.explained_variance_ratio_
 
+clusterings = {
+    "k-means": KMeans(n_clusters=3, n_init=10, random_state=0).fit(Z).labels_,
+    "Ward": AgglomerativeClustering(n_clusters=3, linkage="ward").fit(Z).labels_,
+    "GMM (diag)": GaussianMixture(
+        n_components=3, covariance_type="diag", random_state=0, n_init=5
+    )
+    .fit(Z)
+    .predict(Z),
+}
+aris = {name: adjusted_rand_score(labels, pred) for name, pred in clusterings.items()}
+sils = {name: silhouette_score(Z, pred) for name, pred in clusterings.items()}
+label_sil = float(silhouette_score(Z, labels))
+LOG2 = np.log2(1.0 + X)
+
+
+def bh_qvalues(p_values):
+    p_values = np.asarray(p_values, dtype=float)
+    n_tests = p_values.size
+    order = np.argsort(p_values)
+    ranked = p_values[order]
+    adjusted = ranked * n_tests / np.arange(1, n_tests + 1)
+    adjusted = np.minimum.accumulate(adjusted[::-1])[::-1]
+    q_values = np.empty(n_tests)
+    q_values[order] = np.clip(adjusted, 0.0, 1.0)
+    return q_values
+
+
+def welch_volcano(group_a, group_b):
+    a = LOG2[labels == group_a]
+    b = LOG2[labels == group_b]
+    _, p_values = stats.ttest_ind(a, b, axis=0, equal_var=False)
+    return a.mean(axis=0) - b.mean(axis=0), p_values, bh_qvalues(p_values)
+
+
+volcanoes = {
+    "Mild vs Control": welch_volcano("Mild", "Control"),
+    "Severe vs Control": welch_volcano("Severe", "Control"),
+}
+
 
 def letterbox_cover(fig, path="cover.png", size=(1200, 630)):
     import io
@@ -147,7 +195,7 @@ Plasma metabolomes mix liver, muscle, and lunch. This table is one cell type: th
 
 Neutrophils eat microbes, dump oxidants, and throw DNA nets (NETs). That work runs on glycolysis and the pentose-phosphate pathway (Morrison, Watts, Sadiku, and Walmsley 2022). In severe COVID-19 these cells pile up in failing lungs. If their fuel is off, killing and damage move together. Li et al. saw amino-acid, redox, and central-carbon pools shift, and showed GAPDH can suppress NET formation. Peak area is not that flux. It is still the public readout of the cell.
 
-Erythrose 4-phosphate sits on the pathway that powers the oxidant burst (Britt et al. 2022). Hypotaurine and glycine sit near redox handling. A linear "disease score" will scramble names like these if they do not move in a straight line from Control to Severe.
+Erythrose 4-phosphate sits on the pathway that powers the oxidant burst (Britt et al. 2022). Hypotaurine and glycine sit near redox handling. Those names only help after the 75 people have been treated as 75 people.
 
 ## Source table
 
@@ -186,8 +234,6 @@ Each person is one row. Each metabolite is one column. $X \in \mathbb{R}^{75 \ti
 
 A tensor mode can vary on its own. Here each person sits in one group. `sample × metabolite × group` leaves two slices empty for every person. CP on that cube would spend rank explaining holes the design made.
 
-Collapse to group means and the sample mode becomes three levels: a $3 \times 285$ matrix, still two-way. Three points live in a plane. Rank at most two.
-
 ```{mermaid}
 flowchart LR
   subgraph nested [Nested design]
@@ -203,34 +249,175 @@ flowchart LR
 
 Group would be a third mode if the same people were measured in all three states. This cohort is one snapshot per person. Raw chromatograms could still be `sample × retention time × m/z`. Those files are not in the public table.
 
-## Shared mean axis
+## Clustering
 
-Three class means in 285 dimensions are three points. They always sit in a plane. The live question is whether they also sit on a line: whether one severity number reconstructs the means. If not, any model that uses that number mixes two directions.
+The labels are a hypothesis about density: three blobs, 75 points. Clustering tests that without being handed the tags.
 
-Park Mild at a free place $t$ on the Control–Severe line:
+$k=3$ is borrowed from the label count. It is not chosen by silhouette, BIC, or a gap statistic. Those criteria need a held-out split or a stable bootstrap. 75 rows, 285 columns, and groups of 19 / 30 / 26 do not give one. [Hyperparameter Tuning in Clustering](../clustering-tuning-metrics/) is the case where a validation split exists. This file is not that case.
+
+Three algorithms, scikit-learn defaults, same log1p/IQR matrix $Z$:
+
+- **k-means.** Three spherical averages. This *is* averaging, without using the COVID tags.
+- **Ward agglomerative.** Merge by increase in within-cluster sum of squares.
+- **Diagonal Gaussian mixture.** One variance per metabolite. A full covariance per component cannot be fit: each would want $\sim 40{,}000$ parameters on 75 rows.
+
+Agreement with the COVID labels is the adjusted Rand index (ARI). Chance is 0. A match is 1.
+
+```{python}
+print(f"k-means ARI = {aris['k-means']:.2f}")
+print(f"Ward ARI = {aris['Ward']:.2f}")
+print(f"GMM (diag) ARI = {aris['GMM (diag)']:.2f}")
+print(f"COVID-label silhouette = {label_sil:.2f}")
+for name, pred in clusterings.items():
+    print(f"{name} sizes = {list(np.bincount(pred))}")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+def contingency_markdown(name, pred):
+    table = pd.crosstab(labels, pred, rownames=["label"], colnames=["cluster"])
+    cols = [str(c) for c in table.columns]
+    lines = [
+        f"**{name}**",
+        "",
+        "| label | " + " | ".join(cols) + " |",
+        "| --- | " + " | ".join(["---:"] * len(cols)) + " |",
+    ]
+    for idx, row in table.iterrows():
+        lines.append(f"| {idx} | " + " | ".join(str(int(v)) for v in row) + " |")
+    return "\n".join(lines)
+
+
+print("\n\n".join(contingency_markdown(name, pred) for name, pred in clusterings.items()))
+```
+
+ARI is 0.14 (k-means), 0.18 (Ward), 0.23 (diagonal GMM). Mild splits across clusters in all three. Ward's middle cluster has four people. The COVID labels themselves have silhouette 0.05 on $Z$: they are not compact blobs. k-means and Ward, which do not use the labels, still only reach silhouette 0.09.
+
+```{python}
+#| label: fig-clusters
+#| fig-cap: "The same 75 people on the first two principal components, coloured by cluster, not by COVID label. k-means, Ward, and a diagonal GMM, each with k=3 on the log1p/IQR matrix."
+#| fig-alt: "Three scatter panels of 75 points on PC1 versus PC2. Point colour is cluster membership from k-means, Ward, and GMM."
+fig, axes = plt.subplots(1, 3, figsize=(8, 3.2), sharex=True, sharey=True)
+for ax, (name, pred) in zip(axes, clusterings.items()):
+    for cluster_id in range(3):
+        pts = pc_scores[pred == cluster_id]
+        ax.scatter(
+            pts[:, 0],
+            pts[:, 1],
+            s=22,
+            color=CLUSTER_COLOURS[cluster_id],
+            alpha=0.85,
+            label=f"{cluster_id}",
+        )
+    ax.set_title(name)
+    ax.set_xlabel("PC1")
+axes[0].set_ylabel("PC2")
+axes[0].legend(frameon=False, title="cluster", loc="lower left", fontsize=8)
+fig.tight_layout()
+letterbox_cover(fig)
+```
+
+A spectral clustering with nearest-neighbour affinity can be pushed toward ARI $\approx 0.3$ by changing the neighbour count. That move is tuning. 75 points will not carry it.
+
+## PCA
+
+Do the 75 people separate, or only a labelled mean?
+
+```{python}
+print(f"PC1 variance fraction = {pc_var[0]:.2f}")
+print(f"PC2 variance fraction = {pc_var[1]:.2f}")
+for group in GROUPS:
+    centre = pc_scores[labels == group].mean(axis=0)
+    print(f"{group} mean PC1 = {centre[0]:.2f}, mean PC2 = {centre[1]:.2f}")
+```
+
+```{python}
+#| label: fig-pca
+#| fig-cap: "First two principal components of the 75 log1p/IQR profiles, coloured by COVID label. PC1 holds 21% of sample variance; PC2 holds 11%."
+#| fig-alt: "Scatter of 75 points coloured by Control, Mild, and Severe on PC1 versus PC2."
+fig, ax = plt.subplots()
+for group in GROUPS:
+    pts = pc_scores[labels == group]
+    ax.scatter(pts[:, 0], pts[:, 1], s=28, color=COLOURS[group], alpha=0.85, label=group)
+ax.set_xlabel("PC1")
+ax.set_ylabel("PC2")
+ax.legend(frameon=False)
+fig.tight_layout()
+```
+
+PC1 holds 21% of sample variance; PC2 holds 11%. Group means on PC1: Control −6.95, Mild 1.75, Severe 3.06. On PC2, Mild (−2.23) sits opposite Severe (2.48). People overlap. One Control sits near PC1 $= -25$. That tail moves the Control mean. The cluster panels are this same plane, recoloured.
+
+## Volcano
+
+Clustering asks whether the *rows* form blobs. A [volcano plot](../volcano-plots/) asks which *columns* differ. Both can be true at once: many metabolites shift, and the 75 people still overlap.
+
+Welch's t-test on $\log_2(1 + \text{peak area})$, one contrast at a time. Benjamini–Hochberg $q$ within each contrast's 285 tests. $k$ is not involved. The x-axis is the difference of group means on that log2 scale, not a fold-change of the raw averages.
+
+```{python}
+for name, (lfc, p_values, q_values) in volcanoes.items():
+    print(f"{name} q<0.05 = {int((q_values < 0.05).sum())} / {q_values.size}")
+e4p = int(np.flatnonzero(feature_names == "Erythrose 4-phosphate")[0])
+for name, (lfc, p_values, q_values) in volcanoes.items():
+    print(f"{name} E4P lfc = {lfc[e4p]:.2f}, q = {q_values[e4p]:.2g}")
+```
+
+```{python}
+#| label: fig-volcano
+#| fig-cap: "Welch t-tests on log2(1 + peak area). Points with Benjamini–Hochberg q < 0.05 are coloured; the rest are grey. Left: Mild versus Control. Right: Severe versus Control."
+#| fig-alt: "Two volcano plots. Horizontal axis is log2 mean difference; vertical axis is minus log10 p. Coloured points pass q < 0.05."
+UP = "#C45C26"
+DOWN = "#2A9D8F"
+fig, axes = plt.subplots(1, 2, figsize=(8, 3.6), sharey=True)
+annotate = {
+    "Mild vs Control": [("Fucose 1-phosphate", 6, 8)],
+    "Severe vs Control": [("Erythrose 4-phosphate", 8, -12)],
+}
+for ax, (name, (lfc, p_values, q_values)) in zip(axes, volcanoes.items()):
+    y = -np.log10(np.clip(p_values, 1e-300, 1.0))
+    hit = q_values < 0.05
+    ax.scatter(lfc[~hit], y[~hit], s=14, color=RULE, alpha=0.85, linewidths=0)
+    ax.scatter(lfc[hit & (lfc > 0)], y[hit & (lfc > 0)], s=16, color=UP, linewidths=0)
+    ax.scatter(lfc[hit & (lfc <= 0)], y[hit & (lfc <= 0)], s=16, color=DOWN, linewidths=0)
+    ax.axhline(-np.log10(0.05), color=MUTED, ls=":", lw=0.8)
+    ax.set_title(name)
+    ax.set_xlabel(r"mean $\log_2(1+x)$ difference")
+    for metabolite, dx, dy in annotate[name]:
+        idx = int(np.flatnonzero(feature_names == metabolite)[0])
+        ax.annotate(
+            metabolite,
+            (lfc[idx], y[idx]),
+            textcoords="offset points",
+            xytext=(dx, dy),
+            fontsize=8,
+            color=INK,
+        )
+axes[0].set_ylabel(r"$-\log_{10} p$")
+fig.tight_layout()
+```
+
+108 metabolites at $q<0.05$ for Mild vs Control; 134 for Severe vs Control. Erythrose 4-phosphate is a top Severe vs Control hit ($\log_2$ difference $-4.45$, $q=1.6\times 10^{-7}$) and is not called in Mild vs Control ($q=0.92$). A line through the three group means would have treated that name as a severity coordinate. It is a Severe-specific drop.
+
+Many columns move. The rows still do not form three blobs. That is why averaging the groups and fitting a line is the wrong summary of this file.
+
+## Group means
+
+Three class means in 285 dimensions are three points. They always sit in a plane. A least-squares line through Control and Severe, with Mild parked at some $t$, is then a statement about those three points, not about 75 people.
 
 $$
 \kappa(t)=\bar x_{\mathrm{Mild}}-\bigl[(1-t)\bar x_{\mathrm{Control}}+t\bar x_{\mathrm{Severe}}\bigr].
 $$
 
-One shared $t$ minimises $\lVert\kappa(t)\rVert_2^2$. Ordinary least squares. The midpoint model is $t=0.5$.
+The midpoint model is $t=0.5$. Ordinary least squares on the means puts Mild at $t=0.69$, with 28% of the between-group sum of squares off the line. Both numbers are exact for this transform. They do not say the people lie on a severity axis. Control and Severe define the chord. Mild's residual is what is left once you have already replaced each group by its average. k-means does that replacement without the labels and still does not recover them.
 
 ```{python}
 print(f"t_hat = {t_hat:.2f}")
 print(f"off-line fraction of between-group SS = {off_line:.2f}")
-print(f"Control n = {(labels == 'Control').sum()}")
-print(f"Mild n = {(labels == 'Mild').sum()}")
-print(f"Severe n = {(labels == 'Severe').sum()}")
-print(f"features = {Z.shape[1]}")
 ```
-
-Least-squares puts Mild at $t=0.69$, nearer Severe than Control. The leftover $\kappa$ is 28% of the between-group sum of squares. Most of the three means still sit on the line. What misses it is structured.
-
-Hypotaurine and glycine dip in Mild and rise in Severe. Erythrose 4-phosphate and bisphosphoglycerate drop in Severe. A severity score will not look like those names. They are candidates for a follow-up assay. They are not a pathway map.
 
 ```{python}
 #| label: fig-axis
-#| fig-cap: "Group means in the plane of the Control–Severe chord and its residual. Control and Severe sit on the horizontal line. Mild sits off it. Coordinates are log1p then IQR-scaled peak areas."
+#| fig-cap: "The three group means in the plane of the Control–Severe chord and Mild's residual. This is a picture of three averages. It is not a picture of 75 people."
 #| fig-alt: "Scatter of three labelled points. Control at the origin, Severe on the x-axis, Mild above the x-axis with a vertical residual."
 chord = float(np.linalg.norm(delta))
 fig, ax = plt.subplots()
@@ -248,52 +435,25 @@ ax.set_xlabel("Position on the Control–Severe chord")
 ax.set_ylabel("Residual")
 ax.legend(frameon=False, loc="upper left")
 fig.tight_layout()
-letterbox_cover(fig)
 ```
+
+The volcano already named the metabolites that move. The three averages add a $t$ and a leftover that the 75 people do not occupy.
 
 Rank one of the three centroids is the line. Rank two is the leftover. Rank three is empty. CP on the 75 × 285 table is SVD. Padding groups into a cube does not change that.
 
-## PCA
-
-Do the 75 people separate, or only their means?
-
-```{python}
-print(f"PC1 variance fraction = {pc_var[0]:.2f}")
-print(f"PC2 variance fraction = {pc_var[1]:.2f}")
-for group in GROUPS:
-    centre = pc_scores[labels == group].mean(axis=0)
-    print(f"{group} mean PC1 = {centre[0]:.2f}, mean PC2 = {centre[1]:.2f}")
-```
-
-```{python}
-#| label: fig-pca
-#| fig-cap: "First two principal components of the 75 log1p/IQR profiles. PC1 holds 21% of sample variance; PC2 holds 11%."
-#| fig-alt: "Scatter of 75 points coloured by Control, Mild, and Severe on PC1 versus PC2."
-fig, ax = plt.subplots()
-for group in GROUPS:
-    pts = pc_scores[labels == group]
-    ax.scatter(pts[:, 0], pts[:, 1], s=28, color=COLOURS[group], alpha=0.85, label=group)
-ax.set_xlabel("PC1")
-ax.set_ylabel("PC2")
-ax.legend(frameon=False)
-fig.tight_layout()
-```
-
-PC1 holds 21% of sample variance; PC2 holds 11%. Group means on PC1: Control −6.95, Mild 1.75, Severe 3.06. Mild sits between the ends, closer to Severe. On PC2, Mild (−2.23) sits opposite Severe (2.48). People overlap. The leftover is in the cloud, not only in the means.
-
 ## Downstream models
 
-Use the split. Do not score past it.
+Use the people. Do not replace them with three averages.
 
-- **Line through the three means.** Is one severity number enough? $t=0.69$ and a 28% leftover say no.
-- **PCA of people.** Do individuals separate? They overlap.
-- **Tests with false-discovery control**, as in a [volcano plot](../volcano-plots/). Rank metabolites by distance off the line, not by label accuracy.
+- **Clustering with $k=3$**, a few algorithms, no search over $k$. The labels are not the blobs.
+- **PCA of people.** The plane the cluster colours sit on. Individuals overlap.
+- **Welch t-tests with Benjamini–Hochberg $q$**, one contrast at a time. The volcano in this post. Method notes in [The Anatomy of a Volcano Plot](../volcano-plots/).
 - **Sparse PLS or elastic net**, group-stratified CV, only to rank features. 75 people will not carry a biomarker; see [From Dataset to Biological Signature](../dataset-to-biological-signature/).
 - **CP / PARAFAC** only on a real cube: chromatograms, or the same donors in more than one state. [Uses of Tensor Factorizations](../uses-of-tensor-factorizations/) is that case. This file is not.
 
-Skip an unregularised 285-feature classifier, a deep net, Poisson models, and NMF on Li et al.'s signed Dataset 3.
+Skip an unregularised 285-feature classifier, a deep net, Poisson models, NMF on Li et al.'s signed Dataset 3, and a severity score built from the three means.
 
-NumPy and scikit-learn for the line and PCA. MetaboAnalyst for tables (Pang et al. 2021). mixOmics / ropls for PLS. MZmine, XCMS, pyOpenMS, matchms for chromatograms. TensorLy for PARAFAC (Bro 1997).
+scikit-learn for k-means, Ward, GMM, ARI, and PCA. SciPy for Welch's t-test. MetaboAnalyst for tables (Pang et al. 2021). mixOmics / ropls for PLS. MZmine, XCMS, pyOpenMS, matchms for chromatograms. TensorLy for PARAFAC (Bro 1997).
 
 ## Constraints
 
@@ -302,9 +462,11 @@ This is one transform of one matrix, not a biomarker panel.
 - Peak area is not flux and not NETs.
 - A deposited name is not a confirmed structure. Forty lipids are sum-composition labels.
 - Groups are not time. One cohort is not a replication. Bulk pellets mix cell-state with within-cell change.
-- $t=0.69$ and the 28% leftover move if the transform moves.
+- $k=3$ was taken from the labels. ARI 0.14–0.23 and silhouette 0.05 move if the transform moves.
+- $q<0.05$ counts (108 and 134) are per-contrast Benjamini–Hochberg on 285 Welch tests of $\log_2(1+x)$. They move if the transform or the contrast set moves.
+- A full-covariance GMM, a neighbour count for spectral clustering, and a search over $k$ are tuning. 75 rows will not support them.
 
-Line. First. Mild. Sits. Off. Score. After. Residual. Cubes. Need. Crossed. Modes.
+Labels. Are. Not. Clusters. Means. Are. Not. People. Leave. k. Alone.
 
 ## References
 
@@ -316,5 +478,6 @@ Line. First. Mild. Sits. Off. Score. After. Residual. Cubes. Need. Crossed. Mode
 - Morrison, T., Watts, E. R., Sadiku, P., and Walmsley, S. R. (2022). The emerging role for metabolism in fueling neutrophilic inflammation. *Immunological Reviews*. [doi:10.1111/imr.13157](https://doi.org/10.1111/imr.13157)
 - Pang, Z., et al. (2021). MetaboAnalyst 5.0: narrowing the gap between raw spectra and functional insights. *Nucleic Acids Research*. [doi:10.1093/nar/gkab382](https://doi.org/10.1093/nar/gkab382)
 - [From Dataset to Biological Signature](../dataset-to-biological-signature/)
+- [Hyperparameter Tuning in Clustering](../clustering-tuning-metrics/)
 - [The Anatomy of a Volcano Plot](../volcano-plots/)
 - [Uses of Tensor Factorizations](../uses-of-tensor-factorizations/)
