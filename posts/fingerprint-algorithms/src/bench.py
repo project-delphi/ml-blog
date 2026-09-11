@@ -83,7 +83,10 @@ class Result:
 
 
 def score(
-    name: str, matrix: np.ndarray, truth: np.ndarray, seconds: float = 0.0
+    name: str,
+    matrix: np.ndarray,
+    truth: np.ndarray,
+    seconds: float = 0.0,
 ) -> Result:
     """Turn a probe-by-gallery score matrix into a `Result`.
 

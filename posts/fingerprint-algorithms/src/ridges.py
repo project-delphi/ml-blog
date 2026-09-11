@@ -161,7 +161,13 @@ def analyse(img: np.ndarray, block: int = BLOCK) -> Analysis:
     good = mask & periodic
     period = float(np.median(period_map[good])) if good.any() else RIDGE_PERIOD
     return Analysis(
-        theta, coherence, mask, ridgeness * mask, period_map, period, img.shape
+        theta,
+        coherence,
+        mask,
+        ridgeness * mask,
+        period_map,
+        period,
+        img.shape,
     )
 
 

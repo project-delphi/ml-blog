@@ -25,7 +25,12 @@ Two rules keep the comparison honest, and both cost accuracy:
 
 Run it from the post directory, with ``src`` on the path::
 
+    PYTHONPATH=src ../../.venv-fingerprint-algorithms/bin/python src/fetch_data.py
     PYTHONPATH=src ../../.venv-fingerprint-algorithms/bin/python src/ladder.py
+
+The first line is needed once: the print cache is not committed, so a fresh
+checkout has to build it (a 190 MB clone of the NIST repo, thrown away after).
+``posts/fingerprint-algorithms/requirements.txt`` has the venv recipe.
 
 ``--quick`` cuts the gallery and the training schedule down to something that
 finishes while you are still looking at it. The numbers it prints are worse than
@@ -64,10 +69,15 @@ def clock(label: str, verbose: bool = True):
     start = time.perf_counter()
     if verbose:
         print(f"  {label} ...", end="", flush=True)
-    yield out
-    out[0] = time.perf_counter() - start
-    if verbose:
-        print(f" {out[0]:.1f}s", flush=True)
+    try:
+        yield out
+    finally:
+        # In a finally, so a rung that raises forty minutes in still closes its
+        # line and reports what it had spent, rather than leaving the run with an
+        # unterminated "  rung 2 ..." and no timings at all.
+        out[0] = time.perf_counter() - start
+        if verbose:
+            print(f" {out[0]:.1f}s", flush=True)
 
 
 def analyse(images: np.ndarray) -> list[ridges.Analysis]:
@@ -195,7 +205,10 @@ def run(
         matrix = fingercode(gallery, probe, gallery_analyses, probe_analyses)
     results.append(
         bench.score(
-            "1  FingerCode, Gabor tessellation", matrix, truth, spent[0] + geometry
+            "1  FingerCode, Gabor tessellation",
+            matrix,
+            truth,
+            spent[0] + geometry,
         ),
     )
 
@@ -203,7 +216,10 @@ def run(
         matrix = landmarks(gallery, probe, gallery_analyses, probe_analyses)
     results.append(
         bench.score(
-            "2  minutiae, neighbourhood codes", matrix, truth, spent[0] + geometry
+            "2  minutiae, neighbourhood codes",
+            matrix,
+            truth,
+            spent[0] + geometry,
         ),
     )
 

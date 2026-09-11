@@ -319,6 +319,13 @@ def match(probe: Minutiae, gallery: Minutiae, top_k: int = 12) -> float:
     sort of the Cylinder-Code paper. Taking only the best few is what makes the
     comparison survive a partial print: an impression that caught half the finger
     can still put a dozen landmarks in the same relative arrangement.
+
+    Note that this takes the top k of the whole matrix rather than pairing each
+    minutia off at most once, so one generic landmark can supply several of the k
+    scores. That is a real weakness and it is not why this rung underperforms:
+    greedy one-to-one pairing was measured and moved nothing, because the
+    landmarks are not repeatable enough for any pairing rule to matter. See the
+    module docstring.
     """
     if len(probe) < 2 or len(gallery) < 2:
         return 0.0

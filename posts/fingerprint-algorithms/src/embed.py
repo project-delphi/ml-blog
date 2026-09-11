@@ -105,7 +105,9 @@ def augment(batch: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
 
 
 def batch_hard_triplet(
-    embeddings: torch.Tensor, labels: torch.Tensor, margin: float = MARGIN
+    embeddings: torch.Tensor,
+    labels: torch.Tensor,
+    margin: float = MARGIN,
 ):
     """Triplet loss against the hardest positive and negative in the batch."""
     distance = torch.cdist(embeddings, embeddings)
@@ -152,7 +154,9 @@ def train(
 
     model = Embedder()
     optimiser = torch.optim.AdamW(
-        model.parameters(), lr=learning_rate, weight_decay=1e-4
+        model.parameters(),
+        lr=learning_rate,
+        weight_decay=1e-4,
     )
     schedule = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=epochs)
 

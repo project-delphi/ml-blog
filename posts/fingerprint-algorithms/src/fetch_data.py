@@ -1,7 +1,9 @@
 """Build the post's fingerprint cache from the NIST MINEX III validation imagery.
 
-Run this once, by hand. The post never runs it -- a render reads
-``data/prints.npz`` and never touches the network.
+Run this once, by hand, before running ``src/ladder.py``. The cache it writes
+is **not committed** -- ``data/`` is ignored, and 19 MB of derived scans is not
+worth carrying in git for code the rendered post does not execute. The post
+itself never runs this and never touches the network.
 
     uv run --with numpy --with scipy python src/fetch_data.py
 
@@ -16,12 +18,13 @@ Per-image width and height are not in the files. They live in a C table,
 ``minexiii_validation_data.h``, alongside a quality grade and the finger
 position, and this script parses that table to know how to reshape each file.
 
-The full checkout is ~111 MB. What lands in the repo is one 192x192 square per
-scan, resampled so that every print has the same ridge period and centred on the
-ridge core -- the turning point a loop or whorl curves around, and the landmark
-classical matchers have registered on since Galton. Nothing else is taken out:
-rotation, ink coverage, elastic distortion, damage and how much of the finger the
-roll caught are all still there, and are what the matchers have to survive.
+The checkout is ~190 MB and is deleted afterwards. What it leaves behind, under
+an ignored ``data/``, is one 192x192 square per scan, resampled so that every
+print has the same ridge period and centred on the inked area -- see
+``standardise`` and the ``--centre`` flag for why not the ridge core. Nothing
+else is taken out: rotation, ink coverage, elastic distortion, damage and how
+much of the finger the roll caught are all still there, and are what the
+matchers have to survive.
 
 Two earlier versions of this crop were worse, and both failures are worth
 knowing. Centring on raw local contrast lands on the printed words at the top of
@@ -62,7 +65,18 @@ ENTRY_RE = re.compile(
 QUALITY = {"UNKNOWN": 0, "POOR": 1, "FAIR": 2, "GOOD": 3, "VERYGOOD": 4, "EXCELLENT": 5}
 
 SIZE = 192  # pixels per side of the standardised square
-TARGET_PERIOD = 6.0  # every print resampled to this ridge period, in pixels
+
+# Every print is resampled to this ridge period, in pixels. The source scans run
+# a median of 11.5, so 6.0 halves them and keeps about a quarter of the pixels.
+# That is a deliberate trade, not a default nobody revisited: it fits the whole
+# print inside a 192-pixel square, which is what the rungs measuring global ridge
+# flow need -- a sensor-sized window at full resolution costs them about four
+# times the identification accuracy. What it costs is rung 2, whose ridge endings
+# and bifurcations are no longer well resolved at this period; rebuilding at 11.5
+# measurably improves their repeatability without coming close to fixing it, and
+# src/minutiae.py carries the numbers. Raising this means raising SIZE in step,
+# and roughly doubles the archive this writes.
+TARGET_PERIOD = 6.0
 CENTRE = "ink"  # "ink" (centre of the inked area) or "core" (the singular point)
 
 
@@ -104,7 +118,8 @@ def standardise(
 
     Scale is fixed by the ridges themselves -- each print is resampled until its
     own ridge period is `period` pixels, so one filter bank is tuned for all of
-    them. Position is fixed by the core. What stays in is the part a matcher has
+    them. Position is fixed by `centre` -- the middle of the inked area by
+    default, the ridge core on request. What stays in is the part a matcher has
     to survive: rotation, ink coverage, elastic distortion, damage, and how much
     of the finger the roll actually caught.
 
@@ -276,7 +291,7 @@ def main() -> int:
         "bytes": args.out.stat().st_size,
     }
     (args.out.parent / "manifest.json").write_text(
-        json.dumps(manifest, indent=2) + "\n"
+        json.dumps(manifest, indent=2) + "\n",
     )
 
     print(f"{stats['images']} images from {stats['fingers']} fingers -> {args.out}")

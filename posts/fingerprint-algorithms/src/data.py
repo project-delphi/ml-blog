@@ -35,6 +35,7 @@ class Prints:
     position: np.ndarray  # (N,) ANSI/NIST finger position code
     quality: np.ndarray  # (N,) NIST's own quality grade, 0..5
     name: np.ndarray  # (N,) original filename
+    source_period: np.ndarray  # (N,) ridge period of the scan before resampling
 
     def __len__(self) -> int:
         return len(self.images)
@@ -64,7 +65,10 @@ POSITION_NAMES = {
 
 
 def load(path: Path | str = DATA / "prints.npz") -> Prints:
-    """Read the cache written by src/fetch_data.py."""
+    """Read the cache written by src/fetch_data.py.
+
+    Not committed -- run ``src/fetch_data.py`` first if this raises.
+    """
     d = np.load(path)
     return Prints(
         images=d["images"],
@@ -74,6 +78,10 @@ def load(path: Path | str = DATA / "prints.npz") -> Prints:
         position=d["position"],
         quality=d["quality"],
         name=d["name"],
+        # Kept reachable because it is the evidence for how much detail the
+        # standardisation cost: every print was resampled to a common period,
+        # and this is what each one started at.
+        source_period=d["source_period"],
     )
 
 
@@ -112,6 +120,7 @@ def gallery_probe(prints: Prints):
     gallery = gallery.subset(order)
     truth = np.searchsorted(gallery.finger, probe.finger)
     assert np.array_equal(
-        gallery.finger[truth], probe.finger
+        gallery.finger[truth],
+        probe.finger,
     ), "gallery is missing a mate"
     return gallery, probe, truth

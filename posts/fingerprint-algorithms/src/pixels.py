@@ -6,8 +6,8 @@ another once you allow it to slide.
 
 Correlation is computed through the Fourier transform, which gives the score at
 every possible shift for the price of one transform per image, and the score is
-the best of them. Sliding is allowed because the prints, though centred on the
-core, are not centred perfectly. Rotation is not allowed, because handling it
+the best of them. Sliding is allowed because the prints are centred on the middle
+of their inked area, which moves with how much of the finger each roll caught. Rotation is not allowed, because handling it
 here would mean re-transforming the probe at every angle -- and being unable to
 afford that is exactly why the later rungs describe a print in terms that do not
 change when the finger turns.
