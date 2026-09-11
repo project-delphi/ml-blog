@@ -1,0 +1,429 @@
+---
+title: "A NumPy-like Tensor in Pure Python"
+description: "A flat list plus a shape tuple is enough for shape, ndim, size, len, reshape, transpose, and indexing — no NumPy. Reshape keeps storage order; transpose does not."
+author: "Ravi Kalia"
+date: "2026-09-10"
+categories: [Python, NumPy]
+image: "./cover.png"
+tags: [tensors, arrays, numpy, python]
+format:
+  html:
+    toc: true
+    code-fold: true
+    number-sections: true
+---
+
+![A NumPy-like Tensor in Pure Python](./cover.png)
+
+Nested Python lists already hold a grid. They do not carry a shape we can reshape. A tiny class that stores a flat list and a shape tuple gives NumPy's layout methods with no NumPy.
+
+We already write nested lists and call `len` for the first axis. The other axes are nested loops. NumPy's `.shape` is that layout made explicit. `shape`, `ndim`, and `size` are attributes, not calls.
+
+## Storage
+
+This post uses a synthetic $2\times 3\times 4$ array of `range(24)`.
+
+Provenance:
+
+- The 24 integers are generated, not measured.
+- The array stands in for a small 3-way table (batch × row × column).
+- Size 24 was chosen so each entry can keep one colour in the figures.
+- A measured table of that shape is larger; the layout questions are the same.
+
+The constructor flattens nested lists and records a shape. It rejects a shape whose product is not `len(data)`.
+
+```python
+from math import prod
+
+
+def _flatten_shape(data):
+    if not isinstance(data, list):
+        return [data], ()
+    if not data:
+        return [], (0,)
+    parts = [_flatten_shape(item) for item in data]
+    shape = parts[0][1]
+    if any(s != shape for _, s in parts):
+        raise ValueError("ragged nested list")
+    flat = [v for f, _ in parts for v in f]
+    return flat, (len(data),) + shape
+
+
+def _unravel(index, shape):
+    out = []
+    for size in reversed(shape):
+        out.append(index % size)
+        index //= size
+    return tuple(reversed(out))
+
+
+def _ravel(multi, shape):
+    index = 0
+    for i, n in zip(multi, shape):
+        index = index * n + i
+    return index
+
+
+def _pad_key(key, ndim):
+    if not isinstance(key, tuple):
+        key = (key,)
+    if key.count(Ellipsis) > 1:
+        raise IndexError("at most one ellipsis")
+    if Ellipsis in key:
+        loc = key.index(Ellipsis)
+        n_fill = ndim - (len(key) - 1)
+        if n_fill < 0:
+            raise IndexError("too many indices")
+        key = key[:loc] + (slice(None),) * n_fill + key[loc + 1 :]
+    if len(key) > ndim:
+        raise IndexError("too many indices")
+    if len(key) < ndim:
+        key = key + (slice(None),) * (ndim - len(key))
+    return key
+
+
+def _axis_int(i, n):
+    if isinstance(i, bool) or not isinstance(i, int):
+        raise TypeError("integer index expected")
+    if i < 0:
+        i += n
+    if i < 0 or i >= n:
+        raise IndexError("index out of bounds")
+    return i
+
+
+class Tensor:
+    def __init__(self, data, shape=None):
+        if shape is None:
+            data, shape = _flatten_shape(data)
+        data = list(data)
+        shape = tuple(shape)
+        if prod(shape) != len(data):
+            raise ValueError("shape does not match size")
+        self._data = data
+        self._shape = shape
+```
+
+## Counts
+
+Four numbers describe the same layout:
+
+- **shape** — length of each axis: `(2, 3, 4)`.
+- **ndim** — how many axes: `3`.
+- **size** — product of the shape: `24`.
+- **len** — first axis only: `2`, not `24`.
+
+```python
+    @property
+    def shape(self):
+        return self._shape
+
+    @property
+    def ndim(self):
+        return len(self._shape)
+
+    @property
+    def size(self):
+        return prod(self._shape)
+
+    def __len__(self):
+        return self._shape[0]
+```
+
+## Reshape
+
+`reshape` returns a new `Tensor` with the same `_data` and a new shape. The product must equal `.size`. The list is copied; this is not a NumPy view.
+
+```python
+    def reshape(self, *shape):
+        if prod(shape) != self.size:
+            raise ValueError("size mismatch")
+        return Tensor(self._data, shape)
+```
+
+Each colour is one entry. The strip is storage order.
+
+![Layout of a $2\times 3\times 4$ tensor after `reshape` to a column, a row, and a $4\times 3\times 2$. The storage strip stays `0` through `23`.](./reshape.gif){#fig-reshape fig-alt="Animation. Top panel is the tensor layout; bottom panel is a 24-cell storage strip, one colour per entry. Starts as two 3 by 4 slabs, morphs to a column of 24, a row of 24, then four 3 by 2 slabs. The storage strip remains 0 through 23 in rainbow order."}
+
+The column, the row, and the $4\times 3\times 2$ keep that order.
+
+## Transpose
+
+Default `transpose` reverses axes. $(2, 3, 4)$ becomes $(4, 3, 2)$. Each multi-index is permuted and written into a new flat list.
+
+```python
+    def transpose(self, *axes):
+        if not axes:
+            axes = tuple(range(self.ndim - 1, -1, -1))
+        new_shape = tuple(self._shape[a] for a in axes)
+        out = [None] * self.size
+        for i, value in enumerate(self._data):
+            old = _unravel(i, self._shape)
+            new = tuple(old[a] for a in axes)
+            out[_ravel(new, new_shape)] = value
+        return Tensor(out, new_shape)
+```
+
+![The same $2\times 3\times 4$ tensor after `transpose`. Layout is $4\times 3\times 2$; the storage strip is no longer `0` through `23`.](./transpose.gif){#fig-transpose fig-alt="Animation. Same start as the reshape GIF: two 3 by 4 slabs and a rainbow storage strip 0 through 23. After transpose the layout is four 3 by 2 slabs with mixed colours, and the storage strip reads 0, 12, 4, 16, and so on."}
+
+The $4\times 3\times 2$ box matches the last reshape. The strip does not.
+
+## Indexing
+
+`__getitem__` reads values. Three forms. Every result is a copy.
+
+- **Simple** — an integer. That axis drops. `t[0]` has shape `(3, 4)`. `t[0, 2, 3]` is `11`.
+- **Slicing** — a `slice`. That axis stays. `t[:, 1]` is the middle row of both batches, shape `(2, 4)`. `t[0, :2, 1:3]` has shape `(2, 2)`.
+- **Fancy** — a list of integers gathers those positions. `t[[0, 1]]` is both batches. Two lists pick pairs, not a grid: `t[[0, 1], [2, 0], 0]` is `[8, 12]`. The $2\times 2$ block is a slice: `t[:2, :2, 0]`.
+
+```python
+    def __getitem__(self, key):
+        key = _pad_key(key, self.ndim)
+        kinds = []
+        coords = []
+        for k, n in zip(key, self._shape):
+            if isinstance(k, list):
+                coords.append([_axis_int(i, n) for i in k])
+                kinds.append("fancy")
+            elif isinstance(k, slice):
+                coords.append(list(range(*k.indices(n))))
+                kinds.append("slice")
+            elif isinstance(k, int) and not isinstance(k, bool):
+                coords.append([_axis_int(k, n)])
+                kinds.append("int")
+            else:
+                raise TypeError("index must be an int, a slice, or a list of ints")
+
+        fancy = [i for i, kind in enumerate(kinds) if kind == "fancy"]
+        if fancy:
+            length = len(coords[fancy[0]])
+            if any(len(coords[i]) != length for i in fancy):
+                raise IndexError("fancy lists must have the same length")
+            if max(fancy) - min(fancy) + 1 != len(fancy):
+                raise IndexError("fancy axes must be adjacent")
+
+        out_shape = []
+        ax = 0
+        while ax < self.ndim:
+            if fancy and ax == min(fancy):
+                out_shape.append(length)
+                ax = max(fancy) + 1
+                continue
+            if kinds[ax] == "slice":
+                out_shape.append(len(coords[ax]))
+            ax += 1
+        out_shape = tuple(out_shape)
+
+        data = []
+
+        def fill(ax, p, multi):
+            if ax == self.ndim:
+                data.append(self._data[_ravel(tuple(multi), self._shape)])
+                return
+            kind = kinds[ax]
+            if kind == "int":
+                fill(ax + 1, p, multi + [coords[ax][0]])
+            elif kind == "slice":
+                for i in coords[ax]:
+                    fill(ax + 1, p, multi + [i])
+            elif ax == min(fancy):
+                for q in range(length):
+                    fill(ax + 1, q, multi + [coords[ax][q]])
+            else:
+                fill(ax + 1, p, multi + [coords[ax][p]])
+
+        fill(0, None, [])
+        if not out_shape:
+            return data[0]
+        return Tensor(data, out_shape)
+```
+
+## Constraints
+
+No broadcasting, no boolean mask, no newaxis, no views. Fancy axes must be adjacent. Enough to see why NumPy treats shape as data. [NumPy to JAX](../numpy-to-jax/) is the real API.
+
+## Class
+
+Markdown fences do not join. `reshape`, `transpose`, and `__getitem__` are ordinary methods on `Tensor`:
+
+```python
+from math import prod
+
+
+def _flatten_shape(data):
+    if not isinstance(data, list):
+        return [data], ()
+    if not data:
+        return [], (0,)
+    parts = [_flatten_shape(item) for item in data]
+    shape = parts[0][1]
+    if any(s != shape for _, s in parts):
+        raise ValueError("ragged nested list")
+    flat = [v for f, _ in parts for v in f]
+    return flat, (len(data),) + shape
+
+
+def _unravel(index, shape):
+    out = []
+    for size in reversed(shape):
+        out.append(index % size)
+        index //= size
+    return tuple(reversed(out))
+
+
+def _ravel(multi, shape):
+    index = 0
+    for i, n in zip(multi, shape):
+        index = index * n + i
+    return index
+
+
+def _pad_key(key, ndim):
+    if not isinstance(key, tuple):
+        key = (key,)
+    if key.count(Ellipsis) > 1:
+        raise IndexError("at most one ellipsis")
+    if Ellipsis in key:
+        loc = key.index(Ellipsis)
+        n_fill = ndim - (len(key) - 1)
+        if n_fill < 0:
+            raise IndexError("too many indices")
+        key = key[:loc] + (slice(None),) * n_fill + key[loc + 1 :]
+    if len(key) > ndim:
+        raise IndexError("too many indices")
+    if len(key) < ndim:
+        key = key + (slice(None),) * (ndim - len(key))
+    return key
+
+
+def _axis_int(i, n):
+    if isinstance(i, bool) or not isinstance(i, int):
+        raise TypeError("integer index expected")
+    if i < 0:
+        i += n
+    if i < 0 or i >= n:
+        raise IndexError("index out of bounds")
+    return i
+
+
+class Tensor:
+    def __init__(self, data, shape=None):
+        if shape is None:
+            data, shape = _flatten_shape(data)
+        data = list(data)
+        shape = tuple(shape)
+        if prod(shape) != len(data):
+            raise ValueError("shape does not match size")
+        self._data = data
+        self._shape = shape
+
+    @property
+    def shape(self):
+        return self._shape
+
+    @property
+    def ndim(self):
+        return len(self._shape)
+
+    @property
+    def size(self):
+        return prod(self._shape)
+
+    def __len__(self):
+        return self._shape[0]
+
+    def reshape(self, *shape):
+        if prod(shape) != self.size:
+            raise ValueError("size mismatch")
+        return Tensor(self._data, shape)
+
+    def transpose(self, *axes):
+        if not axes:
+            axes = tuple(range(self.ndim - 1, -1, -1))
+        new_shape = tuple(self._shape[a] for a in axes)
+        out = [None] * self.size
+        for i, value in enumerate(self._data):
+            old = _unravel(i, self._shape)
+            new = tuple(old[a] for a in axes)
+            out[_ravel(new, new_shape)] = value
+        return Tensor(out, new_shape)
+
+    def __getitem__(self, key):
+        key = _pad_key(key, self.ndim)
+        kinds = []
+        coords = []
+        for k, n in zip(key, self._shape):
+            if isinstance(k, list):
+                coords.append([_axis_int(i, n) for i in k])
+                kinds.append("fancy")
+            elif isinstance(k, slice):
+                coords.append(list(range(*k.indices(n))))
+                kinds.append("slice")
+            elif isinstance(k, int) and not isinstance(k, bool):
+                coords.append([_axis_int(k, n)])
+                kinds.append("int")
+            else:
+                raise TypeError("index must be an int, a slice, or a list of ints")
+
+        fancy = [i for i, kind in enumerate(kinds) if kind == "fancy"]
+        if fancy:
+            length = len(coords[fancy[0]])
+            if any(len(coords[i]) != length for i in fancy):
+                raise IndexError("fancy lists must have the same length")
+            if max(fancy) - min(fancy) + 1 != len(fancy):
+                raise IndexError("fancy axes must be adjacent")
+
+        out_shape = []
+        ax = 0
+        while ax < self.ndim:
+            if fancy and ax == min(fancy):
+                out_shape.append(length)
+                ax = max(fancy) + 1
+                continue
+            if kinds[ax] == "slice":
+                out_shape.append(len(coords[ax]))
+            ax += 1
+        out_shape = tuple(out_shape)
+
+        data = []
+
+        def fill(ax, p, multi):
+            if ax == self.ndim:
+                data.append(self._data[_ravel(tuple(multi), self._shape)])
+                return
+            kind = kinds[ax]
+            if kind == "int":
+                fill(ax + 1, p, multi + [coords[ax][0]])
+            elif kind == "slice":
+                for i in coords[ax]:
+                    fill(ax + 1, p, multi + [i])
+            elif ax == min(fancy):
+                for q in range(length):
+                    fill(ax + 1, q, multi + [coords[ax][q]])
+            else:
+                fill(ax + 1, p, multi + [coords[ax][p]])
+
+        fill(0, None, [])
+        if not out_shape:
+            return data[0]
+        return Tensor(data, out_shape)
+
+
+t = Tensor(list(range(24)), (2, 3, 4))
+assert t.shape == (2, 3, 4)
+assert len(t) == 2
+assert t.reshape(4, 3, 2)._data == t._data
+assert t.transpose()._data != t._data
+assert t[0, 2, 3] == 11
+assert t[:, 1].shape == (2, 4)
+assert t[[0, 1], [2, 0], 0]._data == [8, 12]
+assert t[:2, :2, 0].shape == (2, 2)
+```
+
+Storage. Order. Survives. Reshape. Transpose. Breaks. It. Indexing. Copies. Out.
+
+## References
+
+- NumPy, [The N-dimensional array (`ndarray`)](https://numpy.org/doc/stable/reference/arrays.ndarray.html).
+- NumPy, [Indexing on ndarrays](https://numpy.org/doc/stable/user/basics.indexing.html).
+- [NumPy to JAX](../numpy-to-jax/) — this blog; `shape`, `ndim`, `size`, and `reshape` on the real array type.
