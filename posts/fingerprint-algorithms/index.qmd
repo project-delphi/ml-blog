@@ -21,6 +21,8 @@ The strange part is that the phone has no picture of your thumb. There is nothin
 
 So the interesting question is not "how do you match a fingerprint". It is **what do you keep**, and what survives when the capture is bad. This post builds four answers to that question, using 397 real inked fingers from NIST, and scores all four against one shared gallery of two hundred of them. One of the four is a modern metric-learning network. It does not win, and the reason it does not win turns out to be the most useful thing here.
 
+If you have trained a classifier, you already have most of the machinery for this. Matching *is* classification: each enrolled finger is a class, and a probe image has to be assigned to one of them. What makes it strange is the shape of the training data. There is one example per class, the classes are created after the model ships — you enrol a new thumb and nobody retrains anything — and there are as many classes as there are enrolled fingers. Those three conditions break the usual recipe of a softmax over a fixed label set, which is why the work moves out of the decision rule and into the representation. So the four methods are four answers to "what do you keep", compared under one decision rule held fixed.
+
 ## A pattern nobody chose, not even your genome
 
 Friction ridges form on the volar pads between roughly week 10 and week 17 of gestation. The basal layer of the epidermis is a stiff sheet growing on a soft foundation, and it is being compressed as the pad underneath it swells and then regresses. A stiff sheet under compression on a soft bed does not stay flat. It buckles, into a regular corrugation, at a wavelength set by the mechanics rather than by any instruction.
@@ -53,7 +55,7 @@ Everything measured here comes from one cache, so here is what is in it before a
 - **What this post asks of it.** Rank-1 identification against a gallery of two hundred fingers, and an equal error rate for the one-against-one case. Nothing about latents, and nothing about live sensors — these are inked cards.
 - **What a wrong answer costs.** In the deployed version of this problem, a false accept opens someone else's phone and a false reject locks you out of your own. Those two errors trade against each other, which is why one accuracy number is never enough and the tables here carry both.
 
-Each scan is put on one scale and one centre by `src/fetch_data.py`, and that step makes a trade which bites one of the rungs later:
+Each scan is put on one scale and one centre by `src/fetch_data.py`, and that step makes a trade which bites one of the four methods later:
 
 ```{python}
 #| eval: false
@@ -70,13 +72,54 @@ scaled = np.clip(ndimage.zoom(source, zoom, order=1), 0, 255).astype(np.uint8)
 
 Two things vary between cards for reasons that have nothing to do with whose finger it is: how large the print was rolled, and where on the card it landed. Both are removed — every print is resampled to a ridge period of 6 pixels and cropped to a 192-pixel square centred on its inked area. Everything a matcher has to survive is left in: rotation, ink coverage, elastic distortion of the skin, damage, and how much of the finger the roll caught.
 
-The cost is resolution. The source scans run a median ridge period of 11.5 pixels and the cache halves that, which keeps the whole print inside a small square — necessary, because the rungs that measure global ridge flow lose about four times the accuracy on a sensor-sized window at full resolution. Ridge *flow* survives the resampling comfortably. Individual ridge endings and forks do not, and that is a debt the minutiae rung pays in full.
+The cost is resolution. The source scans run a median ridge period of 11.5 pixels and the cache halves that, which keeps the whole print inside a small square — necessary, because the methods that measure global ridge flow lose about four times the accuracy on a sensor-sized window at full resolution. Ridge *flow* survives the resampling comfortably. Individual ridge endings and forks do not, and that is a debt the landmark methods pay in full.
 
 One more thing about the data, because it explains a lot of the spread later: this imagery is not uniformly good. Over 80 randomly drawn prints, the ridge mask covers a median 56% of the frame, seven prints fall under 10%, and on three of them the analysis finds no reliable ridge region at all. NIST's own quality grade correlates only about 0.56 with that coverage, so grade is informative and not decisive.
 
+## The task is classification with one example per class
+
+Two impressions per finger is what makes the problem measurable, and it also fixes the vocabulary every table later is read in.
+
+One impression of each finger is **enrolled** — stored, and treated as the reference copy. The stored set is the **gallery**. The other impression is the **probe**: the image handed over with the question "whose is this?". A probe scored against its own finger's gallery entry is a **genuine pair**, and against any other entry an **impostor pair**. The entry that belongs to the probe is its **mate**.
+
+Put that way, identification is a classification problem with the labels supplied by the gallery. There are 199 test fingers — the 397 are split in half by finger, and the half used for scoring is the half nothing was fitted on — so there are 199 classes, the gallery holds one labelled example of each, and the probe is the point to be labelled. A method answers by scoring the probe against all 199 entries and sorting them.
+
+Three of the numbers in the results tables are then familiar quantities under biometric names:
+
+- **Rank-1** is top-1 accuracy: how often the highest-scoring entry is the mate.
+- **Rank-5** is top-5 accuracy: how often the mate is anywhere in the first five.
+- **Median rank** is where the mate typically lands in the sorted 199. It reports what rank-1 hides — a method can almost never be right first and still put the mate reliably near the top, or scatter it.
+
+With 199 classes and one example each, guessing gives a rank-1 of $1/199 = 0.005$. Anything near half a percent is a method saying nothing.
+
+The obvious next move would be to train a 199-way softmax on the gallery and read off the argmax. No method here does that, for two reasons that belong to the deployed problem rather than to this dataset. There is one example per class, so a per-class decision boundary has nothing to be fitted to. And the label set is not fixed: enrolling a finger creates a class, and no phone retrains a network when someone adds a thumb. A method that must be refitted whenever the classes change cannot ship.
+
+So the decision rule is nearest neighbour, and it is held fixed for all four methods: encode the probe, score it against every gallery entry with whatever similarity the method defines, take the best. The comparison in this post is never between classifiers. It is between the representations that similarity is computed on, which is what "what do you keep" is asking.
+
+### The other question is a binary classifier over pairs
+
+A phone is not searching a database. It has a claim — this is the enrolled thumb — and has to answer yes or no. That is **verification**, and it is binary classification over *pairs*: genuine or impostor, decided by a threshold on the score.
+
+Two errors trade against each other there. Set the threshold low and impostor pairs get accepted; set it high and genuine pairs get rejected. Sweeping the threshold traces the **false accept rate** up as the **false reject rate** comes down, and the **equal error rate** is the threshold where the two meet — one number summarising that trade, where lower is better and 0.5 means the threshold is doing no work.
+
+**d′** asks a blunter question: is there a usable threshold at all? Score every genuine pair and every impostor pair and you have two distributions. d′ is the gap between their means, measured in pooled standard deviations. Near 0 the two sit on top of each other, and no threshold separates them however the ranking looks.
+
+Both questions here are **closed-set** — the probe's finger is always somewhere in the gallery, so a right answer always exists to be found. A deployed system also has to reject a finger it has never enrolled, which is the open-set version and is strictly harder.
+
+### Four answers, keeping less each time
+
+With the decision rule fixed, what remains is the representation, and the four built here keep progressively less of the image:
+
+1. **The pixels themselves**, raw and then enhanced.
+2. **A fixed-length measurement of ridge flow**, cell by cell.
+3. **A list of landmark points**, with the image thrown away.
+4. **128 floats a network chose**, with nobody telling it what a ridge is.
+
+Three of the four need to know which way the ridges run before they can start.
+
 ## Everything downstream needs to know which way the ridges run
 
-Before any method can describe a print, it has to answer a smaller question at every point: which direction do the ridges run here, and how far apart are they? Three of the four rungs are built on that answer, so it is computed once and shared.
+Before any method can describe a print, it has to answer a smaller question at every point: which direction do the ridges run here, and how far apart are they? The answer is computed once and shared, so every method that needs it is reading the same geometry.
 
 Direction is the awkward part, because a ridge has no arrowhead. A ridge running north-east is the same ridge running south-west, so the two gradient directions $\theta$ and $\theta + \pi$ are the same answer. Averaging them naively cancels them out. The fix is to average the *doubled* angle, where the two agree instead of opposing:
 
@@ -96,7 +139,7 @@ coherence = np.hypot(num, den) / (gxx + gyy + 1e-12)
 
 That second line out is `coherence`: how single-minded the gradients in a block are. It runs near 1 on clean parallel ridges and near 0 on blank card, which makes it the natural measure of whether a block is worth trusting.
 
-![The print, its orientation field, the ridge-strength map, and the mask of blocks holding friction ridges. Drawn from `a002_04`, whose mask covers 75% of the frame. The orientation field curves around the core of the loop, which is the structure every later rung is reading.](./figures/ridge-geometry.png)
+![The print, its orientation field, the ridge-strength map, and the mask of blocks holding friction ridges. Drawn from `a002_04`, whose mask covers 75% of the frame. The orientation field curves around the core of the loop, which is the structure every later method is reading.](./figures/ridge-geometry.png)
 
 With direction and period in hand, the enhancement step is a **directional comb**. A Gabor filter is a sinusoid wrapped in a Gaussian envelope — it has teeth at one spacing, running in one direction — and combing a patch of ridges along the direction they already run reinforces them, while noise that runs across the teeth is flattened:
 
@@ -117,13 +160,13 @@ idx = np.round(theta / (np.pi / ORIENTATIONS)).astype(int) % ORIENTATIONS
 return np.take_along_axis(bank, idx[None], axis=0)[0]
 ```
 
-![Left to right the same print gets legible: the raw scan is faint and unevenly inked, the Gabor bank recovers continuous ridges, the crest map reduces each ridge to a line, and tracing plus gap-bridging closes most of the breaks. The visible improvement from the third panel to the fourth is the repair of ink gaps, which matters in the third rung.](./figures/enhance-steps.png)
+![Left to right the same print gets legible: the raw scan is faint and unevenly inked, the Gabor bank recovers continuous ridges, the crest map reduces each ridge to a line, and tracing plus gap-bridging closes most of the breaks. The visible improvement from the third panel to the fourth is the repair of ink gaps, which matters when the landmarks are extracted.](./figures/enhance-steps.png)
 
-## Rung 0: slide the two pictures over each other
+## Keeping the picture: slide the two prints over each other
 
-The bottom of the ladder keeps everything and understands nothing. No ridge model, no landmarks, no training — just how well one image lines up with another once you allow it to slide.
+The first answer is the one that does the least. Keep the image, compare two images by how well they line up, and have no model of what a fingerprint is — no ridge direction, no landmarks, no training. It is the control the other three have to beat: a representation that keeps less than the picture has to earn what it threw away.
 
-Correlation at every possible shift costs one Fourier transform per image rather than one comparison per offset, so "try every alignment" is cheaper than it sounds:
+One thing has to be handled even so. Two impressions of a finger never land in the same place on the card, so comparing them pixel against pixel in place compares a ridge in one with a valley in the other and reports almost nothing. The repair is to let one image slide over the other and keep the best alignment found. Correlation at every possible shift costs one Fourier transform per image rather than one comparison per offset, so "try every alignment" is cheaper than it sounds:
 
 ```{python}
 #| eval: false
@@ -134,13 +177,15 @@ surface = np.fft.irfft2(gallery_f * np.conj(probe_f), s=probe.shape, axes=(-2, -
 return surface.reshape(len(gallery), -1).max(axis=1)
 ```
 
-Sliding is allowed because the prints are centred on their inked area, which moves with how much of the finger each roll caught. Rotation is *not* allowed, because handling it here would mean re-transforming the probe at every angle — and being unable to afford that is precisely why the higher rungs describe a print in terms that do not change when the finger turns.
+Sliding is allowed because the prints are centred on their inked area, which moves with how much of the finger each roll caught. Rotation is *not* allowed, because handling it here would mean re-transforming the probe at every angle and redoing the search — one FFT pair per angle tried. Being unable to afford that is why the later methods describe a print in terms that do not change when the finger turns.
 
-This rung runs twice: once on the raw grey image, once on the Gabor-enhanced one. The gap between those two is a clean measurement of what the enhancement alone is worth, with no descriptor involved.
+This method runs twice: once on the raw grey image, once on the Gabor-enhanced one. The gap between those two is a clean measurement of what the enhancement alone is worth, with no descriptor involved.
 
-## Rung 1: comb the whole print, then count the energy cell by cell
+## Keeping the flow: comb the print, then count the energy cell by cell
 
-Jain, Prabhakar, Hong and Pankanti (2000) turned the filter bank into a fixed-length descriptor, the FingerCode. Lay a polar tessellation over the print — concentric rings cut into wedges — and for each cell record how much energy each Gabor orientation puts into it. Concatenate, and you have a vector of fixed size no matter what the print looked like.
+Correlation compares two prints only as wholes. The next answer keeps a *description* instead — a fixed-length vector, computed from one print without reference to any other, so that comparing two prints is comparing two vectors. This is the familiar shape of a feature extractor, and it buys the things a fixed-length vector always buys: a template of known size, and a comparison that costs a dot product.
+
+Jain, Prabhakar, Hong and Pankanti (2000) built one out of the filter bank already in hand, the FingerCode. Lay a polar tessellation over the print — concentric rings cut into wedges — and for each cell record how much energy each Gabor orientation puts into it. A cell where the ridges run north-east answers strongly in the north-east filter and weakly in the others, so the vector is a map of *which way the ridges run where*, at a fixed resolution. Concatenate the cells and the size is the same whatever the print looked like: here 4 rings cut into 16 wedges gives 64 cells, times 8 orientations.
 
 The elegant part is what happens when the finger turns. Rotating the print moves energy around the tessellation in a completely predictable way: the wedges shift round by some number of sectors, and the ridge directions shift by a matching number of orientation bins. So comparing against a rotated version of a print costs two array rolls instead of re-filtering a rotated image:
 
@@ -160,9 +205,13 @@ The claim is checkable, so the third panel checks it. Turn a print ninety degree
 
 ![The polar tessellation over the print, its FingerCode as an 8-by-64 energy map, and the match score of the same print turned 90° against the original at each assumed rotation. The score peaks at exactly 90° and reaches 1.000, against 0.611 for comparing the two descriptors unrolled. Rotation really is an array roll. The lesser bump near 270° is the ambiguity from earlier coming back: ridge direction has no arrowhead, so a half-turn puts much of the energy back where it started.](./figures/fingercode.png)
 
-## Rung 2: throw the picture away and keep the constellation
+## Keeping the landmarks: throw the picture away and keep the constellation
 
-This is what an examiner means by a fingerprint, and what every automated system meant by one until the 2010s. Walk the thinned ridges and record only the places where something happens — a ridge stops, or a ridge splits — as a list of points $(x, y, \theta)$. The image is then discarded entirely.
+The FingerCode still describes the print everywhere, at a fixed grid of cells. The third answer keeps far less: a few dozen points, and nothing else. This is what an examiner means by a fingerprint, and what every automated system meant by one until the 2010s.
+
+The idea is that most of a print is redundant. Ridges run parallel over most of their length, and parallel ridges look like every other patch of parallel ridges. What distinguishes one finger is where that regularity *breaks* — a ridge stops, or a ridge splits. Record only those places, as a list of points $(x, y, \theta)$ with a position and the direction the ridge was heading, and throw the image away.
+
+Two properties follow, and they are why this representation outlived the others. A list of points carries no orientation of its own, so rotating the finger rotates the list and nothing else — rotation is handled by construction rather than by searching. And a partial print still yields the landmarks it contains, so a fragment is a shorter list rather than a corrupted image.
 
 Finding them is a local counting exercise. On a skeleton one pixel wide, walk the eight neighbours of a pixel in a ring and count how many times the ring flips between skeleton and background. In the middle of a ridge it flips twice. One flip is a ridge ending; three is a bifurcation:
 
@@ -189,18 +238,18 @@ $$
 
 solved in closed form by the SVD of $Y^\top X$. It is the right way to compare two constellations — *if* you already know which star corresponds to which.
 
-That proviso is the whole difficulty. Procrustes needs correspondences, and correspondences are what a fingerprint matcher does not have. So this rung sidesteps the transform entirely: each minutia is described by its own neighbourhood in its own frame of reference — how far its neighbours sit, in what direction relative to the way it points, and which way they point. Such a description does not change when the finger rotates, so two prints are compared by matching descriptions rather than by searching for an alignment. That is the idea behind Cappelli, Ferrara and Maltoni's Minutia Cylinder-Code (2010), in a smaller form.
+That proviso is the whole difficulty. Procrustes needs correspondences, and correspondences are what a fingerprint matcher does not have. So this method sidesteps the transform entirely: each minutia is described by its own neighbourhood in its own frame of reference — how far its neighbours sit, in what direction relative to the way it points, and which way they point. Such a description does not change when the finger rotates, so two prints are compared by matching descriptions rather than by searching for an alignment. That is the idea behind Cappelli, Ferrara and Maltoni's Minutia Cylinder-Code (2010), in a smaller form.
 :::
 
 ![The two extractors on one print, and the mate impression. Crossing numbers on a thinned binary image find 20 landmarks, clustered where the ink is heavy. Ridge following finds 39, spread more evenly across the pattern; the mate gives 42. More landmarks, better spread — and, as the next section measures, no more repeatable for it.](./figures/minutiae.png)
 
-### This rung measures the extractor, not the method
+### This measures the extractor, not minutiae matching
 
-Here is the uncomfortable result, stated before the table rather than after it. On this cache, the minutiae rung identifies a few percent of probes. Plain correlation of the enhanced images — rung 0 with a comb run over it, no landmarks at all — identifies ten times as many.
+Here is the uncomfortable result, stated before the table rather than after it. On this cache, the minutiae method identifies a few percent of probes. Plain correlation of the enhanced images — the picture with a comb run over it, no landmarks at all — identifies ten times as many.
 
 That is not a fact about minutiae matching. Real automated fingerprint identification systems do well on exactly this imagery, which is why NIST published it. It is a fact about *this extractor*, and the way to show that is to measure the landmarks directly instead of arguing about the score.
 
-The diagnostic: take two impressions of one finger and register them by their ridge flow, searching over rotation and shift for the alignment that best correlates the enhanced images. This hands the matcher the transform it would otherwise have to find. Then ask the only question that matters — what fraction of the landmarks in one impression have a landmark in the other within a ridge period of them?
+The diagnostic is a gate, in the sense that an extractor failing it cannot be rescued by any matcher downstream. Take two impressions of one finger and register them by their ridge flow, searching over rotation and shift for the alignment that best correlates the enhanced images. This hands the matcher the transform it would otherwise have to find, so nothing that follows can be blamed on a bad alignment. Then ask the only question that matters — what fraction of the landmarks in one impression have a landmark in the other within a ridge period of them? Call that the **landing rate**: a landmark that lands is one the extractor found twice.
 
 ```{python}
 #| eval: false
@@ -227,7 +276,7 @@ out[rr, cc] = True
 
 It behaves better on controls, which `src/minutiae_follow.py --controls` reproduces. On a synthetic ridge field containing no minutiae at all, both extractors correctly return nothing. On a field with a half-period phase step driven across a band — which dislocates every ridge crossing it — both return three landmarks, and the difference is where they put them. The ridge follower's three sit 3, 4 and 3 pixels from the dislocation line. The crossing-number extractor's three sit 9, 44 and 60 pixels from it, which is to say two of them are describing the ink somewhere else entirely. Same count, and only one of the two is looking at the feature. It also finds more landmarks on real prints, and spreads them across the pattern instead of bunching them where the ink is thick.
 
-And it does not help:
+And it does not help. The table reads landing rate against floor, and **lift** is the ratio of the two — how much better than chance overlap the extractor does. A lift of 1 is an extractor finding nothing repeatable; the number to want is large, and none of these are:
 
 | extractor | minutiae per print | genuine landing | impostor floor | lift | lift, per seed |
 |---|---:|---:|---:|---:|---:|
@@ -244,13 +293,17 @@ Two things about that table before reading anything into it.
 
 That divergence is the warning label. A lift of 3.76 is the largest number in the table and it is an artefact: at quality ≥ 0.55 only five landmarks survive per print, the impostor floor collapses to 0.024, and a ratio with a denominator that small swings between 1.40 and 6.65 depending on which fingers were drawn. When the mean of the ratios and the ratio of the means come apart, the ratio is telling you about the sample rather than the extractor. Ratios of small counts are not measurements.
 
-So the gate is not what convicts the rewrite. What convicts it is the ladder, where every one of the 199 test fingers is used instead of a 60-finger subsample: rank-1 0.025 against 0.030, EER 0.488 against 0.482, d′ 0.05 against 0.08. The extra landmarks are real, they are better placed on a synthetic control, and they buy nothing on real prints.
+So the gate is not what convicts the rewrite. What convicts it is the scored comparison, where every one of the 199 test fingers is used instead of a 60-finger subsample: rank-1 0.025 against 0.030, EER 0.488 against 0.482, d′ 0.05 against 0.08. The extra landmarks are real, they are better placed on a synthetic control, and they buy nothing on real prints.
 
-The resampling is the likeliest cause, upstream of every extractor. At a 6-pixel ridge period a ridge ending is a few pixels of evidence, and both extractors are reading a feature the cache no longer resolves. `src/minutiae.py` records that rebuilding the cache at the source period of 11.5 pixels lifts repeatability by about a third — real, nowhere near enough, and it would cost the global ridge flow that the rungs which *do* work depend on, so this post keeps the 6-pixel cache and inherits that number rather than re-measuring it. Both minutiae rungs are scored anyway, because a rewrite that fails is worth as much as one that works and costs the reader less to believe. Neither is evidence about minutiae matching as a technique.
+The resampling is the likeliest cause, upstream of every extractor. At a 6-pixel ridge period a ridge ending is a few pixels of evidence, and both extractors are reading a feature the cache no longer resolves. `src/minutiae.py` records that rebuilding the cache at the source period of 11.5 pixels lifts repeatability by about a third — real, nowhere near enough, and it would cost the global ridge flow that the methods which *do* work depend on, so this post keeps the 6-pixel cache and inherits that number rather than re-measuring it. Both minutiae extractors are scored anyway, because a rewrite that fails is worth as much as one that works and costs the reader less to believe. Neither is evidence about minutiae matching as a technique.
 
-## Rung 3: let the network decide what to keep
+## Keeping whatever separates fingers: let the network decide
 
-The first three rungs are hand-built. Someone decided that ridge orientation matters, that a Gabor bank is the way to measure it, that endings and forks are the landmarks worth keeping. A metric-learning network is told none of that. It is given pairs and a rule about distances, and has to work out what to measure for itself.
+The first three answers are hand-built. Someone decided that ridge orientation matters, that a Gabor bank is the way to measure it, that endings and forks are the landmarks worth keeping. A metric-learning network is told none of that. It is given pairs and a rule about distances, and has to work out what to measure for itself.
+
+Here the classification framing earns its keep, because the architecture you would reach for first is the wrong one. Train a convolutional network with a softmax head over the training fingers and it will separate those fingers — and the head is then useless, because the fingers it is asked about later are not the fingers it was trained on. Every class it learned to name is a class nobody will ever ask for again.
+
+Metric learning keeps the network and throws the head away. Train on whatever identities are to hand, but supervise the *geometry of the feature space* instead of the labels: pull two impressions of one finger together, push impressions of different fingers apart. The bet is that a space arranged that way for the training fingers stays arranged that way for fingers the network never saw — and then enrolling a new finger is one forward pass, with nothing refitted. It is the same move as in face recognition, and it is why a phone can add a thumb in thirty seconds.
 
 The mental picture is a **field of attractors**. Every finger is a mass placed on the surface of a 128-dimensional sphere, and training pulls the two impressions of one finger into the same well while pushing different fingers' wells apart. Nothing tells the network what a ridge is. It only ever learns that these two images must end up close and those two must not.
 
@@ -291,20 +344,22 @@ $$
 
 Because $\cos$ is decreasing on $[0,\pi]$, demanding $\cos(\theta_y + m)$ beat the other logits is demanding that the true class win *by an angular margin* $m$ — a constant-width band on the sphere, the same everywhere. A Euclidean margin is not that: the same distance means different angles depending on where you are. This is the loss behind most modern face recognition, and it is used for fingerprints unchanged.
 
-This post scores the triplet version, because a margin in angle needs enough identities for the classification head to be meaningful and a few hundred fingers is not enough for the comparison to say anything.
+There is a classification head here after all, which is worth reconciling with the claim that metric learning throws one away. ArcFace trains a softmax classifier over the *training* identities, uses it to shape the feature space, and discards it before anything is enrolled. The head is scaffolding, and the features underneath are the product. Triplet loss skips the scaffolding and constrains distances directly. Both arrive at the same destination: a space where nearest neighbour works on identities the network never saw.
+
+This post scores the triplet version, because a margin in angle needs enough identities for that head to be meaningful and a few hundred fingers is not enough for the comparison to say anything.
 :::
 
-Which is the caveat the whole rung rests on. This network sees a few hundred images of a couple of hundred fingers. The systems that beat hand-built features on this problem see millions of prints, and millions is not a nicety — with two impressions per finger, the nearest image of a *different* finger is usually closer than a print's own mate, so the loss can be reduced faster by shrinking the whole embedding than by separating anything in it. The scoring section reports what that looks like when it happens.
+Which is the caveat this method rests on. This network sees a few hundred images of a couple of hundred fingers. The systems that beat hand-built features on this problem see millions of prints, and millions is not a nicety — with two impressions per finger, the nearest image of a *different* finger is usually closer than a print's own mate, so the loss can be reduced faster by shrinking the embedding than by separating anything in it. The scoring section reports what that looks like when it happens.
 
-## The ladder, scored
+## The four methods, scored
 
 Two rules keep the comparison honest, and both cost accuracy.
 
-**Nothing is scored on a finger it was fitted on.** The fingers are split in two before anything runs. The network trains on one half; every rung, trained or not, is scored on the other. The hand-built rungs would score the same either way, which is the point — they get no advantage from the rule and the network gets no advantage from breaking it. The split is by *finger*, not by image, because a model that trained on one impression of a finger and was then asked to recognise the other would be answering a question no phone ever asks.
+**Nothing is scored on a finger it was fitted on.** The fingers are split in two before anything runs. The network trains on one half; every method, trained or not, is scored on the other. The hand-built methods would score the same either way, and applying the rule to all four is what keeps the network from gaining by breaking it. The split is by *finger*, not by image, because a model that trained on one impression of a finger and was then asked to recognise the other would be answering a question no phone ever asks.
 
-**Every rung is charged for the ridge geometry it needs.** Rungs 0+, 1 and 2 all start by asking which way the ridges run. Computing that once and sharing it is the only sane way to run the ladder, but attributing it to nobody would make three rungs look free, so the shared pass is timed once and added to each rung that reads it.
+**Every method is charged for the ridge geometry it needs.** Enhanced correlation, FingerCode and both minutiae extractors all start by asking which way the ridges run. Computing that once and sharing it is the only sane way to run the comparison, but attributing it to nobody would make four of the six look free, so the shared pass is timed once and added to each method that reads it.
 
-Everything reported comes off one object per rung — a score matrix, one row per probe, one column per enrolled finger, higher meaning more alike — which is what makes a pixel correlation, a Gabor descriptor, a point set and a learned vector comparable at all. Ties are resolved against the matcher, deliberately:
+Everything reported comes off one object per method — a score matrix, one row per probe, one column per enrolled finger, higher meaning more alike — which is what makes a pixel correlation, a Gabor descriptor, a point set and a learned vector comparable at all. Ties are resolved against the matcher, deliberately:
 
 ```{python}
 #| eval: false
@@ -318,50 +373,48 @@ ranks = (matrix >= genuine[:, None]).sum(1) - 1
 
 199 fingers enrolled, 199 probes, one impression each. Chance rank-1 is $1/199 = 0.005$, so anything near half a percent is guessing.
 
-| Rung | What it keeps | rank-1 | rank-5 | median rank | EER | d′ | search |
+| Method | What it keeps | rank-1 | rank-5 | median rank | EER | d′ | search |
 |---|---|---:|---:|---:|---:|---:|---:|
-| 0 pixel correlation | the image | 0.020 | 0.085 | 63 | 0.431 | 0.35 | 11 s |
-| 0+ pixel correlation, enhanced | the combed image | **0.332** | **0.508** | **5** | **0.251** | **1.15** | 34 s |
-| 1 FingerCode | flow energy, per cell and direction | 0.161 | 0.332 | 33 | 0.370 | 0.58 | 22 s |
-| 2 minutiae, crossing number | a list of landmarks | 0.030 | 0.070 | 110 | 0.482 | 0.08 | 23 s |
-| 2+ minutiae, ridge following | a list of landmarks | 0.025 | 0.090 | 114 | 0.488 | 0.05 | 30 s |
-| 3 learned embedding, triplet | 128 floats | 0.035 | 0.126 | 52 | 0.391 | 0.54 | **1 s** |
+| pixel correlation | the image | 0.020 | 0.085 | 63 | 0.431 | 0.35 | 11 s |
+| pixel correlation, enhanced | the combed image | **0.332** | **0.508** | **5** | **0.251** | **1.15** | 34 s |
+| FingerCode | flow energy, per cell and direction | 0.161 | 0.332 | 33 | 0.370 | 0.58 | 22 s |
+| minutiae, crossing number | a list of landmarks | 0.030 | 0.070 | 110 | 0.482 | 0.08 | 23 s |
+| minutiae, ridge following | a list of landmarks | 0.025 | 0.090 | 114 | 0.488 | 0.05 | 30 s |
+| learned embedding, triplet | 128 floats | 0.035 | 0.126 | 52 | 0.391 | 0.54 | **1 s** |
 
-The search column is the whole 199-by-199 comparison, with the shared ridge geometry charged to every rung that reads it, and the seconds are wall-clock on one laptop rather than anything to rank methods by. The network's 145 seconds of training is not in it, because training happens once before any finger is enrolled.
+The search column is the whole 199-by-199 comparison, with the shared ridge geometry charged to every method that reads it, and the seconds are wall-clock on one laptop rather than anything to rank methods by. The network's 145 seconds of training is not in it, because training happens once before any finger is enrolled.
 
 ::: {.callout-note appearance="simple"}
-One number in that table moved because of arithmetic precision, which is worth knowing before trusting the rest. The learned rung's scores all sit near 0.99999, and computing its 199-by-199 dot product in float32 rounded them onto 69 distinct values instead of 199. `bench.score` breaks ties *against* the matcher on purpose, so the rounding was inventing ties and charging them to the network: it scored rank-1 0.030 until the accumulation was widened to float64, and 0.035 after. Nothing else in the table shifted, because no other rung crowds its scores into the last few decimals.
+One number in that table moved because of arithmetic precision, which is worth knowing before trusting the rest. The learned method's scores all sit near 0.99999, and computing its 199-by-199 dot product in float32 rounded them onto 69 distinct values instead of 199. `bench.score` breaks ties *against* the matcher on purpose, so the rounding was inventing ties and charging them to the network: it scored rank-1 0.030 until the accumulation was widened to float64, and 0.035 after. Nothing else in the table shifted, because no other method crowds its scores into the last few decimals.
 :::
 
 **The largest effect in the table is the oldest idea in it.** The only difference between the first two rows is whether the images were combed with a Gabor bank before being correlated, and it moves rank-1 from 0.020 to 0.332 — a factor of sixteen, from a 1998 paper, with no descriptor, no landmarks and no training anywhere in sight. Enhancement is not a preprocessing detail that precedes the real method. On this data it *is* most of the method.
 
 **FingerCode buys portability, not accuracy.** It lands at half the rank-1 of enhanced correlation. What it gets in exchange is a fixed-length template a few kilobytes wide, and rotation handled by two array rolls instead of not handled at all.
 
-**Both minutiae rungs are near chance**, at 0.030 and 0.025 against 0.005, with d′ of 0.08 and 0.05 — which is to say the genuine and impostor score distributions sit on top of each other and no threshold separates them. The ridge-following rewrite is worse on rank-1, median rank, EER and d′, and better on rank-5 — 0.090 against 0.070. Nothing in that pattern is a rescue. Putting the true mate in the top five nearly four times as often as it puts it first, while the genuine and impostor score distributions still sit on top of each other, describes a rung that occasionally gets the right finger into a shortlist and never earns a threshold you could set. Neither number is evidence about minutiae matching; both are evidence about extractors reading a feature this cache resampled away.
+**Both minutiae methods are near chance**, at 0.030 and 0.025 against 0.005, with d′ of 0.08 and 0.05 — which is to say the genuine and impostor score distributions sit on top of each other and no threshold separates them. The ridge-following rewrite is worse on rank-1, median rank, EER and d′, and better on rank-5 — 0.090 against 0.070. Nothing in that pattern is a rescue. Putting the true mate in the top five nearly four times as often as it puts it first, while the genuine and impostor score distributions still sit on top of each other, describes a method that occasionally gets the right finger into a shortlist and never earns a threshold you could set. Neither number is evidence about minutiae matching; both are evidence about extractors reading a feature this cache resampled away.
 
-**And the learned rung is the interesting failure.** It beats both minutiae extractors on every measure — rank-1 0.035 against 0.030, rank-5 0.126 against 0.070, median rank 52 against 110, d′ 0.54 against 0.08 — and loses to a 1998 Gabor bank by a factor of ten. But look at the last column. One second, against eleven to thirty-four for everything else, because at query time it does no ridge analysis, no filtering and no point matching. It encodes once and takes a dot product.
+**And the learned embedding is the interesting failure.** It beats both minutiae extractors on every measure — rank-1 0.035 against 0.030, rank-5 0.126 against 0.070, median rank 52 against 110, d′ 0.54 against 0.08 — and loses to a 1998 Gabor bank by a factor of ten. But look at the last column. One second, against eleven to thirty-four for everything else, because at query time it does no ridge analysis, no filtering and no point matching. It encodes once and takes a dot product.
 
-Be precise about that last column, because it is the reason phones work this way at all. The embedding is twenty-six times cheaper to search than the rung that beat it and its template is 128 floats, and it achieves that while being a **collapsed** embedding: the loss settles at 0.300 against a margin of 0.3, which is what the hinge returns when every distance is equal, and per-dimension spread across prints comes out at $1.7 \times 10^{-4}$. Soft-margin, a quarter of the learning rate, a smaller margin and half the batch were all tried; each settles at its own degenerate value and none recovers the spread. With two impressions per finger and two hundred fingers, shrinking everything is the only move that reduces the loss.
+Be precise about that last column, because it is the reason phones work this way at all. The embedding is twenty-six times cheaper to search than the method that beat it and its template is 128 floats, and it achieves that while being a **collapsed** embedding: the loss settles at 0.300 against a margin of 0.3, which is what the hinge returns when every distance is equal, and per-dimension spread across prints comes out at $1.7 \times 10^{-4}$. Soft-margin, a quarter of the learning rate, a smaller margin and half the batch were all tried; each settles at its own degenerate value and none recovers the spread. With two impressions per finger and two hundred fingers, shrinking everything is the only move that reduces the loss.
 
 So the d′ of 0.53 is a real signal living in the residual directions of an embedding that has almost no extent. It is not a network that learned a little. It is a network that collapsed and still has a whisker of the answer in the rounding.
 
 ![Left: the batch-hard triplet loss settling onto the margin, which is the collapse — equal hardest-positive and hardest-negative distances return exactly the margin. Right: genuine and impostor similarity, plotted as an offset from the impostor median because every pair sits within about $10^{-5}$ of every other. The separation is real, and it is tiny.](./figures/embedding.png)
 
-![Cumulative match characteristic: how often the true mate appears in the top $k$ as $k$ grows, one line per rung. The curve to read is the one at $k=1$; the rest tells you how quickly a near-miss becomes a hit.](./figures/cmc.png)
+![Cumulative match characteristic: how often the true mate appears in the top $k$ as $k$ grows, one line per method. The curve to read is the one at $k=1$; the rest tells you how quickly a near-miss becomes a hit.](./figures/cmc.png)
 
 ::: {.callout-tip}
-## Two different questions, two different numbers
+## Why a method can rank well and threshold badly
 
-**Rank-1** answers the search problem: one finger against a database, and the answer is a shortlist. This is a border crossing or a latent print against a criminal gallery.
+Rank-1 and EER can pull apart, and a few rows here do. Rank-1 is settled inside one row of the score matrix: the mate only has to beat the other 198 entries *for this probe*, and a probe that scores every entry low is judged on the ordering, not the level. EER has to hold one threshold across every row at once. So a method whose scores are ordered sensibly within each probe but drift up and down between probes identifies respectably and verifies terribly.
 
-**EER** answers the verification problem: one finger against one claim, and the answer is yes or no. The equal error rate is the threshold where as many genuine pairs are rejected as impostor pairs are accepted — a single summary of the trade you would tune in practice. This is your phone.
-
-A rung can be respectable at one and poor at the other, because rank-1 only needs the true mate to beat the gallery *for this probe*, while EER needs one global threshold to work across all probes. **d′** is the third column: how far apart the two score distributions sit, measured in pooled standard deviations — the genuine and impostor spreads combined, as `bench.py` computes it. It says whether a threshold exists to be tuned at all.
+Which column matters is a question about the deployment. Searching a criminal gallery or a border-crossing database is the rank-1 question. A phone checking one claimed identity is the EER question, and d′ is what says whether it has a threshold to tune at all.
 :::
 
 ## Turn the probes, and the ranking changes
 
-There is a quiet gift in that table, and it belongs to the two rungs that did best. Inked cards are rolled onto a form, so every print in this cache is roughly upright. Rung 0 and rung 0+ cannot search over rotation at all — they slide one image over another and that is the whole repertoire — so the data has been flattering them.
+There is a quiet gift in that table, and it belongs to the two methods that did best. Inked cards are rolled onto a form, so every print in this cache is roughly upright. Neither correlation method can search over rotation — sliding one image over another is all they do — so the data has been flattering them.
 
 A finger on a phone lands at whatever angle it lands at. That is one flag away from being measurable, so it is cheaper to measure it than to argue about it:
 
@@ -376,20 +429,20 @@ turned = np.stack([
 ])
 ```
 
-Enrol the same gallery, turn each probe by its own random angle up to $\pm 30°$, and run the ladder again:
+Enrol the same gallery, turn each probe by its own random angle up to $\pm 30°$, and run the comparison again:
 
-| Rung | rank-1 upright | rank-1 turned | EER upright | EER turned |
+| Method | rank-1 upright | rank-1 turned | EER upright | EER turned |
 |---|---:|---:|---:|---:|
-| 0 pixel correlation | 0.020 | 0.015 | 0.431 | 0.461 |
-| 0+ pixel correlation, enhanced | **0.332** | 0.101 | 0.251 | 0.380 |
-| 1 FingerCode | 0.161 | **0.131** | 0.370 | **0.371** |
-| 2 minutiae, crossing number | 0.030 | 0.020 | 0.482 | 0.477 |
-| 2+ minutiae, ridge following | 0.025 | 0.035 | 0.488 | 0.501 |
-| 3 learned embedding, triplet | 0.035 | 0.030 | 0.391 | 0.432 |
+| pixel correlation | 0.020 | 0.015 | 0.431 | 0.461 |
+| pixel correlation, enhanced | **0.332** | 0.101 | 0.251 | 0.380 |
+| FingerCode | 0.161 | **0.131** | 0.370 | **0.371** |
+| minutiae, crossing number | 0.030 | 0.020 | 0.482 | 0.477 |
+| minutiae, ridge following | 0.025 | 0.035 | 0.488 | 0.501 |
+| learned embedding, triplet | 0.035 | 0.030 | 0.391 | 0.432 |
 
-**Enhanced correlation loses two thirds of its accuracy and FingerCode barely moves, so the order swaps.** Rung 0+ falls from 0.332 to 0.101; rung 1 goes from 0.161 to 0.131 and is now the best of the six. Look at the EER columns for the cleanest version of it: FingerCode's goes from 0.370 to 0.371, and its d′ from 0.58 to 0.57. Rotating the finger costs the descriptor that was designed to absorb rotation almost exactly nothing.
+**Enhanced correlation loses two thirds of its accuracy and FingerCode barely moves, so the order swaps.** Enhanced correlation falls from 0.332 to 0.101; FingerCode goes from 0.161 to 0.131 and is now the best of the six. Look at the EER columns for the cleanest version of it: FingerCode's goes from 0.370 to 0.371, and its d′ from 0.58 to 0.57. Rotating the finger costs the descriptor that was designed to absorb rotation almost nothing.
 
-The learned rung also holds up better than it scores — d′ 0.54 to 0.44 — which is not a mystery: it was trained on batches augmented with rotations up to $\pm 25°$, so turned probes are inside what it was shown. It paid for that robustness in advance, with data.
+The learned embedding also holds up better than it scores — d′ 0.54 to 0.44 — which is not a mystery: it was trained on batches augmented with rotations up to $\pm 25°$, so turned probes are inside what it was shown. It paid for that robustness in advance, with data.
 
 The two minutiae rows each move by two probes out of 199, which at those rates is noise rather than a finding. Nothing here rescues them.
 
@@ -434,21 +487,21 @@ Depth: none. Liveness is a small network on scatter statistics, run locally, bec
 | Area captured | small, so partial prints are normal | small to large | medium |
 | What the template may contain | 2D contrast only | ridge and pore relief | 2D image plus scatter |
 
-And this is where the arc bends towards learning, on an argument the scored ladder cannot make. A phone sensor sees a small, rotated, partly wet fragment. A forensic latent is worse: partial, smudged, overlapping another print, lifted off a curved surface. Minutiae extraction assumes there is a clean skeleton to walk, and on a latent there is not.
+And this is where the arc bends towards learning, on an argument the scored comparison cannot make. A phone sensor sees a small, rotated, partly wet fragment. A forensic latent is worse: partial, smudged, overlapping another print, lifted off a curved surface. Minutiae extraction assumes there is a clean skeleton to walk, and on a latent there is not.
 
 NIST [ELFT](https://pages.nist.gov/elft/) (Evaluation of Latent Friction Ridge Technology) is the test that matters for that regime: open-set search of a gallery using latent probes, hit rates reported at fixed false-positive rates. It specifies no architecture and measures a black box. Systems that lead those tables combine spatial-domain enhancement — reconstructing ridge flow in the regions where it has been destroyed — with learned embeddings, sometimes embedding the latent and a rolled mate jointly. ELFT does not say which piece did the work, and the results here are not a claim about that regime. They are a claim about what each representation keeps.
 
 ## What to keep, and when
 
-| Rung | What it keeps | Handles rotation | Survives a partial print | Template | Needs training data |
+| Method | What it keeps | Handles rotation | Survives a partial print | Template | Needs training data |
 |---|---|---|---|---|---|
-| 0 pixel correlation | the whole image | no | poorly | the image | no |
-| 0+ enhanced correlation | the combed image | no | poorly | the image | no |
-| 1 FingerCode | energy per cell, per direction | **yes, as an array roll** | moderately | ~4 kB, fixed | no |
-| 2 minutiae | a list of $(x,y,\theta)$ landmarks | **yes, by construction** | **well, in principle** | tens of points | no |
-| 3 learned embedding | whatever separates fingers | only what it was shown | **well, if trained for it** | 128 floats | a great deal |
+| pixel correlation | the whole image | no | poorly | the image | no |
+| enhanced correlation | the combed image | no | poorly | the image | no |
+| FingerCode | energy per cell, per direction | **yes, as an array roll** | moderately | ~4 kB, fixed | no |
+| minutiae | a list of $(x,y,\theta)$ landmarks | **yes, by construction** | **well, in principle** | tens of points | no |
+| learned embedding | whatever separates fingers | only what it was shown | **well, if trained for it** | 128 floats | a great deal |
 
-The ranking in that table is not the ranking in the scores, and the reasons are specific rather than damning. The minutiae rung is reading a feature this cache resampled away, and it would be a different rung on 500 dpi originals. The learned rung is reading a few hundred prints where it wants millions, and it would be a different rung inside a phone vendor with a data pipeline. Only two of the six are near what their method can do -- enhanced correlation and FingerCode -- and they are exactly the two that scored.
+The ranking in that table is not the ranking in the scores, and the reasons are specific rather than damning. The minutiae methods are reading a feature this cache resampled away, and they would be different methods on 500 dpi originals. The learned embedding is reading a few hundred prints where it wants millions, and it would be a different thing inside a phone vendor with a data pipeline. Only two of the six are near what they can do -- enhanced correlation and FingerCode -- and they are the two that scored.
 
 Which returns to the question this started with. Keeping the picture works startlingly well — 0.332 rank-1, better than everything else here — right up until the finger turns, and then it is 0.101. Keeping a measurement of the flow is blunter at its best and costs 0.001 of its equal error rate to a thirty-degree turn. Keeping landmarks is the densest choice and the most fragile, because it presumes the capture was good enough to find them, and on a cache resampled to a 6-pixel ridge period it was not. Keeping a learned vector moves the fragility into the training set, where it stops being a property of the algorithm and becomes someone's data-collection budget — and buys, in exchange, a search that costs one second instead of thirty-three.
 
