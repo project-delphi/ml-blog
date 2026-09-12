@@ -66,7 +66,7 @@ class Result:
 
     @property
     def separation(self) -> float:
-        """How many impostor standard deviations separate the two means (d-prime)."""
+        """How far apart the two means sit, in pooled standard deviations (d-prime)."""
         pooled = np.sqrt(0.5 * (self.genuine.var() + self.impostor.var()))
         return float((self.genuine.mean() - self.impostor.mean()) / (pooled + 1e-12))
 

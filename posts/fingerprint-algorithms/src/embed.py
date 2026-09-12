@@ -18,6 +18,39 @@ than random ones, is what makes a small batch worth anything.
 The honest caveat lives in the post, not the code: this network sees a few
 hundred images. The systems that beat hand-built features on this problem see
 millions of prints, and the gap is the point rather than an embarrassment.
+
+## What that shortage actually looks like, measured
+
+The embedding very nearly collapses, and the loss says so. With `MARGIN = 0.3`,
+training settles at a loss of 0.300 -- which is what the hinge returns when the
+hardest positive and the hardest negative are the same distance apart, i.e. when
+every print has been mapped to almost the same vector. On the committed 60-epoch
+run, per-dimension spread across prints comes out at 1.72e-4 (recorded as
+``embedding_spread`` in ``bench/ladder.json``) and the whole spread of pairwise
+cosine similarities is about 1e-5 -- the right-hand panel of
+``figures/embedding.png`` plots it in millionths for that reason. A shorter run
+on fewer fingers collapses less far, so quote the committed numbers rather than
+a quick probe's.
+
+This is the known degenerate optimum of batch-hard mining, so the obvious
+suspects were tried: the soft-margin form the same paper recommends
+(`softplus(d_p - d_n)`, which has no hinge to sit in), a quarter of the learning
+rate, a smaller margin, and half the batch -- four variants, against this
+recipe as the fifth. All five settle at their own degenerate value -- 0.30 for
+the hinge, log 2 for the softplus -- and none recovers useful spread.
+
+Those five were compared on a short 25-epoch probe over 90 fingers, where
+held-out separation came out between 0.20 and 0.38 and this recipe was the best
+of them. That is why it is still the recipe. Do not read those numbers as the
+model's performance: the committed 60-epoch run over 198 training fingers
+reports d-prime 0.53 in ``bench/ladder.json``, and it is that run the post
+quotes.
+
+So the collapse is not a tuning bug to fix. With two impressions per finger and
+a couple of hundred fingers, the hardest negative is nearer than the hardest
+positive for most anchors, and shrinking the embedding is the only move that
+reduces the loss. What survives is a faint signal in the residual directions:
+the post reports it, and reports that it is riding on a collapsed embedding.
 """
 
 from __future__ import annotations
