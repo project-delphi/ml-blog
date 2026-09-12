@@ -173,7 +173,10 @@ def fig_enhance_steps(prints) -> None:
     _, extras = follow.extract(img, an, return_extras=True)
 
     fig, axes = plt.subplots(1, 4, figsize=(11, 3.0))
-    bare(axes[0], "raw 500 dpi scan")
+    # Not "raw 500 dpi scan": pick() hands over the standardised crop, already
+    # resampled to a 6-pixel ridge period. Labelling it raw would contradict the
+    # post's own minutiae argument, which turns on that resampling.
+    bare(axes[0], "the standardised crop")
     axes[0].imshow(img, cmap="gray")
 
     bare(axes[1], "Gabor-enhanced")

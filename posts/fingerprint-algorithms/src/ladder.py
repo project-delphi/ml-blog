@@ -165,7 +165,13 @@ def learned(train, gallery, probe, epochs: int, seed: int):
     with clock("encoding and searching") as spent:
         enrolled = embed.encode(model, gallery.images)
         searched = embed.encode(model, probe.images)
-        matrix = searched @ enrolled.T
+        # The dot product in float64, not float32. Every score here lands at
+        # about 0.99999 because the embedding collapses, and float32 spacing up
+        # there is ~6e-8 -- coarse enough that 199 genuine scores round onto 69
+        # distinct values, which a 60-bin histogram of a 1e-5 range renders as a
+        # comb of spikes and gaps. The embeddings themselves stay float32, as
+        # the model produces them; only the accumulation is widened.
+        matrix = searched.astype(np.float64) @ enrolled.astype(np.float64).T
     # The loss history is reported because its *level* is the diagnostic: a
     # batch-hard triplet loss that settles at the margin has collapsed the
     # embedding. See the note at the top of embed.py.
@@ -382,9 +388,14 @@ def main() -> int:
             impostor = r.impostor
             if len(impostor) > IMPOSTOR_SAMPLE:
                 impostor = rng.choice(impostor, IMPOSTOR_SAMPLE, replace=False)
+            # float64 so the dump does not re-round scores that `learned`
+            # deliberately accumulated in double precision. Casting here was
+            # not enough on its own -- the float32 matmul had already rounded
+            # them -- but keeping it means the stored values are the ones that
+            # were scored.
             payload[f"ranks_{i}"] = r.ranks.astype(np.int16)
-            payload[f"genuine_{i}"] = r.genuine.astype(np.float32)
-            payload[f"impostor_{i}"] = impostor.astype(np.float32)
+            payload[f"genuine_{i}"] = r.genuine.astype(np.float64)
+            payload[f"impostor_{i}"] = impostor.astype(np.float64)
         np.savez_compressed(args.dump, **payload)
     return 0
 

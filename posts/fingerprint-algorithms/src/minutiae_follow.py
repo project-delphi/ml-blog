@@ -684,9 +684,9 @@ def main() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import data as data_module
 
-    prints = data_module.load(args.data)
-    _, test = data_module.split(prints)
-
+    # --controls is entirely synthetic, so it runs before the cache is touched.
+    # data/ is gitignored, and this is the one command the post offers a reader
+    # as reproducible; making it demand a 20 MB cache first would break that.
     if args.controls:
         result = controls()
         for field, per_extractor in result.items():
@@ -700,6 +700,9 @@ def main() -> int:
             args.out.parent.mkdir(parents=True, exist_ok=True)
             args.out.write_text(json.dumps(result, indent=2) + "\n")
         return 0
+
+    prints = data_module.load(args.data)
+    _, test = data_module.split(prints)
 
     if args.census:
         stats = census(prints, args.sample)

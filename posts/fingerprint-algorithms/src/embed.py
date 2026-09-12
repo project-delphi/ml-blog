@@ -35,10 +35,16 @@ a quick probe's.
 This is the known degenerate optimum of batch-hard mining, so the obvious
 suspects were tried: the soft-margin form the same paper recommends
 (`softplus(d_p - d_n)`, which has no hinge to sit in), a quarter of the learning
-rate, a smaller margin, and half the batch. All five settle at their own
-degenerate value -- 0.30 for the hinge, log 2 for the softplus -- and none
-recovers useful spread. Held-out separation stays between 0.20 and 0.38, and the
-recipe below is the best of them, which is why it is still the recipe.
+rate, a smaller margin, and half the batch -- four variants, against this
+recipe as the fifth. All five settle at their own degenerate value -- 0.30 for
+the hinge, log 2 for the softplus -- and none recovers useful spread.
+
+Those five were compared on a short 25-epoch probe over 90 fingers, where
+held-out separation came out between 0.20 and 0.38 and this recipe was the best
+of them. That is why it is still the recipe. Do not read those numbers as the
+model's performance: the committed 60-epoch run over 198 training fingers
+reports d-prime 0.53 in ``bench/ladder.json``, and it is that run the post
+quotes.
 
 So the collapse is not a tuning bug to fix. With two impressions per finger and
 a couple of hundred fingers, the hardest negative is nearer than the hardest
