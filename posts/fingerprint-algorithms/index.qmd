@@ -210,7 +210,7 @@ moved = transform_points(b_min.xy, angle, peak, a_enhanced.shape)
 genuine.append(landing_rate(moved, a_min.xy, tolerance))
 ```
 
-Against an impostor floor — a different finger, registered the same way, whose points overlap by accident at this density — the crossing-number extractor lands **0.156 of its landmarks against a floor of 0.072**. About a fifth against a tenth. A neighbourhood descriptor needs the neighbourhood to be stable, and at that rate almost every description is built from mostly different members. No scoring rule can recover a correspondence that was never there, which is why the log of attempts in `src/minutiae.py` — greedy one-to-one pairing, normalising by landmark count, voting on the implied rotation, a full rigid point-pattern search, three binarisations, a pixel-resolution orientation field, three thinning variants — moves none of it.
+Against an impostor floor — a different finger, registered the same way, whose points overlap by accident at this density — the crossing-number extractor lands **0.137 of its landmarks against a floor of 0.066**, averaged over 60 fingers and three seeds. Roughly twice the floor, which is the same ratio `src/minutiae.py` recorded independently as "about a fifth against a tenth". A neighbourhood descriptor needs the neighbourhood to be stable, and at that rate almost every description is built from mostly different members. No scoring rule can recover a correspondence that was never there, which is why the log of attempts in `src/minutiae.py` — greedy one-to-one pairing, normalising by landmark count, voting on the implied rotation, a full rigid point-pattern search, three binarisations, a pixel-resolution orientation field, three thinning variants — moves none of it.
 
 So the fix has to be a different class of extractor: ridge *following* with a quality map, in the manner of NIST's MINDTCT, rather than crossing numbers on a thinned skeleton. `src/minutiae_follow.py` is that attempt. It finds ridges as crests — the line where the enhanced image is a local maximum measured across the flow, which is a statement about ridge geometry rather than about where a threshold fell — smooths along the flow to close ink gaps, bridges the gaps that survive, and scores every candidate by coherence, ridge strength and distance from the edge of the print:
 
@@ -225,20 +225,22 @@ rr, cc = draw_line(int(ends[i, 1]), int(ends[i, 0]), int(ends[j, 1]), int(ends[j
 out[rr, cc] = True
 ```
 
-It behaves better on controls, which `src/minutiae_follow.py --controls` will reproduce. On a synthetic ridge field containing no true minutiae, both extractors correctly return nothing at all. On a field carrying one deliberate ridge dislocation, both return three landmarks — but all three of the ridge follower's sit on the dislocation, against one of three for crossing numbers. Same count, three times the precision. It also finds more landmarks on real prints, and spreads them across the pattern instead of bunching them where the ink is thick.
+It behaves better on controls, which `src/minutiae_follow.py --controls` reproduces. On a synthetic ridge field containing no minutiae at all, both extractors correctly return nothing. On a field with a half-period phase step driven across a band — which dislocates every ridge crossing it — both return three landmarks, and the difference is where they put them. The ridge follower's three sit 3, 4 and 3 pixels from the dislocation line. The crossing-number extractor's three sit 9, 44 and 60 pixels from it, which is to say two of them are describing the ink somewhere else entirely. Same count, and only one of the two is looking at the feature. It also finds more landmarks on real prints, and spreads them across the pattern instead of bunching them where the ink is thick.
 
 And it does not help:
 
-| extractor | minutiae per print | genuine landing | impostor floor | lift |
-|---|---:|---:|---:|---:|
-| crossing number, thinned skeleton | 18 | 0.156 | 0.072 | **2.17** |
-| ridge following, quality ≥ 0.15 | 22 | 0.155 | 0.088 | 1.76 |
-| ridge following, quality ≥ 0.35 | 14 | 0.098 | 0.098 | 1.00 |
-| ridge following, quality ≥ 0.55 | 6 | 0.072 | 0.055 | 1.29 |
+| extractor | minutiae per print | genuine landing | impostor floor | lift | lift, per seed |
+|---|---:|---:|---:|---:|---:|
+| crossing number, thinned skeleton | 18 | 0.137 | 0.066 | **2.10** | 1.74 – 2.37 |
+| ridge following, quality ≥ 0.15 | 22 | 0.129 | 0.077 | 1.72 | 1.20 – 2.05 |
+| ridge following, quality ≥ 0.35 | 13 | 0.095 | 0.059 | 1.61 | 1.33 – 1.84 |
+| ridge following, quality ≥ 0.55 | 5 | 0.066 | 0.024 | 3.76 | 1.40 – 6.65 |
 
-Read the first two rows carefully, because they say something narrower than "it did not work". Genuine landing is the same to three decimal places — 0.155 against 0.156 — so a landmark from the new extractor is, individually, exactly as repeatable as one from the old. What moved is the floor: 0.088 against 0.072. The new extractor keeps four more landmarks per print, and at this density more points mean more accidental coincidences, so the ratio that decides whether a descriptor can work gets *worse* while the thing being measured gets no worse at all.
+That last column is the one that matters, and it is there because the first draft of this section did not have it. On a single seed at half this sample, the top two rows read 0.156 against 0.155 — genuine landing identical to three decimal places — and it was tempting to build an argument on it. Widen the sample to the code's own default and average over three seeds and the coincidence dissolves: the two extractors' per-seed lifts overlap, 1.74–2.37 against 1.20–2.05. The gate says ridge following is probably worse and cannot say it cleanly.
 
-Tightening the threshold does not rescue it, and the middle row is the clearest failure in the post: at quality ≥ 0.35 the genuine landing rate and the impostor floor are both 0.098. A lift of exactly 1.00 is a measurement saying these landmarks carry no information about which finger they came from.
+The bottom row is the warning label for the whole column. A lift of 3.76 looks like the best result in the table, and it is an artefact: at quality ≥ 0.55 only five landmarks survive per print, the impostor floor falls to 0.024, and a ratio with a tiny denominator swings between 1.40 and 6.65 depending on which fingers were drawn. Ratios of small counts are not measurements.
+
+So the gate is not what convicts the rewrite. What convicts it is the ladder, where every one of the 199 test fingers is used instead of a 60-finger subsample: rank-1 0.025 against 0.030, EER 0.488 against 0.482, d′ 0.05 against 0.08. The extra landmarks are real, they are better placed on a synthetic control, and they buy nothing on real prints.
 
 The resampling is the likeliest cause, upstream of every extractor. At a 6-pixel ridge period a ridge ending is a few pixels of evidence, and both extractors are reading a feature the cache no longer resolves. `src/minutiae.py` records that rebuilding the cache at the source period of 11.5 pixels lifts repeatability by about a third — real, nowhere near enough, and it would cost the global ridge flow that the rungs which *do* work depend on, so this post keeps the 6-pixel cache and inherits that number rather than re-measuring it. Both minutiae rungs are scored anyway, because a rewrite that fails is worth as much as one that works and costs the reader less to believe. Neither is evidence about minutiae matching as a technique.
 
@@ -310,28 +312,28 @@ genuine = matrix[rows, truth]
 ranks = (matrix >= genuine[:, None]).sum(1) - 1
 ```
 
-Two hundred fingers enrolled, two hundred probes, one impression each. Chance rank-1 is $1/199 = 0.005$, so anything near half a percent is guessing.
+199 fingers enrolled, 199 probes, one impression each. Chance rank-1 is $1/199 = 0.005$, so anything near half a percent is guessing.
 
 | Rung | What it keeps | rank-1 | rank-5 | median rank | EER | d′ | search |
 |---|---|---:|---:|---:|---:|---:|---:|
 | 0 pixel correlation | the image | 0.020 | 0.085 | 63 | 0.431 | 0.35 | 12 s |
-| 0+ pixel correlation, enhanced | the combed image | **0.332** | **0.508** | **5** | **0.251** | **1.15** | 35 s |
+| 0+ pixel correlation, enhanced | the combed image | **0.332** | **0.508** | **5** | **0.251** | **1.15** | 33 s |
 | 1 FingerCode | flow energy, per cell and direction | 0.161 | 0.332 | 33 | 0.370 | 0.58 | 23 s |
-| 2 minutiae, crossing number | a list of landmarks | 0.030 | 0.070 | 110 | 0.482 | 0.08 | 25 s |
+| 2 minutiae, crossing number | a list of landmarks | 0.030 | 0.070 | 110 | 0.482 | 0.08 | 24 s |
 | 2+ minutiae, ridge following | a list of landmarks | 0.025 | 0.090 | 114 | 0.488 | 0.05 | 31 s |
 | 3 learned embedding, triplet | 128 floats | 0.030 | 0.111 | 51 | 0.407 | 0.53 | **1 s** |
 
-The search column is the whole 199-by-199 comparison, with the shared ridge geometry charged to every rung that reads it. The network's 144 seconds of training is not in it, because training happens once before any finger is enrolled.
+The search column is the whole 199-by-199 comparison, with the shared ridge geometry charged to every rung that reads it. The network's 140 seconds of training is not in it, because training happens once before any finger is enrolled.
 
 **The largest effect in the table is the oldest idea in it.** The only difference between the first two rows is whether the images were combed with a Gabor bank before being correlated, and it moves rank-1 from 0.020 to 0.332 — a factor of sixteen, from a 1998 paper, with no descriptor, no landmarks and no training anywhere in sight. Enhancement is not a preprocessing detail that precedes the real method. On this data it *is* most of the method.
 
 **FingerCode buys portability, not accuracy.** It lands at half the rank-1 of enhanced correlation. What it gets in exchange is a fixed-length template a few kilobytes wide, and rotation handled by two array rolls instead of not handled at all.
 
-**Both minutiae rungs are near chance**, at 0.030 and 0.025 against 0.005, with d′ of 0.08 and 0.05 — which is to say the genuine and impostor score distributions sit on top of each other and no threshold separates them. The ridge-following rewrite is the worse of the two on every column, which is what its gate predicted from a lift of 1.76 against 2.17. Neither number is evidence about minutiae matching; both are evidence about extractors reading a feature this cache resampled away.
+**Both minutiae rungs are near chance**, at 0.030 and 0.025 against 0.005, with d′ of 0.08 and 0.05 — which is to say the genuine and impostor score distributions sit on top of each other and no threshold separates them. The ridge-following rewrite is worse on rank-1, median rank, EER and d′, and better on rank-5 — 0.090 against 0.070. Nothing in that pattern is a rescue: a rung that puts the true mate in the top five twice as often as it puts it first, while its score distributions still overlap almost completely, is a rung with no usable threshold. Neither number is evidence about minutiae matching; both are evidence about extractors reading a feature this cache resampled away.
 
-**And the learned rung is the interesting failure.** It ties the minutiae extractor on rank-1 at 0.030, and beats it on everything else: rank-5 0.111 against 0.070, median rank 51 against 110, d′ 0.53 against 0.08. But look at the last column. One second, against twenty-three to thirty-five for everything else — because at query time it does no ridge analysis, no filtering and no point matching. It encodes once and takes a dot product.
+**And the learned rung is the interesting failure.** It ties the minutiae extractor on rank-1 at 0.030, and beats it on everything else: rank-5 0.111 against 0.070, median rank 51 against 110, d′ 0.53 against 0.08. But look at the last column. One second, against twelve to thirty-three for everything else — because at query time it does no ridge analysis, no filtering and no point matching. It encodes once and takes a dot product.
 
-Be precise about that last column, because it is the reason phones work this way at all. The embedding is thirty-odd times cheaper to search and its template is 128 floats, and it achieves that while being a **collapsed** embedding: the loss settles at 0.300 against a margin of 0.3, which is what the hinge returns when every distance is equal, and per-dimension spread across prints comes out at $1.7 \times 10^{-4}$. Soft-margin, a quarter of the learning rate, a smaller margin and half the batch were all tried; each settles at its own degenerate value and none recovers the spread. With two impressions per finger and two hundred fingers, shrinking everything is the only move that reduces the loss.
+Be precise about that last column, because it is the reason phones work this way at all. The embedding is twenty-six times cheaper to search than the rung that beat it and its template is 128 floats, and it achieves that while being a **collapsed** embedding: the loss settles at 0.300 against a margin of 0.3, which is what the hinge returns when every distance is equal, and per-dimension spread across prints comes out at $1.7 \times 10^{-4}$. Soft-margin, a quarter of the learning rate, a smaller margin and half the batch were all tried; each settles at its own degenerate value and none recovers the spread. With two impressions per finger and two hundred fingers, shrinking everything is the only move that reduces the loss.
 
 So the d′ of 0.53 is a real signal living in the residual directions of an embedding that has almost no extent. It is not a network that learned a little. It is a network that collapsed and still has a whisker of the answer in the rounding.
 
@@ -346,7 +348,7 @@ So the d′ of 0.53 is a real signal living in the residual directions of an emb
 
 **EER** answers the verification problem: one finger against one claim, and the answer is yes or no. The equal error rate is the threshold where as many genuine pairs are rejected as impostor pairs are accepted — a single summary of the trade you would tune in practice. This is your phone.
 
-A rung can be respectable at one and poor at the other, because rank-1 only needs the true mate to beat the gallery *for this probe*, while EER needs one global threshold to work across all probes. **d′** is the third column: how many impostor standard deviations separate the two score distributions, which says whether a threshold exists to be tuned at all.
+A rung can be respectable at one and poor at the other, because rank-1 only needs the true mate to beat the gallery *for this probe*, while EER needs one global threshold to work across all probes. **d′** is the third column: how far apart the two score distributions sit, measured in pooled standard deviations — the genuine and impostor spreads combined, as `bench.py` computes it. It says whether a threshold exists to be tuned at all.
 :::
 
 ## Turn the probes, and the ranking changes
@@ -440,7 +442,7 @@ NIST [ELFT](https://pages.nist.gov/elft/) (Evaluation of Latent Friction Ridge T
 
 The ranking in that table is not the ranking in the scores, and the reasons are specific rather than damning. The minutiae rung is reading a feature this cache resampled away, and it would be a different rung on 500 dpi originals. The learned rung is reading a few hundred prints where it wants millions, and it would be a different rung inside a phone vendor with a data pipeline. Only two of the six are near what their method can do -- enhanced correlation and FingerCode -- and they are exactly the two that scored.
 
-Which returns to the question this started with. Keeping the picture works startlingly well — 0.332 rank-1, better than everything else here — right up until the finger turns, and then it is 0.101. Keeping a measurement of the flow is blunter at its best and costs 0.001 of its equal error rate to a thirty-degree turn. Keeping landmarks is the densest choice and the most fragile, because it presumes the capture was good enough to find them, and on a cache resampled to a 6-pixel ridge period it was not. Keeping a learned vector moves the fragility into the training set, where it stops being a property of the algorithm and becomes someone's data-collection budget — and buys, in exchange, a search that costs one second instead of thirty-five.
+Which returns to the question this started with. Keeping the picture works startlingly well — 0.332 rank-1, better than everything else here — right up until the finger turns, and then it is 0.101. Keeping a measurement of the flow is blunter at its best and costs 0.001 of its equal error rate to a thirty-degree turn. Keeping landmarks is the densest choice and the most fragile, because it presumes the capture was good enough to find them, and on a cache resampled to a 6-pixel ridge period it was not. Keeping a learned vector moves the fragility into the training set, where it stops being a property of the algorithm and becomes someone's data-collection budget — and buys, in exchange, a search that costs one second instead of thirty-three.
 
 None of those is the best representation. Each is the best answer to a different question about the capture, and the sensor is what decides which question you are being asked.
 

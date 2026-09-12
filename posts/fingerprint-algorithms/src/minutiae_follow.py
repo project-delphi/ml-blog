@@ -553,11 +553,13 @@ def repeatability(
 def controls(seed: int = 0) -> dict:
     """Two synthetic fields with a known answer, for both extractors.
 
-    A ridge field with no minutiae in it should yield none, and a field carrying
-    one deliberate ridge dislocation should yield one. Neither says anything
-    about real prints; they catch an extractor that invents landmarks, which is
-    the failure mode the quality map exists to prevent, and the post quotes
-    them, so they are kept runnable rather than described from memory.
+    A ridge field with no minutiae in it should yield none. A field carrying a
+    phase step across a band should yield landmarks inside that band and
+    nowhere else -- several of them, not one, because the step dislocates every
+    ridge that crosses it. So the count is not the pass criterion; where the
+    landmarks land is. Neither field says anything about real prints; together
+    they catch an extractor that invents landmarks where the image supports
+    none, which is the failure mode the quality map exists to prevent.
     """
     rng = np.random.default_rng(seed)
     y, x = np.mgrid[0:192, 0:192]
@@ -584,11 +586,20 @@ def controls(seed: int = 0) -> dict:
             "crossing": minutiae.extract(img, analysis),
             "follow": extract(img, analysis),
         }
+        # Inside the band means inside it in both axes. Testing only x credits a
+        # landmark sitting well above or below the dislocated strip.
         out[label] = {
             name: {
                 "count": len(m),
-                "near_dislocation": (
-                    int((np.abs(m.xy[:, 0] - 96) < 25).sum()) if len(m) else 0
+                "in_band": (
+                    int(
+                        (
+                            (np.abs(m.xy[:, 0] - 96) < 25)
+                            & (np.abs(m.xy[:, 1] - 96) < 40)
+                        ).sum(),
+                    )
+                    if len(m)
+                    else 0
                 ),
             }
             for name, m in found.items()
@@ -605,11 +616,15 @@ def census(prints, sample: int = 80, seed: int = 0) -> dict:
     """
     rng = np.random.default_rng(seed)
     chosen = rng.permutation(len(prints.images))[:sample]
-    coverage, periods = [], []
+    coverage = []
     for i in chosen:
         analysis = ridges.analyse(prints.images[int(i)])
         coverage.append(float(analysis.mask.mean()))
-        periods.append(float(analysis.period))
+    # The period of the *source* scans, carried through the cache by
+    # fetch_data. Re-measuring it here would report the estimator reading back
+    # the 6-pixel period the cache was resampled to, which says nothing about
+    # how much detail that resampling cost.
+    periods = prints.source_period[chosen].astype(float).tolist()
     fraction = np.array(coverage)
     grade = prints.quality[chosen]
     return {
@@ -617,7 +632,7 @@ def census(prints, sample: int = 80, seed: int = 0) -> dict:
         "empty_mask": int((fraction == 0).sum()),
         "under_10pc": int((fraction < 0.10).sum()),
         "median_coverage": float(np.median(fraction)),
-        "median_period": float(np.median(periods)),
+        "median_source_period": float(np.median(periods)),
         "grade_vs_coverage_corr": float(np.corrcoef(grade, fraction)[0, 1]),
     }
 
@@ -644,6 +659,13 @@ def main() -> int:
         help="prints to scan for --census",
     )
     ap.add_argument("--tolerance", type=float, default=1.0, help="in ridge periods")
+    ap.add_argument(
+        "--seed",
+        type=int,
+        action="append",
+        help="seed for the finger sample; repeatable, and results are averaged"
+        " over every seed given. One seed is not enough to read.",
+    )
     ap.add_argument(
         "--quality",
         type=float,
@@ -672,7 +694,7 @@ def main() -> int:
             for name, stats in per_extractor.items():
                 print(
                     f"  {name:<10} {stats['count']:>3} landmarks,"
-                    f" {stats['near_dislocation']} within 25 px of x=96",
+                    f" {stats['in_band']} inside the dislocated band",
                 )
         if args.out:
             args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -685,7 +707,7 @@ def main() -> int:
         print(f"  empty mask           {stats['empty_mask']}")
         print(f"  under 10% coverage   {stats['under_10pc']}")
         print(f"  median coverage      {stats['median_coverage']:.1%}")
-        print(f"  median ridge period  {stats['median_period']:.1f} px")
+        print(f"  median source period {stats['median_source_period']:.1f} px")
         print(
             f"  NIST grade vs coverage, correlation {stats['grade_vs_coverage_corr']:.2f}",
         )
@@ -705,38 +727,77 @@ def main() -> int:
 
     print(
         f"Landing rate after registration, {args.pairs} fingers,"
-        f" tolerance {args.tolerance} ridge period(s).\n"
+        f" tolerance {args.tolerance} ridge period(s),"
+        f" seeds {args.seed or [7]}.\n"
         "Genuine is two impressions of one finger; impostor is the floor.\n",
     )
-    header = (
-        f"{'extractor':<28}{'minutiae':>10}{'genuine':>10}{'impostor':>10}{'lift':>8}"
-    )
+    header = f"{'extractor':<28}{'minutiae':>10}{'genuine':>10}{'impostor':>10}{'lift':>8}   {'range':>13}"
     print(header)
     print("-" * len(header))
 
     global MIN_QUALITY
+    default_quality = MIN_QUALITY
+    seeds = args.seed or [7]
     rows = []
-    for name in names:
-        # The follow extractor is run once per requested quality threshold, so
-        # the post's table is reproducible from the committed code rather than
-        # by editing a module constant.
-        thresholds = [None] if name == "crossing" else (args.quality or [MIN_QUALITY])
-        for threshold in thresholds:
-            label = name
-            if threshold is not None:
-                MIN_QUALITY = threshold
-                label = f"{name} q>={threshold:.2f}"
-            r = repeatability(
-                test,
-                extractors[name],
-                pairs=args.pairs,
-                tolerance_periods=args.tolerance,
+    try:
+        for name in names:
+            # The follow extractor is run once per requested quality threshold,
+            # so the post's table is reproducible from the committed code rather
+            # than by editing a module constant.
+            thresholds = (
+                [None] if name == "crossing" else (args.quality or [default_quality])
             )
-            print(
-                f"{label:<28}{r['minutiae_median']:>10.0f}{r['genuine']:>10.3f}"
-                f"{r['impostor']:>10.3f}{r['lift']:>8.2f}",
-            )
-            rows.append({"extractor": label, **r})
+            for threshold in thresholds:
+                label = name
+                if threshold is not None:
+                    MIN_QUALITY = threshold
+                    label = f"{name} q>={threshold:.2f}"
+                # One run per seed. A single seed is not enough to read: which
+                # extractor lands more of its landmarks flips between seeds, and
+                # at 30 pairs the two are within each other's spread. The mean
+                # and the per-seed values are both reported so nobody has to
+                # take a lucky draw for a measurement.
+                per_seed = [
+                    repeatability(
+                        test,
+                        extractors[name],
+                        pairs=args.pairs,
+                        tolerance_periods=args.tolerance,
+                        seed=seed,
+                    )
+                    for seed in seeds
+                ]
+                genuine = [r["genuine"] for r in per_seed]
+                impostor = [r["impostor"] for r in per_seed]
+                lift = [r["lift"] for r in per_seed]
+                summary = {
+                    "extractor": label,
+                    "seeds": list(seeds),
+                    "pairs": args.pairs,
+                    "minutiae_median": float(
+                        np.median([r["minutiae_median"] for r in per_seed]),
+                    ),
+                    "genuine_mean": float(np.mean(genuine)),
+                    "genuine_min": float(np.min(genuine)),
+                    "genuine_max": float(np.max(genuine)),
+                    "impostor_mean": float(np.mean(impostor)),
+                    "lift_mean": float(np.mean(lift)),
+                    "lift_min": float(np.min(lift)),
+                    "lift_max": float(np.max(lift)),
+                    "per_seed": per_seed,
+                }
+                print(
+                    f"{label:<28}{summary['minutiae_median']:>10.0f}"
+                    f"{summary['genuine_mean']:>10.3f}"
+                    f"{summary['impostor_mean']:>10.3f}"
+                    f"{summary['lift_mean']:>8.2f}"
+                    f"   [{summary['lift_min']:.2f}-{summary['lift_max']:.2f}]",
+                )
+                rows.append(summary)
+    finally:
+        # Put the module constant back. Leaving it rebound makes every later
+        # call in this process silently inherit the last --quality value.
+        MIN_QUALITY = default_quality
 
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -744,6 +805,7 @@ def main() -> int:
             json.dumps(
                 {
                     "pairs": args.pairs,
+                    "seeds": list(seeds),
                     "tolerance_periods": args.tolerance,
                     "rows": rows,
                 },
