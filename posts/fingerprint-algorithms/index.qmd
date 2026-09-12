@@ -21,7 +21,7 @@ The strange part is that the phone has no picture of your thumb. There is nothin
 
 So the interesting question is not "how do you match a fingerprint". It is **what do you keep**, and what survives when the capture is bad. This post builds four answers to that question, using 397 real inked fingers from NIST, and scores all four against one shared gallery of two hundred of them. One of the four is a modern metric-learning network. It does not win, and the reason it does not win turns out to be the most useful thing here.
 
-If you have trained a classifier, you already have most of the machinery for this. Matching *is* classification: each enrolled finger is a class, and a probe image has to be assigned to one of them. What makes it strange is the shape of the training data. There is one example per class, the classes are created after the model ships — you enrol a new thumb and nobody retrains anything — and there are as many classes as there are enrolled fingers. Those three conditions break the usual recipe of a softmax over a fixed label set, which is why the work moves out of the decision rule and into the representation. So the four methods are four answers to "what do you keep", compared under one decision rule held fixed.
+If you have trained a classifier, you already have most of the machinery for this. Matching *is* classification: each enrolled finger is a class, and a probe image has to be assigned to one of them. What makes it strange is the shape of the training data. There is one example per class, the classes are created after the model ships — you enrol a new thumb and nobody retrains anything — and there are as many classes as there are enrolled fingers. Those three conditions break the usual recipe of a softmax over a fixed label set, which is why the work moves out of the decision rule and into the representation. So the post compares four answers to "what do you keep", under one decision rule held fixed.
 
 ## A pattern nobody chose, not even your genome
 
@@ -164,7 +164,9 @@ return np.take_along_axis(bank, idx[None], axis=0)[0]
 
 ## Keeping the picture: slide the two prints over each other
 
-The first answer is the one that does the least. Keep the image, compare two images by how well they line up, and have no model of what a fingerprint is — no ridge direction, no landmarks, no training. It is the control the other three have to beat: a representation that keeps less than the picture has to earn what it threw away.
+The first answer is the one that does the least. Keep the image, and compare two prints by how well they line up — no landmarks, no training, and in its plainest form no model of what a fingerprint is at all. That plain version is the control the other answers have to beat: a representation that keeps less than the picture has to earn what it threw away.
+
+It runs here in two versions, and the second is not plain. One correlates the raw scans. The other correlates the same prints after the Gabor comb, so it does lean on the ridge geometry. Scoring both puts a number on what the enhancement alone is worth, with no descriptor involved — and the second version turns out to beat everything else in the post.
 
 One thing has to be handled even so. Two impressions of a finger never land in the same place on the card, so comparing them pixel against pixel in place compares a ridge in one with a valley in the other and reports almost nothing. The repair is to let one image slide over the other and keep the best alignment found. Correlation at every possible shift costs one Fourier transform per image rather than one comparison per offset, so "try every alignment" is cheaper than it sounds:
 
@@ -177,13 +179,11 @@ surface = np.fft.irfft2(gallery_f * np.conj(probe_f), s=probe.shape, axes=(-2, -
 return surface.reshape(len(gallery), -1).max(axis=1)
 ```
 
-Sliding is allowed because the prints are centred on their inked area, which moves with how much of the finger each roll caught. Rotation is *not* allowed, because handling it here would mean re-transforming the probe at every angle and redoing the search — one FFT pair per angle tried. Being unable to afford that is why the later methods describe a print in terms that do not change when the finger turns.
-
-This method runs twice: once on the raw grey image, once on the Gabor-enhanced one. The gap between those two is a clean measurement of what the enhancement alone is worth, with no descriptor involved.
+Sliding is allowed because the prints are centred on their inked area, which moves with how much of the finger each roll caught. Rotation is *not* allowed. Handling it here would mean rotating the probe, transforming it again, and taking a fresh inverse transform against every one of the 199 gallery entries — the entire search, once per angle tried. Being unable to afford that is why the later methods describe a print in terms that do not change when the finger turns.
 
 ## Keeping the flow: comb the print, then count the energy cell by cell
 
-Correlation compares two prints only as wholes. The next answer keeps a *description* instead — a fixed-length vector, computed from one print without reference to any other, so that comparing two prints is comparing two vectors. This is the familiar shape of a feature extractor, and it buys the things a fixed-length vector always buys: a template of known size, and a comparison that is a few dot products instead of a search over alignments.
+Correlation compares two prints only as wholes. The next answer keeps a *description* instead — a fixed-length vector, computed from one print without reference to any other, so that comparing two prints is comparing two vectors. This is the familiar shape of a feature extractor, and it buys what a fixed-length vector always buys: a template of known size, and a comparison between two short vectors rather than between two images.
 
 Jain, Prabhakar, Hong and Pankanti (2000) built one out of the filter bank already in hand, the FingerCode. Lay a polar tessellation over the print — concentric rings cut into wedges — and for each cell record how much energy each Gabor orientation puts into it. A cell where the ridges run north-east answers strongly in the north-east filter and weakly in the others, so the vector is a map of *which way the ridges run where*, at a fixed resolution. Concatenate the cells and the size is the same whatever the print looked like: here 4 rings cut into 16 wedges gives 64 cells, times 8 orientations.
 
@@ -351,11 +351,11 @@ This post scores the triplet version, because a margin in angle needs enough ide
 
 Which is the caveat this method rests on. This network sees a few hundred images of a couple of hundred fingers. The systems that beat hand-built features on this problem see millions of prints, and millions is not a nicety — with two impressions per finger, the nearest image of a *different* finger is usually closer than a print's own mate, so the loss can be reduced faster by shrinking the embedding than by separating anything in it. The scoring section reports what that looks like when it happens.
 
-## The four methods, scored
+## The six variants, scored
 
-Two rules keep the comparison honest, and both cost accuracy.
+The four answers make six rows, because correlation is scored raw and enhanced, and the landmark answer is scored with both extractors. Two rules keep the comparison honest, and both cost accuracy.
 
-**Nothing is scored on a finger it was fitted on.** The fingers are split in two before anything runs. The network trains on one half; every method, trained or not, is scored on the other. The hand-built methods would score the same either way, and applying the rule to all four is what keeps the network from gaining by breaking it. The split is by *finger*, not by image, because a model that trained on one impression of a finger and was then asked to recognise the other would be answering a question no phone ever asks.
+**Nothing is scored on a finger it was fitted on.** The fingers are split in two before anything runs. The network trains on one half; every method, trained or not, is scored on the other. The hand-built methods would score the same either way, and applying the rule to every row is what keeps the network from gaining by breaking it. The split is by *finger*, not by image, because a model that trained on one impression of a finger and was then asked to recognise the other would be answering a question no phone ever asks.
 
 **Every method is charged for the ridge geometry it needs.** Enhanced correlation, FingerCode and both minutiae extractors all start by asking which way the ridges run. Computing that once and sharing it is the only sane way to run the comparison, but attributing it to nobody would make four of the six look free, so the shared pass is timed once and added to each method that reads it.
 
@@ -371,7 +371,7 @@ genuine = matrix[rows, truth]
 ranks = (matrix >= genuine[:, None]).sum(1) - 1
 ```
 
-199 fingers enrolled, 199 probes, one impression each. Chance rank-1 is $1/199 = 0.005$, so anything near half a percent is guessing.
+199 fingers enrolled, 199 probes, one impression each — so the chance rate from the task section, 0.005, is the floor every row is read against.
 
 | Method | What it keeps | rank-1 | rank-5 | median rank | EER | d′ | search |
 |---|---|---:|---:|---:|---:|---:|---:|
