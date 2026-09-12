@@ -55,7 +55,9 @@ for any descriptor to work with.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import enhance
@@ -157,26 +159,48 @@ def crests(img_smooth: np.ndarray, analysis: ridges.Analysis) -> np.ndarray:
     return (img_smooth >= ahead) & (img_smooth >= behind) & (img_smooth > 0)
 
 
-def _tangents(skel: np.ndarray, points: np.ndarray, radius: float) -> np.ndarray:
-    """Outward unit vector at each endpoint: away from the skeleton behind it.
+# The eight neighbours of a pixel, walked as a ring.
+_RING = [(-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1)]
 
-    An endpoint has ridge on one side and nothing on the other, so the mean
-    offset of the nearby skeleton points *backwards* along the ridge. Negating it
-    gives the direction the ridge was heading when the ink stopped, which is
-    where a bridge has to look.
+
+def _tangents(skel: np.ndarray, points: np.ndarray, steps: int) -> np.ndarray:
+    """Outward unit vector at each endpoint, measured along its own ridge.
+
+    An endpoint has ridge on one side and nothing on the other, so the skeleton
+    behind it points backwards along the ridge; negating that gives the direction
+    the ridge was heading when the ink stopped, which is where a bridge has to
+    look.
+
+    The walk is along the skeleton, breadth-first through connected pixels only.
+    Averaging every skeleton pixel inside a disc instead looks equivalent and is
+    not: the disc has to be a few pixels across to average out staircase noise,
+    and at a ridge period of six pixels a disc that wide already contains the two
+    neighbouring ridges. Their pixels then outvote the endpoint's own ridge and
+    the estimated tangent points somewhere between the three -- which the 35
+    degree cone test in `bridge_gaps` cannot survive, so bridges get admitted and
+    refused almost at random. Connectivity is what keeps a neighbouring ridge
+    out, at any ridge period.
     """
-    ys, xs = np.nonzero(skel)
-    cloud = np.column_stack([xs, ys]).astype(float)
+    lookup = set(zip(*(a.tolist() for a in np.nonzero(skel))))  # (row, col)
     out = np.zeros((len(points), 2))
-    for i, centre in enumerate(points):
-        delta = cloud - centre
-        near = (delta**2).sum(1) < radius**2
-        if near.sum() < 2:
+    for i, (x, y) in enumerate(points):
+        start = (int(round(y)), int(round(x)))
+        seen = {start}
+        frontier = [start]
+        while frontier and len(seen) <= steps:
+            row, col = frontier.pop(0)
+            for d_row, d_col in _RING:
+                nxt = (row + d_row, col + d_col)
+                if nxt in lookup and nxt not in seen:
+                    seen.add(nxt)
+                    frontier.append(nxt)
+        if len(seen) < 2:
             continue
-        back = delta[near].mean(axis=0)
-        norm = np.hypot(*back)
+        behind = np.array([(col, row) for row, col in seen], float).mean(axis=0)
+        forward = np.array([x, y], float) - behind
+        norm = np.hypot(*forward)
         if norm > 1e-9:
-            out[i] = -back / norm
+            out[i] = forward / norm
     return out
 
 
@@ -196,7 +220,9 @@ def bridge_gaps(skel: np.ndarray, period: float) -> np.ndarray:
         return out
 
     ends = np.column_stack([xs, ys]).astype(float)
-    tangent = _tangents(out, ends, radius=max(3.0, 1.2 * period))
+    # Walk about one ridge period along each endpoint's own ridge: long enough
+    # for a stable direction, and connectivity keeps it off the neighbours.
+    tangent = _tangents(out, ends, steps=max(4, int(round(1.5 * period))))
     gap_max = GAP_MAX_PERIODS * period
     cone = np.cos(np.deg2rad(GAP_CONE_DEG))
 
@@ -279,24 +305,37 @@ def extract(
     skel = bridge_gaps(skel, period)
     skel = minutiae.prune(skel, length=max(2, int(round(period / 3))))
 
-    cn = minutiae.crossing_number(skel)
-    found = skel & ((cn == 1) | (cn == 3))
-    ys, xs = np.where(found)
-    if len(ys) == 0:
+    b = ridges.BLOCK
+    quality = quality_map(analysis)
+
+    # Built once, before any return. Two of the three exits from this function
+    # are empty-list cases, and an earlier version gave them a two-key extras
+    # dict while the success path returned five -- so `figures.fig_enhance_steps`
+    # died with KeyError: 'crest' on exactly the prints the post describes as
+    # having no reliable ridge region.
+    extras = {
+        "enhanced": enhanced,
+        "smooth": smooth,
+        "crest": crest,
+        "skeleton": skel,
+        "quality": quality,
+    }
+
+    def nothing():
         empty = minutiae.Minutiae(
             np.zeros((0, 2)),
             np.zeros(0),
             np.zeros(0, int),
             np.zeros((0, minutiae._DIM)),
         )
-        return (
-            (empty, {"enhanced": enhanced, "skeleton": skel})
-            if return_extras
-            else empty
-        )
+        return (empty, extras) if return_extras else empty
 
-    b = ridges.BLOCK
-    quality = quality_map(analysis)
+    cn = minutiae.crossing_number(skel)
+    found = skel & ((cn == 1) | (cn == 3))
+    ys, xs = np.where(found)
+    if len(ys) == 0:
+        return nothing()
+
     by = np.clip(ys // b, 0, quality.shape[0] - 1)
     bx = np.clip(xs // b, 0, quality.shape[1] - 1)
     q = quality[by, bx]
@@ -309,17 +348,7 @@ def extract(
     keep = q >= MIN_QUALITY
     ys, xs, q = ys[keep], xs[keep], q[keep]
     if len(ys) == 0:
-        empty = minutiae.Minutiae(
-            np.zeros((0, 2)),
-            np.zeros(0),
-            np.zeros(0, int),
-            np.zeros((0, minutiae._DIM)),
-        )
-        return (
-            (empty, {"enhanced": enhanced, "skeleton": skel})
-            if return_extras
-            else empty
-        )
+        return nothing()
 
     order = np.argsort(-q)
     xy = np.column_stack([xs, ys]).astype(float)[order]
@@ -341,15 +370,7 @@ def extract(
         kind,
         minutiae.describe(xy, theta, period),
     )
-    if return_extras:
-        return found_minutiae, {
-            "enhanced": enhanced,
-            "smooth": smooth,
-            "crest": crest,
-            "skeleton": skel,
-            "quality": quality,
-        }
-    return found_minutiae
+    return (found_minutiae, extras) if return_extras else found_minutiae
 
 
 def match_all(probe, gallery, top_k: int = 12) -> np.ndarray:
@@ -529,17 +550,113 @@ def repeatability(
     }
 
 
+def controls(seed: int = 0) -> dict:
+    """Two synthetic fields with a known answer, for both extractors.
+
+    A ridge field with no minutiae in it should yield none, and a field carrying
+    one deliberate ridge dislocation should yield one. Neither says anything
+    about real prints; they catch an extractor that invents landmarks, which is
+    the failure mode the quality map exists to prevent, and the post quotes
+    them, so they are kept runnable rather than described from memory.
+    """
+    rng = np.random.default_rng(seed)
+    y, x = np.mgrid[0:192, 0:192]
+    base = 2 * np.pi * (x * np.cos(0.4) + y * np.sin(0.4)) / 9.0 + 1.2 * np.sin(
+        y / 40.0,
+    )
+
+    def render(phase):
+        img = (128 + 90 * np.sin(phase)).astype(np.uint8)
+        noisy = img.astype(float) + 12 * rng.normal(size=img.shape)
+        return np.clip(noisy, 0, 255).astype(np.uint8)
+
+    # A half-period phase step across a band: one ridge stops and its neighbours
+    # close over it, which is what a dislocation looks like.
+    dislocated = base + np.pi * (1 / (1 + np.exp(-(x - 96) / 3.0))) * (
+        np.abs(y - 96) < 40
+    )
+
+    out = {}
+    for label, field in (("no_minutiae", base), ("one_dislocation", dislocated)):
+        img = render(field)
+        analysis = ridges.analyse(img)
+        found = {
+            "crossing": minutiae.extract(img, analysis),
+            "follow": extract(img, analysis),
+        }
+        out[label] = {
+            name: {
+                "count": len(m),
+                "near_dislocation": (
+                    int((np.abs(m.xy[:, 0] - 96) < 25).sum()) if len(m) else 0
+                ),
+            }
+            for name, m in found.items()
+        }
+    return out
+
+
+def census(prints, sample: int = 80, seed: int = 0) -> dict:
+    """How good this imagery actually is: ridge-mask coverage over a sample.
+
+    The post opens by saying the cache is not uniformly good, and this is where
+    that claim comes from. Kept as a flag rather than a one-off script so the
+    numbers in the prose can be reproduced.
+    """
+    rng = np.random.default_rng(seed)
+    chosen = rng.permutation(len(prints.images))[:sample]
+    coverage, periods = [], []
+    for i in chosen:
+        analysis = ridges.analyse(prints.images[int(i)])
+        coverage.append(float(analysis.mask.mean()))
+        periods.append(float(analysis.period))
+    fraction = np.array(coverage)
+    grade = prints.quality[chosen]
+    return {
+        "sample": int(sample),
+        "empty_mask": int((fraction == 0).sum()),
+        "under_10pc": int((fraction < 0.10).sum()),
+        "median_coverage": float(np.median(fraction)),
+        "median_period": float(np.median(periods)),
+        "grade_vs_coverage_corr": float(np.corrcoef(grade, fraction)[0, 1]),
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--data", type=Path, default=Path("data/prints.npz"))
     ap.add_argument("--repeatability", action="store_true")
+    ap.add_argument(
+        "--census",
+        action="store_true",
+        help="report ridge-mask coverage over a random sample of the cache",
+    )
+    ap.add_argument(
+        "--controls",
+        action="store_true",
+        help="run both extractors on two synthetic fields with a known answer",
+    )
     ap.add_argument("--pairs", type=int, default=60)
+    ap.add_argument(
+        "--sample",
+        type=int,
+        default=80,
+        help="prints to scan for --census",
+    )
     ap.add_argument("--tolerance", type=float, default=1.0, help="in ridge periods")
+    ap.add_argument(
+        "--quality",
+        type=float,
+        action="append",
+        help="MIN_QUALITY to run the follow extractor at; repeatable. Defaults to"
+        " the module constant.",
+    )
     ap.add_argument(
         "--extractor",
         choices=["crossing", "follow", "both"],
         default="both",
     )
+    ap.add_argument("--out", type=Path, help="write the table to this JSON file")
     args = ap.parse_args()
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -548,7 +665,36 @@ def main() -> int:
     prints = data_module.load(args.data)
     _, test = data_module.split(prints)
 
-    extractors = {"crossing": minutiae.extract, "follow": extract}
+    if args.controls:
+        result = controls()
+        for field, per_extractor in result.items():
+            print(f"{field}:")
+            for name, stats in per_extractor.items():
+                print(
+                    f"  {name:<10} {stats['count']:>3} landmarks,"
+                    f" {stats['near_dislocation']} within 25 px of x=96",
+                )
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps(result, indent=2) + "\n")
+        return 0
+
+    if args.census:
+        stats = census(prints, args.sample)
+        print(f"Ridge-mask coverage over {stats['sample']} random prints:")
+        print(f"  empty mask           {stats['empty_mask']}")
+        print(f"  under 10% coverage   {stats['under_10pc']}")
+        print(f"  median coverage      {stats['median_coverage']:.1%}")
+        print(f"  median ridge period  {stats['median_period']:.1f} px")
+        print(
+            f"  NIST grade vs coverage, correlation {stats['grade_vs_coverage_corr']:.2f}",
+        )
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps(stats, indent=2) + "\n")
+        return 0
+
+    extractors: dict[str, Callable] = {"crossing": minutiae.extract, "follow": extract}
     names = ["crossing", "follow"] if args.extractor == "both" else [args.extractor]
 
     if not args.repeatability:
@@ -563,20 +709,47 @@ def main() -> int:
         "Genuine is two impressions of one finger; impostor is the floor.\n",
     )
     header = (
-        f"{'extractor':<12}{'minutiae':>10}{'genuine':>10}{'impostor':>10}{'lift':>8}"
+        f"{'extractor':<28}{'minutiae':>10}{'genuine':>10}{'impostor':>10}{'lift':>8}"
     )
     print(header)
     print("-" * len(header))
+
+    global MIN_QUALITY
+    rows = []
     for name in names:
-        r = repeatability(
-            test,
-            extractors[name],
-            pairs=args.pairs,
-            tolerance_periods=args.tolerance,
-        )
-        print(
-            f"{name:<12}{r['minutiae_median']:>10.0f}{r['genuine']:>10.3f}"
-            f"{r['impostor']:>10.3f}{r['lift']:>8.2f}",
+        # The follow extractor is run once per requested quality threshold, so
+        # the post's table is reproducible from the committed code rather than
+        # by editing a module constant.
+        thresholds = [None] if name == "crossing" else (args.quality or [MIN_QUALITY])
+        for threshold in thresholds:
+            label = name
+            if threshold is not None:
+                MIN_QUALITY = threshold
+                label = f"{name} q>={threshold:.2f}"
+            r = repeatability(
+                test,
+                extractors[name],
+                pairs=args.pairs,
+                tolerance_periods=args.tolerance,
+            )
+            print(
+                f"{label:<28}{r['minutiae_median']:>10.0f}{r['genuine']:>10.3f}"
+                f"{r['impostor']:>10.3f}{r['lift']:>8.2f}",
+            )
+            rows.append({"extractor": label, **r})
+
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(
+            json.dumps(
+                {
+                    "pairs": args.pairs,
+                    "tolerance_periods": args.tolerance,
+                    "rows": rows,
+                },
+                indent=2,
+            )
+            + "\n",
         )
     return 0
 

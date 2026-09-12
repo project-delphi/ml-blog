@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import data
@@ -35,6 +36,10 @@ BENCH = Path("bench")
 
 # How many fingers to consider when choosing the print the figures are drawn from.
 CANDIDATES = 40
+
+# Memoised result of `pick`. Four figures want the same print, and each call
+# analyses up to 80 images -- 320 analyses for a run that needs 80.
+_PICKED: list = []
 
 INK, PURPLE, TEAL, CORAL, GOLD = "#1F2430", "#4A3AA7", "#2A9D8F", "#E07A5F", "#E8A33D"
 
@@ -83,6 +88,9 @@ def pick(prints):
     out blank. Coverage is the property the figures actually need, so it is the
     property selected on.
     """
+    if _PICKED:
+        return _PICKED[0]
+
     candidates = [
         np.where(prints.finger == f)[0]
         for f in np.unique(prints.finger)[:CANDIDATES]
@@ -93,15 +101,27 @@ def pick(prints):
         pair = [
             (prints.images[int(i)], ridges.analyse(prints.images[int(i)])) for i in idx
         ]
+        # Rank on the worse impression, so the finger chosen is good in *both* --
+        # the minutiae figure shows the pair side by side and one blank panel
+        # would ruin it.
         scored.append((min(a.mask.mean() for _, a in pair), int(idx[0]), pair))
-    coverage, first, pair = max(scored, key=lambda row: row[0])
+    _, first, pair = max(scored, key=lambda row: row[0])
 
     other = int(np.where(prints.finger != prints.finger[first])[0][0])
+    # Report the coverage of the print the panels actually show, not the pair's
+    # minimum: the caption in the post quotes this line, and quoting the mate's
+    # coverage next to the first impression's mask panel is a mismatch a reader
+    # can see.
+    shown = pair[0][1].mask.mean()
     print(
         f"  {prints.name[first]}, NIST grade {int(prints.quality[first])},"
-        f" ridge mask over {coverage:.0%} of the frame",
+        f" ridge mask over {shown:.0%} of the frame"
+        f" (its mate: {pair[1][1].mask.mean():.0%})",
     )
-    return [*pair, (prints.images[other], ridges.analyse(prints.images[other]))]
+    _PICKED.append(
+        [*pair, (prints.images[other], ridges.analyse(prints.images[other]))],
+    )
+    return _PICKED[0]
 
 
 # ---------------------------------------------------------------------------
@@ -301,10 +321,10 @@ def fig_embedding() -> None:
 
     An earlier version of this figure plotted raw cosine similarity, and
     matplotlib quietly moved the shared leading digits into an offset label --
-    so a collapsed embedding, every pair within 1e-4 of every other, looked like
-    an ordinary histogram. Both panels here exist to stop that: the loss pinned
-    at the margin is the collapse, and the x-axis is an explicit offset in units
-    of 1e-3 rather than an absolute scale that hides its own range.
+    so a collapsed embedding, every pair within about 1e-5 of every other,
+    looked like an ordinary histogram. Both panels here exist to stop that: the
+    loss pinned at the margin is the collapse, and the x-axis is an explicit
+    offset in millionths rather than an absolute scale that hides its own range.
     """
     dump, table = BENCH / "rungs.npz", BENCH / "ladder.json"
     if not dump.exists() or not table.exists():
@@ -395,7 +415,9 @@ def fig_cmc() -> None:
     ax.set_xlabel("rank k")
     ax.set_ylabel("true mate within the top k (%)")
     ax.set_title(
-        f"{payload['fingers']} fingers, gallery of {payload.get('gallery', '?')}",
+        f"gallery of {payload.get('gallery', '?')} fingers,"
+        f" {payload.get('gallery', '?')} probes"
+        f" (of {payload['fingers']} in the cache; the rest trained the network)",
     )
     ax.grid(True, color="#D8DBE2", alpha=0.7)
     # Under the axes, in two columns. Six rising curves leave no empty corner:
@@ -411,7 +433,7 @@ def fig_cmc() -> None:
     save(fig, "cmc.png")
 
 
-FIGURE_SET = {
+FIGURE_SET: dict[str, Callable] = {
     "ridge-geometry": fig_ridge_geometry,
     "enhance-steps": fig_enhance_steps,
     "minutiae": fig_minutiae,

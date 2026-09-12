@@ -172,7 +172,7 @@ def build(
     raw = repo / IMAGERY
 
     # A finger is (subject, position). Keep only the ones scanned in both sets --
-    # three of the 801 scans have no mate and cannot be scored.
+    # seven of the 801 scans have no mate and cannot be scored, leaving 794.
     fingers = sorted(
         {
             (n[1:4], n[5:7])

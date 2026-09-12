@@ -22,11 +22,15 @@ millions of prints, and the gap is the point rather than an embarrassment.
 ## What that shortage actually looks like, measured
 
 The embedding very nearly collapses, and the loss says so. With `MARGIN = 0.3`,
-training settles at a loss of about 0.30 -- which is what the hinge returns when
-the hardest positive and the hardest negative are the same distance apart, i.e.
-when every print has been mapped to almost the same vector. Per-dimension spread
-across prints comes out around 1e-3, and every pairwise cosine similarity lands
-between 0.994 and 0.9997.
+training settles at a loss of 0.300 -- which is what the hinge returns when the
+hardest positive and the hardest negative are the same distance apart, i.e. when
+every print has been mapped to almost the same vector. On the committed 60-epoch
+run, per-dimension spread across prints comes out at 1.72e-4 (recorded as
+``embedding_spread`` in ``bench/ladder.json``) and the whole spread of pairwise
+cosine similarities is about 1e-5 -- the right-hand panel of
+``figures/embedding.png`` plots it in millionths for that reason. A shorter run
+on fewer fingers collapses less far, so quote the committed numbers rather than
+a quick probe's.
 
 This is the known degenerate optimum of batch-hard mining, so the obvious
 suspects were tried: the soft-margin form the same paper recommends

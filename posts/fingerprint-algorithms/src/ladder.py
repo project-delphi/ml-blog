@@ -42,8 +42,8 @@ this extractor, traced and documented at the top of ``minutiae.py``. Rung 2+ is
 the attempt to fix it, by ridge following with a quality map instead of crossing
 numbers on a thinned skeleton (``minutiae_follow.py``); it finds more landmarks
 and scores no better, and its own ``--repeatability`` gate says why. The ladder
-is a comparison of six implementations, and only the two middle rungs are
-anywhere near what their method can do.
+is a comparison of six implementations, and only two of them -- rung 0+ and
+rung 1 -- are anywhere near what their method can do.
 """
 
 from __future__ import annotations
