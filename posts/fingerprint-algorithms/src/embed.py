@@ -18,6 +18,29 @@ than random ones, is what makes a small batch worth anything.
 The honest caveat lives in the post, not the code: this network sees a few
 hundred images. The systems that beat hand-built features on this problem see
 millions of prints, and the gap is the point rather than an embarrassment.
+
+## What that shortage actually looks like, measured
+
+The embedding very nearly collapses, and the loss says so. With `MARGIN = 0.3`,
+training settles at a loss of about 0.30 -- which is what the hinge returns when
+the hardest positive and the hardest negative are the same distance apart, i.e.
+when every print has been mapped to almost the same vector. Per-dimension spread
+across prints comes out around 1e-3, and every pairwise cosine similarity lands
+between 0.994 and 0.9997.
+
+This is the known degenerate optimum of batch-hard mining, so the obvious
+suspects were tried: the soft-margin form the same paper recommends
+(`softplus(d_p - d_n)`, which has no hinge to sit in), a quarter of the learning
+rate, a smaller margin, and half the batch. All five settle at their own
+degenerate value -- 0.30 for the hinge, log 2 for the softplus -- and none
+recovers useful spread. Held-out separation stays between 0.20 and 0.38, and the
+recipe below is the best of them, which is why it is still the recipe.
+
+So the collapse is not a tuning bug to fix. With two impressions per finger and
+a couple of hundred fingers, the hardest negative is nearer than the hardest
+positive for most anchors, and shrinking the embedding is the only move that
+reduces the loss. What survives is a faint signal in the residual directions:
+the post reports it, and reports that it is riding on a collapsed embedding.
 """
 
 from __future__ import annotations

@@ -38,9 +38,12 @@ the real ones and are for checking that the wiring works, not for quoting.
 
 One warning about reading the output. Rung 2 identifies 3% of probes where rung
 0+ identifies 33%, and that gap is not a fact about minutiae -- it is a limit of
-this extractor, traced and documented at the top of ``minutiae.py``. The ladder
-is a comparison of four implementations, and only one of them is anywhere near
-what its method can do.
+this extractor, traced and documented at the top of ``minutiae.py``. Rung 2+ is
+the attempt to fix it, by ridge following with a quality map instead of crossing
+numbers on a thinned skeleton (``minutiae_follow.py``); it finds more landmarks
+and scores no better, and its own ``--repeatability`` gate says why. The ladder
+is a comparison of six implementations, and only the two middle rungs are
+anywhere near what their method can do.
 """
 
 from __future__ import annotations
@@ -50,6 +53,7 @@ import json
 import sys
 import time
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import bench
@@ -57,9 +61,12 @@ import data
 import embed
 import enhance
 import minutiae
+import minutiae_follow
 import numpy as np
 import pixels
 import ridges
+
+IMPOSTOR_SAMPLE = 10000  # impostor scores kept per rung in --dump
 
 
 @contextmanager
@@ -114,11 +121,16 @@ def fingercode(gallery, probe, gallery_analyses, probe_analyses):
     )
 
 
-def landmarks(gallery, probe, gallery_analyses, probe_analyses):
-    """Rung 2: minutiae, compared by rotation-invariant neighbourhood codes."""
-    enrolled = [
-        minutiae.extract(img, a) for img, a in zip(gallery.images, gallery_analyses)
-    ]
+def landmarks(gallery, probe, gallery_analyses, probe_analyses, extractor=None):
+    """Rung 2: minutiae, compared by rotation-invariant neighbourhood codes.
+
+    `extractor` selects which minutiae finder is on trial -- the crossing-number
+    pipeline in ``minutiae`` or the ridge-following one in ``minutiae_follow``.
+    Both end in the same descriptor and the same matcher, so the rung measures
+    the extractor and nothing else.
+    """
+    extractor = extractor or minutiae.extract
+    enrolled = [extractor(img, a) for img, a in zip(gallery.images, gallery_analyses)]
     counts = np.array([len(m) for m in enrolled])
     print(
         f"    minutiae per print: median {np.median(counts):.0f},"
@@ -127,7 +139,7 @@ def landmarks(gallery, probe, gallery_analyses, probe_analyses):
     )
     return np.stack(
         [
-            minutiae.match_all(minutiae.extract(img, a), enrolled)
+            minutiae.match_all(extractor(img, a), enrolled)
             for img, a in zip(probe.images, probe_analyses)
         ],
     )
@@ -154,7 +166,35 @@ def learned(train, gallery, probe, epochs: int, seed: int):
         enrolled = embed.encode(model, gallery.images)
         searched = embed.encode(model, probe.images)
         matrix = searched @ enrolled.T
-    return matrix, training[0], spent[0]
+    # The loss history is reported because its *level* is the diagnostic: a
+    # batch-hard triplet loss that settles at the margin has collapsed the
+    # embedding. See the note at the top of embed.py.
+    spread = float(enrolled.std(axis=0).mean())
+    return matrix, training[0], spent[0], history, spread
+
+
+def turn_probes(probe: data.Prints, degrees: float, seed: int) -> data.Prints:
+    """Rotate every probe by its own random angle, up to +/- `degrees`.
+
+    The inked cards in this cache are all roughly upright, which quietly flatters
+    the two rungs that cannot search over rotation at all. A finger on a phone
+    lands at whatever angle it lands at, so this is the edge case that decides
+    whether a representation is usable there -- and it is cheaper to measure it
+    than to assert it.
+    """
+    rng = np.random.default_rng(seed)
+    angles = rng.uniform(-degrees, degrees, len(probe.images))
+    turned = np.stack(
+        [
+            np.clip(
+                minutiae_follow.rotate_about_centre(img.astype(float), np.deg2rad(a)),
+                0,
+                255,
+            ).astype(np.uint8)
+            for img, a in zip(probe.images, angles)
+        ],
+    )
+    return replace(probe, images=turned)
 
 
 def run(
@@ -162,10 +202,14 @@ def run(
     epochs: int = 60,
     train_fraction: float = 0.5,
     seed: int = 7,
-) -> list[bench.Result]:
-    """Score every rung on the test fingers and return the results in ladder order."""
+    rotate_probes: float = 0.0,
+) -> tuple[list[bench.Result], dict]:
+    """Score every rung on the test fingers; return the results and the run's notes."""
     train, test = data.split(prints, train_fraction, seed)
     gallery, probe, truth = data.gallery_probe(test)
+    if rotate_probes:
+        probe = turn_probes(probe, rotate_probes, seed)
+        print(f"Probes rotated by up to +/-{rotate_probes:.0f} degrees.\n", flush=True)
     print(
         f"{prints.n_fingers} fingers: {train.n_fingers} to learn from,"
         f" {test.n_fingers} to search.\n"
@@ -212,11 +256,28 @@ def run(
         ),
     )
 
-    with clock("rung 2  minutiae") as spent:
+    with clock("rung 2  minutiae, crossing number") as spent:
         matrix = landmarks(gallery, probe, gallery_analyses, probe_analyses)
     results.append(
         bench.score(
-            "2  minutiae, neighbourhood codes",
+            "2  minutiae, crossing number",
+            matrix,
+            truth,
+            spent[0] + geometry,
+        ),
+    )
+
+    with clock("rung 2+ minutiae, ridge following") as spent:
+        matrix = landmarks(
+            gallery,
+            probe,
+            gallery_analyses,
+            probe_analyses,
+            extractor=minutiae_follow.extract,
+        )
+    results.append(
+        bench.score(
+            "2+ minutiae, ridge following",
             matrix,
             truth,
             spent[0] + geometry,
@@ -224,13 +285,30 @@ def run(
     )
 
     print("  rung 3  learned embedding", flush=True)
-    matrix, training, searching = learned(train, gallery, probe, epochs, seed)
+    matrix, training, searching, history, spread = learned(
+        train,
+        gallery,
+        probe,
+        epochs,
+        seed,
+    )
     results.append(
         bench.score("3  learned embedding, triplet", matrix, truth, searching),
     )
-    print(f"  (training cost {training:.0f}s once, and is not in the table)\n")
+    print(f"  (training cost {training:.0f}s once, and is not in the table)")
+    print(
+        f"    embedding spread per dimension {spread:.2e};"
+        f" loss ended at {history[-1]:.3f} against a margin of {embed.MARGIN}"
+        f" -- at the margin means collapsed\n",
+    )
 
-    return results
+    meta = {
+        "loss_history": [float(h) for h in history],
+        "margin": float(embed.MARGIN),
+        "embedding_spread": spread,
+        "training_seconds": float(training),
+    }
+    return results, meta
 
 
 def main() -> int:
@@ -239,11 +317,24 @@ def main() -> int:
     ap.add_argument("--epochs", type=int, default=60)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument(
+        "--rotate-probes",
+        type=float,
+        default=0.0,
+        help="rotate every probe by its own random angle, up to this many"
+        " degrees, before anything sees it",
+    )
+    ap.add_argument(
         "--quick",
         action="store_true",
         help="a fifth of the fingers and a tenth of the training; for wiring checks only",
     )
     ap.add_argument("--out", type=Path, help="write the table to this JSON file")
+    ap.add_argument(
+        "--dump",
+        type=Path,
+        help="write per-rung ranks and score distributions to this .npz, so the"
+        " figures can be redrawn without running the ladder again",
+    )
     args = ap.parse_args()
 
     prints = data.load(args.data)
@@ -253,7 +344,12 @@ def main() -> int:
         prints = prints.subset(np.isin(prints.finger, fingers))
         epochs = max(1, args.epochs // 10)
 
-    results = run(prints, epochs=epochs, seed=args.seed)
+    results, meta = run(
+        prints,
+        epochs=epochs,
+        seed=args.seed,
+        rotate_probes=args.rotate_probes,
+    )
     print(bench.table(results))
 
     if args.out:
@@ -262,14 +358,34 @@ def main() -> int:
             json.dumps(
                 {
                     "fingers": int(prints.n_fingers),
+                    "gallery": int(results[0].gallery_size),
                     "epochs": epochs,
                     "seed": args.seed,
                     "rows": [r.row() for r in results],
+                    "cmc": {r.name: r.cmc(20).tolist() for r in results},
+                    **meta,
                 },
                 indent=2,
             )
             + "\n",
         )
+
+    if args.dump:
+        # Kept small enough to commit: the repo caps added files at 500 kB and
+        # the full impostor set is 199x198 doubles per rung. Ranks and genuine
+        # scores are short and go in whole; the impostor scores only ever feed a
+        # histogram, so a fixed random sample of them is the same picture.
+        args.dump.parent.mkdir(parents=True, exist_ok=True)
+        rng = np.random.default_rng(args.seed)
+        payload = {"names": np.array([r.name for r in results])}
+        for i, r in enumerate(results):
+            impostor = r.impostor
+            if len(impostor) > IMPOSTOR_SAMPLE:
+                impostor = rng.choice(impostor, IMPOSTOR_SAMPLE, replace=False)
+            payload[f"ranks_{i}"] = r.ranks.astype(np.int16)
+            payload[f"genuine_{i}"] = r.genuine.astype(np.float32)
+            payload[f"impostor_{i}"] = impostor.astype(np.float32)
+        np.savez_compressed(args.dump, **payload)
     return 0
 
 
