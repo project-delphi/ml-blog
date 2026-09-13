@@ -1,0 +1,858 @@
+---
+title: "Six Views of PCA"
+subtitle: "Maximum variance, maximum projected energy, minimum reconstruction error, best rank-k approximation, covariance eigenvectors, truncated SVD — one optimization problem, written six ways, with the bridge derived rather than asserted."
+description: "PCA is not six algorithms. One projector identity turns minimum reconstruction error into maximum projected energy, the trace turns energy into variance, Ky Fan turns variance into eigenvectors, and the SVD closes the loop onto the best rank-k approximation. Then the chain is run on MovieLens genre ratings and a neutrophil metabolome."
+author: "Ravi Kalia"
+date: "2026-09-13"
+categories: [Linear Algebra, Machine Learning, Mathematics]
+image: "./cover.png"
+tags: [PCA, SVD, eigendecomposition, low-rank approximation, dimensionality reduction, probabilistic PCA, Eckart-Young]
+jupyter: pca-blog
+resources:
+  - cover.png
+  - data
+execute:
+  warning: false
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: show
+    number-sections: true
+    fig-width: 8
+    fig-height: 4.2
+    fig-dpi: 150
+---
+
+![Six Views of PCA](./cover.png){fig-alt="Left: a centred 2D point cloud with the first principal direction drawn through it, each point joined to its projection by a perpendicular residual segment. Right: projected energy and residual sum of squares plotted against direction angle, two mirrored curves whose sum is flat."}
+
+Open three references on PCA and you get three definitions. One says PCA finds the directions of largest variance. One says it finds the subspace minimising squared distance to the data. One says it is the truncated SVD of the centred matrix. Each states its own as *the* definition, and none of them mentions the other two.
+
+That reads like three algorithms. It is one, and the bridge between the readings is about ten lines of algebra about a projection matrix. This post derives those lines, checks every step numerically, and then runs the chain end to end on two real matrices — user ratings from MovieLens, and a neutrophil metabolome — where the shape of the matrix decides which of the six readings is the one you can compute.
+
+Two companion posts carry background. [The Directions a Matrix Refuses to Turn](../eigendecomposition/) is eigenvectors and eigenvalues from scratch. [The Matrix That Rotates, Stretches, and Rotates Again](../svd-rotate-stretch-rotate/) is the geometry of $U$, $\Sigma$, and $V$.
+
+```{python}
+#| label: setup
+#| echo: false
+import json
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+INK = "#1F2430"
+ACCENT = "#4A3AA7"
+TEAL = "#2A9D8F"
+CORAL = "#C45C26"
+GOLD = "#E8A33D"
+MUTED = "#5F6672"
+RULE = "#D8DBE2"
+
+plt.rcParams.update(
+    {
+        "figure.facecolor": "white",
+        "axes.facecolor": "white",
+        "axes.edgecolor": RULE,
+        "axes.linewidth": 0.8,
+        "axes.labelcolor": INK,
+        "text.color": INK,
+        "xtick.color": MUTED,
+        "ytick.color": MUTED,
+        "font.size": 10,
+        "axes.titlesize": 11,
+        "axes.titleweight": "bold",
+        "axes.grid": True,
+        "grid.color": RULE,
+        "grid.alpha": 0.7,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+    }
+)
+
+np.set_printoptions(precision=4, suppress=True)
+DATA = Path("data")
+rng = np.random.default_rng(7)
+```
+
+## Notation
+
+All six views use one matrix and one basis.
+
+- $X \in \mathbb{R}^{n \times d}$ — the data. Each of the $n$ rows is an observation, each of the $d$ columns a feature.
+- $X$ is **centred**: every column has mean zero. PCA without this step answers a different question, and @sec-assumptions says which one.
+- $W \in \mathbb{R}^{d \times k}$ — the basis we are looking for, with $W^\top W = I_k$. Its $k$ columns are orthonormal directions in feature space.
+- $Z = XW \in \mathbb{R}^{n \times k}$ — the **projection**, or scores. Row $i$ holds the $k$ coordinates of observation $i$ in the new basis.
+- $\hat X = XWW^\top \in \mathbb{R}^{n \times d}$ — the **reconstruction**. Back in the original $d$ features, but of rank at most $k$.
+- $P = WW^\top \in \mathbb{R}^{d \times d}$ — the orthogonal projector onto the span of $W$'s columns. $P^2 = P$ and $P^\top = P$.
+
+Projection and reconstruction are different objects and get confused constantly. $Z$ is $n \times k$ and lives in the small space. $\hat X$ is $n \times d$ and lives back in the big one, on a $k$-dimensional flat inside it.
+
+## The six views
+
+Each of these is a complete definition of PCA, and each one is what some textbook opens with.
+
+1. **Maximum variance.** Find the directions along which the projected observations spread out the most.
+2. **Maximum projected energy.** Find $W$ maximising $\|XW\|_F^2$, the total squared magnitude of the projected representation.
+3. **Minimum reconstruction error.** Find the $k$-dimensional subspace minimising $\|X - XWW^\top\|_F^2$, the squared perpendicular distance from the data to the subspace.
+4. **Best rank-$k$ approximation.** Find the rank-$k$ matrix closest to $X$ in Frobenius norm.
+5. **Covariance eigendecomposition.** Take the leading eigenvectors of the sample covariance matrix.
+6. **Truncated SVD.** Take the leading right singular vectors of $X$.
+
+They are not six independent problems. Views 1, 2, and 3 are one optimization problem written in three notations. Views 5 and 6 are two *routes to the solution* of that problem, not separate objectives. View 4 is the same optimum read as a statement about matrices rather than about subspaces. @sec-equivalence does the work of showing that.
+
+## Maximum variance
+
+Start with $k = 1$. A unit direction $w \in \mathbb{R}^d$ turns each observation $x_i$ into the single number $x_i^\top w$, and because $X$ is centred those $n$ numbers already have mean zero. Their sample variance is
+
+$$
+\operatorname{Var}(Xw) = \frac{1}{n-1}\sum_{i=1}^{n} (x_i^\top w)^2 = \frac{w^\top X^\top X w}{n-1}.
+$$
+
+Maximising that over unit $w$ is maximising the **Rayleigh quotient** of $X^\top X$:
+
+$$
+w_1 = \arg\max_{w \neq 0} \frac{w^\top X^\top X w}{w^\top w}.
+$$
+
+The quotient measures how much $X^\top X$ stretches a direction, with the length of $w$ divided out so that only the direction matters. Its maximum is the largest eigenvalue of $X^\top X$, attained at the matching eigenvector — that is the Rayleigh–Ritz theorem, and @sec-kyfan sketches why.
+
+For $k$ components, sum the variances of the $k$ projected coordinates. That sum is a trace:
+
+$$
+\max_{W^\top W = I_k} \ \operatorname{tr}\!\left(W^\top \frac{X^\top X}{n-1} W\right).
+$$
+
+$W^\top X^\top X W$ is $k \times k$; its diagonal holds the $k$ projected variances (times $n-1$) and the trace adds them up. The constraint $W^\top W = I_k$ is what stops the answer being $k$ copies of $w_1$.
+
+## Maximum projected energy
+
+**Energy** is the signal-processing name for a sum of squared magnitudes. A discrete signal $s[1], \dots, s[T]$ has energy $\sum_t |s[t]|^2$; a vector has energy $\|v\|_2^2$; a matrix has energy
+
+$$
+\|Z\|_F^2 = \sum_{i=1}^{n}\sum_{j=1}^{k} Z_{ij}^2 = \sum_{i=1}^{n} \|z_i\|_2^2 .
+$$
+
+With $Z = XW$ this is $\|XW\|_F^2$: add up the squared length of every observation's projected coordinate vector. It says how much of the data's squared magnitude survives the projection.
+
+The reason the word transfers from signals to matrices is Parseval's identity. An orthonormal change of basis moves energy between coordinates but never creates or destroys it, so a *full* orthonormal $W$ with $k = d$ gives $\|XW\|_F^2 = \|X\|_F^2$ exactly. Truncating to $k < d$ throws some away, and PCA is the choice of which part to keep.
+
+For centred $X$ the connection to variance is arithmetic. Column $j$ of $Z$ has mean zero, because the column means of $Z$ are the column means of $X$ times $W$, and those are zero. So $\sum_i Z_{ij}^2 = (n-1)\operatorname{Var}(Z_{:,j})$, and
+
+$$
+\|XW\|_F^2 = (n-1) \sum_{j=1}^{k} \operatorname{Var}(Z_{:,j}).
+$$
+
+Projected energy is total projected variance times the constant $n-1$. Maximising one maximises the other, over the same $W$, with the same maximiser. **Energy is the matrix-norm writing of view 1, not a second algorithm.** The only thing it adds is a norm that the next two views also speak.
+
+## Minimum reconstruction error
+
+Project, then come back: $Z = XW$ drops each observation to $k$ numbers, and $\hat X = ZW^\top = XWW^\top$ lifts those numbers back into the original $d$ features. PCA in this reading is
+
+$$
+\min_{W^\top W = I_k} \ \|X - XWW^\top\|_F^2 .
+$$
+
+Geometrically, $\hat x_i = WW^\top x_i$ is the closest point to $x_i$ on the subspace spanned by $W$, and $x_i - \hat x_i$ is perpendicular to that subspace. The objective is the total squared length of those perpendiculars. PCA is the $k$-dimensional flat through the origin — the origin because $X$ is centred — that the cloud sits closest to.
+
+This is the one view that is not obviously about variance at all. It asks for a good *fit*, not a large *spread*. @sec-projector is the line that makes them the same question.
+
+## Best rank-$k$ approximation
+
+Forget subspaces and ask for a matrix. Among all $n \times d$ matrices $B$ of rank at most $k$, which is closest to $X$?
+
+$$
+\min_{\operatorname{rank}(B) \le k} \|X - B\|_F^2 .
+$$
+
+The **Eckart–Young–Mirsky theorem** answers it: the minimiser is the truncated SVD $B^\star = U_k\Sigma_kV_k^\top$, and the minimum value is $\sum_{i > k}\sigma_i^2$, the energy in the singular values you dropped.
+
+The distinction the two framings hide:
+
+- **Finding a subspace** returns a $k$-dimensional flat. Any $W$ whose columns span it is an equally valid answer, so $W$ is determined only up to a $k \times k$ orthogonal rotation. The genuine object is the subspace.
+- **Approximating a matrix** returns one matrix $\hat X$. It is unique as soon as $\sigma_k > \sigma_{k+1}$, and it does not change when you rotate $W$ inside its own span, because $WW^\top$ does not change.
+
+So $\hat X$ is the invariant; the loadings are a chart on it. That is why two PCA implementations can report visibly different loadings and identical reconstructions.
+
+## Covariance eigendecomposition
+
+The sample covariance of centred $X$ is
+
+$$
+S = \frac{X^\top X}{n-1} \in \mathbb{R}^{d \times d},
+$$
+
+with **$n-1$, not $n$**, in the denominator. The $n-1$ is Bessel's correction: one degree of freedom went into estimating the mean we subtracted when we centred. The $1/n$ convention is the maximum-likelihood estimate and is also in wide use — it scales every eigenvalue by $n/(n-1)$ and moves no eigenvector at all, so it changes no principal direction and no explained-variance *ratio*. It changes reported eigenvalues, which is enough reason to say which one you used.
+
+$S$ is symmetric positive semi-definite, so it has an orthonormal eigenbasis with non-negative eigenvalues:
+
+$$
+S = V\Lambda V^\top, \qquad \Lambda = \operatorname{diag}(\lambda_1 \ge \dots \ge \lambda_d \ge 0).
+$$
+
+The principal directions are the leading columns of $V$, and $\lambda_j$ is the variance of the data along direction $v_j$ — set $W = v_j$ in the trace objective and read it off. Because $\operatorname{tr}(S) = \sum_j \lambda_j$ is the total variance across all $d$ features, $\lambda_j / \sum_i \lambda_i$ is the fraction of variance explained by component $j$.
+
+## Singular value decomposition
+
+The thin SVD of the centred matrix is
+
+$$
+X = U\Sigma V^\top, \qquad U \in \mathbb{R}^{n \times r}, \ \Sigma \in \mathbb{R}^{r\times r}, \ V \in \mathbb{R}^{d \times r},
+$$
+
+with $r = \min(n, d)$, $U^\top U = V^\top V = I_r$, and $\Sigma$ diagonal with $\sigma_1 \ge \dots \ge \sigma_r \ge 0$. Then
+
+$$
+X^\top X = V\Sigma U^\top U \Sigma V^\top = V\Sigma^2V^\top .
+$$
+
+That is an eigendecomposition of $X^\top X$ sitting in plain sight. Comparing it with $S = V\Lambda V^\top$:
+
+- the covariance eigenvectors **are** the right singular vectors of $X$;
+- $\lambda_j = \sigma_j^2/(n-1)$;
+- the left singular vectors scaled by the singular values, $U\Sigma$, are the scores $Z$ for the full basis.
+
+Eigenvectors and singular vectors are not the same kind of object — eigenvectors are defined for a square matrix by $Av = \lambda v$, singular vectors come in left–right pairs for any shape via $Av_j = \sigma_j u_j$ — and the identity $X^\top X = V\Sigma^2V^\top$ is where they coincide for PCA: $V$ is simultaneously the right singular vectors of $X$ and the eigenvectors of the square matrix $X^\top X$.
+
+SVD is the computational route for two reasons. Forming $X^\top X$ squares the condition number, so directions that were merely badly scaled in $X$ become numerically indistinguishable in $X^\top X$; and when $d \gg n$ the covariance matrix is $d \times d$ and singular, while the SVD never builds it. [The Matrix That Rotates, Stretches, and Rotates Again](../svd-rotate-stretch-rotate/) makes the precision argument in full.
+
+Views 5 and 6 are **solution methods**. They compute the answer to the optimization problem in views 1–3; they are not a seventh and eighth objective.
+
+## Equivalence {#sec-equivalence}
+
+Six statements, one optimum. Four steps join them.
+
+### From reconstruction to energy {#sec-projector}
+
+$P = WW^\top$ is an orthogonal projector: $P^\top = P$, and $P^2 = WW^\top WW^\top = W(W^\top W)W^\top = WW^\top = P$ because $W^\top W = I_k$. Expand the reconstruction error:
+
+$$
+\|X - XP\|_F^2
+= \operatorname{tr}\!\left[(X - XP)^\top (X - XP)\right]
+= \operatorname{tr}(X^\top X) - 2\operatorname{tr}(X^\top X P) + \operatorname{tr}(P X^\top X P).
+$$
+
+The last term collapses. Using the cyclic property of the trace and $P^2 = P$,
+
+$$
+\operatorname{tr}(PX^\top XP) = \operatorname{tr}(X^\top X P P) = \operatorname{tr}(X^\top X P),
+$$
+
+so two of the three terms cancel into one:
+
+$$
+\|X - XWW^\top\|_F^2 = \operatorname{tr}(X^\top X) - \operatorname{tr}(X^\top X WW^\top) = \|X\|_F^2 - \|XW\|_F^2 .
+$$
+
+The last equality is the same cyclic move: $\operatorname{tr}(X^\top X WW^\top) = \operatorname{tr}(W^\top X^\top X W) = \|XW\|_F^2$.
+
+This is the Pythagorean split. Every observation's squared length divides into the part the subspace keeps and the part it loses, with no cross term. And $\|X\|_F^2$ does not contain $W$:
+
+$$
+\min_{W^\top W = I} \|X - XWW^\top\|_F^2
+\iff
+\max_{W^\top W = I} \|XW\|_F^2 .
+$$
+
+Fitting the data as closely as possible and capturing as much energy as possible are the same instruction, because the two quantities sum to a constant.
+
+### From energy to variance
+
+One line, already used in @sec-projector:
+
+$$
+\|XW\|_F^2 = \operatorname{tr}\!\left[(XW)^\top(XW)\right] = \operatorname{tr}(W^\top X^\top X W) = (n-1)\operatorname{tr}(W^\top S W).
+$$
+
+$W^\top X^\top X W$ is the $k \times k$ covariance of the scores, up to the factor $n-1$. Its trace is the total projected variance. So maximum energy is maximum projected variance, and the $(n-1)$ never affects the maximiser.
+
+### From variance to eigenvectors {#sec-kyfan}
+
+What maximises $\operatorname{tr}(W^\top A W)$ over $W^\top W = I_k$, for symmetric $A$ with eigenvalues $\lambda_1 \ge \dots \ge \lambda_d$?
+
+Write $A = V\Lambda V^\top$ and set $M = V^\top W$, which satisfies $M^\top M = I_k$. Then
+
+$$
+\operatorname{tr}(W^\top A W) = \operatorname{tr}(M^\top \Lambda M) = \sum_{j=1}^{d} \lambda_j \, c_j,
+\qquad c_j = \sum_{l=1}^{k} M_{jl}^2 .
+$$
+
+The weights $c_j$ are constrained: each $c_j \in [0, 1]$ because $M$ has orthonormal columns, and $\sum_j c_j = \|M\|_F^2 = k$. Maximising a weighted sum of the $\lambda_j$ under "budget $k$, at most $1$ each" puts all of the budget on the $k$ largest eigenvalues. The maximum is $\lambda_1 + \dots + \lambda_k$, attained when $W$ spans the leading $k$ eigenvectors. That is the Ky Fan theorem, and at $k = 1$ it is Rayleigh–Ritz.
+
+Applied to $A = X^\top X$: the maximiser is $W = V_k$, the leading eigenvectors of $X^\top X$, which are the leading eigenvectors of $S$.
+
+### From eigenvectors to the SVD
+
+$X^\top X = V\Sigma^2V^\top$, so $V_k$ is the first $k$ right singular vectors of $X$ and $\lambda_j = \sigma_j^2/(n-1)$. The reconstruction at that optimum is
+
+$$
+\hat X = XV_kV_k^\top = U\Sigma V^\top V_kV_k^\top = U_k\Sigma_kV_k^\top ,
+$$
+
+which is the truncated SVD, which is Eckart–Young's best rank-$k$ approximation. The loop closes: the subspace that fits the data best reconstructs it as the matrix that approximates it best.
+
+### The chain {#sec-chain}
+
+$$
+\boxed{
+\begin{aligned}
+\min_{W}\ \|X - XWW^\top\|_F^2
+&\iff \max_{W}\ \|XW\|_F^2
+\iff \max_{W}\ \operatorname{tr}(W^\top X^\top X W) \\[2pt]
+&\iff W = V_k \ \text{(leading eigenvectors of } X^\top X\text{)} \\[2pt]
+&\iff \hat X = U_k\Sigma_kV_k^\top \ \text{(truncated SVD} = \text{best rank-}k\text{)}
+\end{aligned}
+}
+$$
+
+Read left to right it is: fit, energy, variance, eigenvectors, singular vectors, low rank. Every arrow is an identity, not an approximation.
+
+### Assumptions {#sec-assumptions}
+
+The chain holds under conditions, and each one is a real way to break it.
+
+- **$X$ is centred.** Without it, $X^\top X/(n-1)$ is a second-moment matrix, not a covariance, and its leading eigenvector chases the mean. The reconstruction view is then fitting a subspace through the origin rather than through the data.
+- **Every entry is observed.** The projector identity needs a complete $X$. With missing cells there is no single $\|X\|_F^2$ to hold fixed and the equivalence fails; @sec-movielens is the case.
+- **The loss is Frobenius.** Eckart–Young also holds in the spectral norm with the same minimiser, but an $\ell_1$ or Huber loss gives a different optimum and none of these identities.
+- **Feature scaling is fixed.** Rescaling a column rescales its contribution to every trace. Covariance PCA and correlation PCA are different questions with different answers, not two algorithms for one question.
+- **The spectrum has a gap at $k$.** If $\sigma_k = \sigma_{k+1}$, the optimal subspace is not unique.
+- **Signs and rotations are free.** $v_j$ and $-v_j$ are both valid; within a tied block, so is any rotation. Reconstructions are unique where loadings are not.
+
+## Geometry of the equivalence
+
+The synthetic cloud used here: 200 draws of a scalar latent $t \sim N(0,1)$, mapped to $(2.2t,\ 0.9t)$ and perturbed by independent $N(0, 0.45^2)$ noise in both coordinates, then column-centred. It is synthetic, its generating process is one line of NumPy, and it stands in for any measurement pair where one underlying quantity drives both readings and the instrument adds isotropic noise — two sensors on one process, two assays of one sample. Two dimensions only, because the point is to draw the residuals.
+
+```{python}
+#| label: fig-equivalence
+#| fig-cap: "Left: the centred cloud with PC1 and, for a sample of observations, the perpendicular residual joining each point to its projection. Right: projected energy and residual sum of squares against direction angle, with their constant sum."
+#| fig-alt: "Two panels. The left shows a 2D elliptical point cloud with a line through its long axis and short perpendicular segments from points to that line. The right shows two mirrored curves against angle, one peaking where the other bottoms out, and a flat line at their sum."
+#| fig-width: 9.2
+#| fig-height: 3.5
+n = 200
+latent = rng.normal(size=n)
+X = np.column_stack([2.2 * latent, 0.9 * latent]) + rng.normal(scale=0.45, size=(n, 2))
+X = X - X.mean(axis=0)
+
+U, S, Vt = np.linalg.svd(X, full_matrices=False)
+pc1 = Vt[0]
+
+thetas = np.linspace(0.0, np.pi, 3601)
+dirs = np.vstack([np.cos(thetas), np.sin(thetas)])
+proj = X @ dirs
+energy = (proj**2).sum(axis=0)
+resid = ((X[:, None, :] - proj[:, :, None] * dirs.T[None, :, :]) ** 2).sum(axis=(0, 2))
+total = float((X**2).sum())
+
+fig, (ax_l, ax_r) = plt.subplots(
+    1, 2, figsize=(9.2, 3.5), gridspec_kw={"width_ratios": [1.15, 1.0]}
+)
+
+scores = X @ pc1
+feet = np.outer(scores, pc1)
+ax_l.scatter(X[:, 0], X[:, 1], s=14, color=MUTED, alpha=0.45, zorder=2)
+for i in range(0, n, 3):
+    ax_l.plot(
+        [X[i, 0], feet[i, 0]], [X[i, 1], feet[i, 1]],
+        color=CORAL, lw=1.0, alpha=0.8, zorder=3,
+    )
+ax_l.scatter(feet[:, 0], feet[:, 1], s=9, color=ACCENT, zorder=4)
+span = np.array([scores.min(), scores.max()])
+ax_l.plot(span * pc1[0], span * pc1[1], color=ACCENT, lw=1.8, zorder=5)
+ax_l.set_aspect("equal")
+ax_l.set_xlabel("feature 1")
+ax_l.set_ylabel("feature 2")
+ax_l.set_title("Projection onto PC1, and what is left over")
+
+deg = np.degrees(thetas)
+ax_r.plot(deg, energy, color=ACCENT, lw=1.8)
+ax_r.plot(deg, resid, color=CORAL, lw=1.8)
+ax_r.plot(deg, energy + resid, color=TEAL, lw=1.4, ls="--")
+ax_r.axvline(deg[energy.argmax()], color=MUTED, lw=0.9, ls=":")
+ax_r.set_xlabel("direction angle (degrees)")
+ax_r.set_ylabel("sum of squares")
+ax_r.set_xlim(0, 180)
+ax_r.set_ylim(0, total * 1.30)
+
+# Label the curves on the curves: a legend box has nowhere to sit here.
+ax_r.text(deg[energy.argmax()], total * 1.05, r"energy $\|Xw\|_F^2$",
+          color=ACCENT, fontsize=8, ha="center")
+ax_r.text(deg[resid.argmax()], total * 1.05, r"residual $\|X-Xww^\top\|_F^2$",
+          color=CORAL, fontsize=8, ha="center")
+ax_r.text(170, total * 0.92, r"sum $=\|X\|_F^2$",
+          color=TEAL, fontsize=8, ha="right", va="bottom")
+ax_r.set_title("One curve is the other, upside down")
+
+fig.tight_layout(pad=1.1)
+plt.show()
+
+print(f"energy peaks at {deg[energy.argmax()]:.2f} deg")
+print(f"residual bottoms at {deg[resid.argmin()]:.2f} deg")
+print(f"sum varies by {np.ptp(energy + resid):.2e} across the sweep")
+print(f"||X||_F^2 = {total:.4f}")
+```
+
+The two curves peak and bottom out at the same angle, 22.15 degrees, and their sum is flat to $2.84\times10^{-12}$ — floating-point noise on a total of 903.0973. That flat line is the identity of @sec-projector. Maximising the purple curve and minimising the orange one are the same search, because the dashed line does not move.
+
+## The six views as a diagram
+
+Each edge is the identity that carries one view into the next.
+
+```{mermaid}
+%%| label: fig-map
+%%| fig-cap: "The six views and the identity joining each pair. Views 1 to 3 are one objective in three notations; views 5 and 6 are routes to its solution; view 4 is the same optimum read as a statement about matrices."
+flowchart TD
+  R["<b>Minimum<br/>reconstruction error</b><br/>min ‖X − XWWᵀ‖²_F"]
+  E["<b>Maximum<br/>projected energy</b><br/>max ‖XW‖²_F"]
+  V["<b>Maximum<br/>variance</b><br/>max tr(WᵀXᵀXW)"]
+  G["<b>Covariance<br/>eigenvectors</b><br/>S = VΛVᵀ"]
+  D["<b>Truncated<br/>SVD</b><br/>X = UΣVᵀ"]
+  L["<b>Best rank-k<br/>approximation</b><br/>X̂ = U_kΣ_kV_kᵀ"]
+  R -->|"‖X‖²_F − ‖XW‖²_F<br/>projector identity"| E
+  E -->|"‖XW‖²_F = tr(WᵀXᵀXW)<br/>cyclic trace"| V
+  V -->|"Ky Fan<br/>W = V_k"| G
+  G -->|"XᵀX = VΣ²Vᵀ<br/>λ = σ²/(n−1)"| D
+  D -->|"Eckart–Young–Mirsky"| L
+```
+
+## Numerical demonstration
+
+The claims of @sec-equivalence are checkable on the same synthetic cloud. The code is NumPy throughout, so the algebra stays visible; `assert` statements fail the render rather than the reader if a claim stops holding.
+
+```{python}
+#| label: demo
+lam, vec = np.linalg.eigh(X.T @ X / (n - 1))
+lam, vec = lam[::-1], vec[:, ::-1]          # eigh returns ascending order
+
+print("singular values of X        ", S)
+print("eigenvalues of S = XtX/(n-1)", lam)
+print("sigma^2 / (n-1)             ", S**2 / (n - 1))
+print("eigen PC1", vec[:, 0], " svd PC1", Vt[0])
+print(f"|cos angle between them| = {abs(vec[:, 0] @ Vt[0]):.12f}")
+
+# 1. Eigendecomposition and SVD give the same direction, up to sign.
+assert np.allclose(lam, S**2 / (n - 1))
+assert np.isclose(abs(vec[:, 0] @ Vt[0]), 1.0)
+```
+
+The two routes agree to twelve decimal places on the direction, and disagree on its sign: `eigh` returned $-v_1$ where `svd` returned $+v_1$. Both are correct, since $v$ and $-v$ span the same line, which is why the check is on $|\cos|$ rather than on the vectors.
+
+Next, the sweep: does PC1 win the variance contest and the energy contest, and are they the same contest?
+
+```{python}
+#| label: demo-sweep
+best_dir = dirs[:, energy.argmax()]
+var_sweep = proj.var(axis=0, ddof=1)
+
+print(f"largest projected variance over the sweep : {var_sweep.max():.10f}")
+print(f"leading eigenvalue of S                   : {lam[0]:.10f}")
+print(f"argmax energy vs argmax variance (deg)    : "
+      f"{deg[energy.argmax()]:.3f} vs {deg[var_sweep.argmax()]:.3f}")
+print(f"|cos| between sweep winner and PC1        : {abs(best_dir @ Vt[0]):.10f}")
+
+# 2 and 3. The same direction maximises projected variance and projected energy,
+#          and it is PC1. Compared as angles, since the curves are flat at the
+#          peak and a grid of 3,601 directions resolves it only to 0.05 degrees.
+step = deg[1] - deg[0]
+assert abs(deg[energy.argmax()] - deg[var_sweep.argmax()]) <= step
+assert abs(deg[energy.argmax()] - deg[resid.argmin()]) <= step
+assert np.isclose(abs(best_dir @ Vt[0]), 1.0, atol=1e-6)
+assert np.isclose(var_sweep.max(), lam[0], rtol=1e-6)
+```
+
+A 3,601-point sweep of directions picks the same angle for maximum energy, maximum variance, and minimum residual, and that angle is PC1 to within the sweep's own resolution.
+
+Last, the rank ladder and the Eckart–Young claim.
+
+```{python}
+#| label: demo-rank
+for k in (1, 2):
+    W = Vt[:k].T
+    recon = float(np.sum((X - X @ W @ W.T) ** 2))
+    kept = float(np.sum((X @ W) ** 2))
+    print(f"k={k}: reconstruction {recon:9.4f}   energy kept {kept:9.4f}   "
+          f"sum {recon + kept:9.4f}")
+
+svd_rank1 = (U[:, :1] * S[:1]) @ Vt[:1]     # truncated SVD
+pca_rank1 = X @ Vt[:1].T @ Vt[:1]           # PCA reconstruction
+print(f"||X||_F^2 = {total:.4f}, sum of squared singular values = {(S**2).sum():.4f}")
+print(f"max |truncated SVD - PCA rank-1| = {np.abs(svd_rank1 - pca_rank1).max():.2e}")
+
+# 4. Reconstruction error falls from rank 1 to rank 2.
+# 5. Truncated SVD and PCA give the same rank-1 reconstruction.
+err1 = np.sum((X - X @ Vt[:1].T @ Vt[:1]) ** 2)
+err2 = np.sum((X - X @ Vt[:2].T @ Vt[:2]) ** 2)
+assert err1 > err2
+assert np.isclose(err2, 0.0, atol=1e-20)    # k = d recovers X exactly
+assert np.allclose(svd_rank1, pca_rank1)
+```
+
+Reconstruction error drops from 35.6804 at rank 1 to zero at rank 2, since $k = d = 2$ leaves nothing to discard, and energy kept climbs from 867.4169 to the full 903.0973. The two numbers add to $\|X\|_F^2$ on both rows. Truncated SVD and PCA agree to $3.25\times10^{-15}$, which is the machine, not the mathematics.
+
+One cross-check against a library, with the derivation left in NumPy:
+
+```{python}
+#| label: demo-sklearn
+from sklearn.decomposition import PCA
+
+sk = PCA(n_components=2).fit(X)
+print("sklearn components (rows)  ", sk.components_)
+print("sklearn explained variance ", sk.explained_variance_)
+print("our eigenvalues            ", lam)
+assert np.allclose(sk.explained_variance_, lam)
+assert np.isclose(abs(sk.components_[0] @ Vt[0]), 1.0)
+```
+
+## Tech: MovieLens genre ratings {#sec-movielens}
+
+### The data
+
+- **Provenance.** GroupLens ml-100k: 100,000 ratings from 943 users on 1,682 films, collected through the MovieLens site between September 1997 and April 1998 and released for research.
+- **Collector and motive.** The GroupLens lab at the University of Minnesota, building and evaluating recommender algorithms. Ratings are volunteered by people choosing what to rate, so they are not a random sample of opinions.
+- **What this post uses.** For each user, the mean rating they gave in each of the 12 most widely rated genres, keeping users with at least three rated films in every one of those genres. That is a complete $313 \times 12$ table with no missing cells.
+- **Why not the ratings matrix itself.** 93.7% of the user-by-film grid is empty, and the equivalences need every entry observed (@sec-assumptions). The largest fully observed user-by-film rectangle inside ml-100k is 30 users by 28 films — measured by peeling, not guessed. Aggregating to genres is how a complete matrix gets built at all.
+- **What being wrong costs.** Nothing clinical. A misread taste axis ships a worse recommendation.
+
+```{python}
+#| label: movielens-load
+genres = pd.read_csv(DATA / "movielens_genres.csv", index_col=0)
+manifest = json.loads((DATA / "manifest.json").read_text())["movielens"]
+
+G = genres.to_numpy()
+print(f"table: {G.shape[0]} users x {G.shape[1]} genres, "
+      f"missing cells: {int(np.isnan(G).sum())}")
+print(f"full grid density: {manifest['grid_density']:.4f}")
+print(f"largest complete user-by-film block: "
+      f"{manifest['largest_complete_film_block'][0]} x "
+      f"{manifest['largest_complete_film_block'][1]}")
+print("genres:", ", ".join(genres.columns))
+```
+
+### The upstream ask
+
+A recommender team wants to know how many taste dimensions the catalogue really has. Twelve genre columns is the measurement; the question is how many independent axes are hiding behind them, because that number sets how small a user profile can get before recommendations degrade.
+
+That ask is well-posed for PCA and for nothing fancier. It asks for directions of largest spread and for how fast the spread runs out — which is views 1 and 3, and the answer is a spectrum.
+
+### Running the chain
+
+$n = 313$ and $d = 12$, so $n \gg d$: the covariance matrix is a comfortable $12 \times 12$, full rank, and both routes are available. That is the regime where the choice between eigendecomposition and SVD is about precision, not possibility.
+
+```{python}
+#| label: movielens-pca
+Gc = G - G.mean(axis=0)                       # centre the columns
+Ug, Sg, Vtg = np.linalg.svd(Gc, full_matrices=False)
+lam_g = Sg**2 / (Gc.shape[0] - 1)
+eig_g, vec_g = np.linalg.eigh(Gc.T @ Gc / (Gc.shape[0] - 1))
+
+print(f"cov route top eigenvalue {eig_g[-1]:.10f}")
+print(f"svd route sigma^2/(n-1)  {lam_g[0]:.10f}")
+print(f"|cos| between the two PC1s: {abs(vec_g[:, -1] @ Vtg[0]):.12f}")
+print("explained variance ratio:", (lam_g / lam_g.sum())[:4].round(4))
+print("cumulative              :", np.cumsum(lam_g / lam_g.sum())[:4].round(4))
+
+for k in (1, 2, 3, 4):
+    W = Vtg[:k].T
+    rel = np.sum((Gc - Gc @ W @ W.T) ** 2) / np.sum(Gc**2)
+    kept = np.sum((Gc @ W) ** 2) / np.sum(Gc**2)
+    print(f"  rank {k}: relative reconstruction error {rel:.4f}, energy kept {kept:.4f}")
+
+assert np.isclose(eig_g[-1], lam_g[0])
+assert np.isclose(abs(vec_g[:, -1] @ Vtg[0]), 1.0)
+```
+
+Both routes return the same leading eigenvalue and the same direction. Relative reconstruction error and fraction of energy kept sum to 1 at every rank, which is @sec-projector again, now on a $313 \times 12$ matrix instead of a drawing.
+
+The first component takes 65.66% of the variance. That looks like a decisive answer — one dominant taste axis — until you read its loadings.
+
+```{python}
+#| label: movielens-pc1
+order = np.argsort(-np.abs(Vtg[0]))
+print("PC1 loadings, largest magnitude first:")
+for j in order:
+    print(f"   {genres.columns[j]:12s} {Vtg[0][j]:+.3f}")
+
+pc1_scores = Gc @ Vtg[0]
+user_mean = G.mean(axis=1)
+r = float(np.corrcoef(pc1_scores, user_mean)[0, 1])
+print(f"\ncorr(PC1 score, that user's mean rating over all 12 genres) = {r:.4f}")
+assert abs(r) > 0.99
+```
+
+Every loading is positive and they are nearly equal, between 0.267 and 0.316. A direction with equal positive weight on every genre is the all-ones direction, and projecting a user onto it measures their average rating. The correlation between PC1 score and the user's own mean rating is 0.9999.
+
+**PC1 is not a taste. It is rating generosity.** Some users give fours and fives to every genre, some give twos and threes, and that single habit is two thirds of the variance in the table. The upstream ask was about taste dimensions, and the largest-variance direction is a property of the rating scale.
+
+### Downstream impact
+
+The fix follows from @sec-assumptions: centring choice is part of the question. Remove each user's own mean before centring the columns, and the generosity axis is gone by construction.
+
+```{python}
+#| label: movielens-double-centred
+R = G - G.mean(axis=1, keepdims=True)         # remove each user's own level
+Rc = R - R.mean(axis=0)                       # then centre the columns
+Ur, Sr, Vtr = np.linalg.svd(Rc, full_matrices=False)
+lam_r = Sr**2 / (Rc.shape[0] - 1)
+
+print(f"rank of the row-centred table: {np.linalg.matrix_rank(Rc)} (was {np.linalg.matrix_rank(Gc)})")
+print("explained variance ratio:", (lam_r / lam_r.sum())[:4].round(4))
+print("cumulative              :", np.cumsum(lam_r / lam_r.sum())[:4].round(4))
+print(f"corr(new PC1, user mean rating) = {np.corrcoef(Rc @ Vtr[0], user_mean)[0, 1]:+.4f}")
+
+top = np.argsort(-np.abs(Vtr[0]))[:5]
+print("\nnew PC1 loadings, largest magnitude first:")
+for j in top:
+    print(f"   {genres.columns[j]:12s} {Vtr[0][j]:+.3f}")
+
+assert abs(float(np.corrcoef(Rc @ Vtr[0], user_mean)[0, 1])) < 0.05
+```
+
+Three things changed, and each one is a decision the team has to make.
+
+- **The rank dropped from 12 to 11.** Subtracting each row's mean puts every row in the space orthogonal to the all-ones vector, which costs exactly one dimension. That is not a bug; the generosity direction was a real dimension of the original table and it has been deliberately removed.
+- **The answer to the ask changed.** With column centring alone, one component covered 65.66% and the report was "one axis, and it is not taste". After row centring, the leading component takes 23.53%, two take 42.33%, and four take 71.09%. A user taste profile needs about four numbers, not one.
+- **PC1 became a taste.** Children's $-0.717$ against Horror $+0.571$: a family-viewing axis with the two ends of the catalogue at the two ends of the component. Correlation with rating generosity is $-0.0168$.
+
+The wider consequence is the assumption that forced the genre aggregation in the first place. On the raw user-by-film matrix, 93.7% of entries are missing, so $\|X\|_F^2$ is not a fixed quantity and the projector identity of @sec-projector has nothing to hold constant. Minimum reconstruction error over the *observed* entries and maximum variance stop being the same problem. That gap is why production recommenders fit a factorization to the observed cells directly — alternating least squares, or gradient descent on the observed residuals — instead of running PCA on a filled-in matrix.
+
+```{python}
+#| label: fig-movielens
+#| fig-cap: "Left: cumulative explained variance for the two centrings, with the generosity axis present and removed. Right: PC1 score against the user's own mean rating under column centring only."
+#| fig-alt: "Two panels. The left plots two cumulative explained-variance curves against number of components; the column-centred curve starts near 0.66 and the row-centred curve starts near 0.24. The right is a tight straight-line scatter of PC1 score against mean rating."
+#| fig-width: 8.6
+#| fig-height: 3.6
+fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(8.6, 3.6))
+
+ks = np.arange(1, 13)
+ax_a.plot(ks, np.cumsum(lam_g / lam_g.sum()), "o-", color=ACCENT, ms=4,
+          label="column-centred")
+ax_a.plot(ks, np.cumsum(lam_r / lam_r.sum()), "s-", color=CORAL, ms=4,
+          label="row- then column-centred")
+ax_a.set_xlabel("components kept")
+ax_a.set_ylabel("cumulative explained variance")
+ax_a.set_ylim(0, 1.02)
+ax_a.legend(frameon=False, fontsize=8, loc="lower right")
+ax_a.set_title("What centring decides")
+
+ax_b.scatter(user_mean, pc1_scores, s=16, color=TEAL, alpha=0.6)
+ax_b.set_xlabel("user's mean rating across 12 genres")
+ax_b.set_ylabel("PC1 score")
+ax_b.set_title(f"PC1 is generosity (r = {r:.4f})")
+
+fig.tight_layout(pad=1.1)
+plt.show()
+```
+
+## Biotech: neutrophil metabolomes
+
+### The data
+
+- **Provenance.** Li et al. (2023), Metabolomics Workbench study ST002477, released CC BY 4.0. LC-MS peak areas for 285 metabolites measured in neutrophils isolated from 75 people, tagged Control (19), Mild (30), or Severe (26) COVID-19.
+- **Collector and motive.** The authors isolated neutrophils and extracted roughly two million cells per person, wanting the metabolic state of the cell that kills rather than of plasma.
+- **What this post uses.** The full $75 \times 285$ peak-area matrix, on $\log(1+x)$ with each metabolite divided by its interquartile range — the same transform as [Neutrophil Metabolomes as a Matrix](../neutrophil-metabolome-axis/), which clusters this file, so the numbers here line up with that post's.
+- **What this post asks of it.** Whether the direction of largest variance in the run tracks disease severity.
+- **What being wrong costs.** A dominant axis that turns out to be a batch or a run-order artefact invalidates every differential-abundance test computed downstream of it. The test does not fail loudly; it reports metabolites.
+- **Why PCA.** Peak areas are relative ion intensities, not counts and not fluxes. PCA asks for the direction of largest spread and assumes nothing about labels, which is what a quality-control gate needs.
+
+```{python}
+#| label: metabolome-load
+abund = pd.read_csv(DATA / "abundances.tsv", sep="\t", index_col=0)
+meta = pd.read_csv(DATA / "samples.tsv", sep="\t")
+assert list(abund.columns) == list(meta["sample_id"])
+
+Xm_raw = abund.to_numpy(dtype=np.float64).T
+labels = meta["group"].to_numpy()
+
+t = np.log1p(Xm_raw)
+median = np.median(t, axis=0)
+iqr = np.subtract(*np.percentile(t, [75, 25], axis=0))
+iqr = np.where(iqr == 0.0, 1.0, iqr)
+Zm = (t - median) / iqr
+Xm = Zm - Zm.mean(axis=0)
+
+n_m, d_m = Xm.shape
+print(f"matrix: {n_m} samples x {d_m} metabolites")
+print("groups:", {g: int((labels == g).sum()) for g in ("Control", "Mild", "Severe")})
+```
+
+### The upstream ask
+
+Before any metabolite-by-metabolite test, someone has to answer a quality-control question: is the biggest source of variation in this run the biology, or the machine? Run order, extraction batch, and column drift all produce large coherent shifts across hundreds of metabolites, and a per-metabolite test cannot tell them from signal.
+
+PCA is the standard gate because it answers without being told the labels. Take the direction of largest variance, colour the scores by the label afterwards, and see whether the two agree. If the leading component tracks batch rather than severity, the tests downstream are measuring the machine.
+
+### Running the chain
+
+The shape decides the method here. $n = 75$ and $d = 285$, so $n \ll d$ and the covariance matrix is $285 \times 285$ with rank at most $n - 1 = 74$. It is singular by construction, and 211 of its eigenvalues are zero not because the data says so but because there are not enough samples for them to be anything else.
+
+```{python}
+#| label: metabolome-pca
+Um, Sm, Vtm = np.linalg.svd(Xm, full_matrices=False)
+lam_m = Sm**2 / (n_m - 1)
+
+print(f"rank(X) = {np.linalg.matrix_rank(Xm)}, min(n, d) = {min(n_m, d_m)}, n - 1 = {n_m - 1}")
+print(f"non-negligible singular values: {int((Sm > 1e-9 * Sm[0]).sum())} of {len(Sm)}")
+
+cov = Xm.T @ Xm / (n_m - 1)
+eig_m, vec_m = np.linalg.eigh(cov)
+print(f"covariance matrix is {cov.shape[0]} x {cov.shape[1]}")
+print(f"cov route top eigenvalue {eig_m[-1]:.10f}")
+print(f"svd route sigma^2/(n-1)  {lam_m[0]:.10f}")
+print(f"|cos| between the two PC1s: {abs(vec_m[:, -1] @ Vtm[0]):.12f}")
+print("explained variance ratio:", (lam_m / lam_m.sum())[:4].round(4))
+
+assert np.linalg.matrix_rank(Xm) == n_m - 1
+assert np.isclose(eig_m[-1], lam_m[0])
+assert np.isclose(abs(vec_m[:, -1] @ Vtm[0]), 1.0)
+```
+
+Both routes still agree — the chain does not care that the matrix is wide. What changes is cost and conditioning: the covariance route builds a $285 \times 285$ matrix to extract at most 74 useful directions from it, and squares the condition number on the way. The SVD never forms it. This is the regime where view 6 stops being a convenience and becomes the only route worth taking.
+
+```{python}
+#| label: metabolome-scores
+scores_m = Xm @ Vtm[:2].T
+severity = np.select([labels == "Control", labels == "Mild"], [0.0, 1.0], 2.0)
+corr_sev = float(np.corrcoef(scores_m[:, 0], severity)[0, 1])
+
+print(f"PC1 {lam_m[0] / lam_m.sum():.1%} of variance, "
+      f"PC2 {lam_m[1] / lam_m.sum():.1%}, "
+      f"first two together {np.cumsum(lam_m / lam_m.sum())[1]:.1%}")
+for g in ("Control", "Mild", "Severe"):
+    s = scores_m[labels == g, 0]
+    print(f"  {g:8s} PC1 mean {s.mean():+6.2f}  sd {s.std():5.2f}")
+print(f"corr(PC1 score, severity coded 0/1/2) = {corr_sev:.4f}")
+
+for k in (1, 2, 5, 10, 74):
+    W = Vtm[:k].T
+    rel = np.sum((Xm - Xm @ W @ W.T) ** 2) / np.sum(Xm**2)
+    print(f"  rank {k:3d}: relative reconstruction error {rel:.4f}")
+```
+
+PC1 takes 20.7% and PC2 11.4%, so the first two components together carry 32.1% — a spectrum that decays slowly, which is what 285 correlated metabolites on 75 samples usually looks like. The group means do separate along PC1: Control at $-6.95$, Mild at $+1.75$, Severe at $+3.06$, correlating 0.5363 with severity coded 0/1/2.
+
+```{python}
+#| label: fig-metabolome
+#| fig-cap: "Left: all 285 covariance eigenvalues, cut off at 74 by the sample count. Eigenvalues past 74 are zero and are drawn at a floor so the log axis can hold them. Right: the 75 samples on PC1 and PC2, coloured by COVID label."
+#| fig-alt: "Two panels. The left is a log-scale plot of eigenvalue against index for 285 components, decaying smoothly then dropping off a cliff at index 74 to a flat floor. The right is a scatter of 75 points on two principal components, coloured in three groups that overlap substantially."
+#| fig-width: 8.6
+#| fig-height: 3.6
+fig, (ax_s, ax_p) = plt.subplots(1, 2, figsize=(8.6, 3.6))
+
+# All d eigenvalues of the covariance, not the n kept by the thin SVD, so the
+# 211 that are zero for want of samples are on the page.
+spectrum = eig_m[::-1]
+floor = spectrum[: n_m - 1].min() * 1e-2
+ax_s.semilogy(np.arange(1, d_m + 1), np.maximum(spectrum, floor),
+              color=ACCENT, lw=1.5)
+ax_s.axvline(n_m - 1, color=CORAL, lw=1.0, ls="--")
+ax_s.annotate(f"rank {n_m - 1} = n − 1", xy=(n_m + 8, spectrum[0] * 0.15),
+              color=CORAL, fontsize=8)
+ax_s.set_ylim(floor * 0.5, spectrum[0] * 3)
+ax_s.set_xlabel("component index")
+ax_s.set_ylabel("eigenvalue (log scale)")
+ax_s.set_title(f"{d_m} features, {n_m - 1} directions")
+
+COLOURS = {"Control": TEAL, "Mild": GOLD, "Severe": CORAL}
+for g in ("Control", "Mild", "Severe"):
+    sel = labels == g
+    ax_p.scatter(scores_m[sel, 0], scores_m[sel, 1], s=26,
+                 color=COLOURS[g], alpha=0.85, label=g)
+ax_p.set_xlabel(f"PC1 ({lam_m[0] / lam_m.sum():.1%})")
+ax_p.set_ylabel(f"PC2 ({lam_m[1] / lam_m.sum():.1%})")
+ax_p.legend(frameon=True, framealpha=0.9, edgecolor=RULE, fontsize=8,
+            loc="lower left", scatterpoints=1)
+ax_p.set_title("Scores, coloured after the fact")
+
+fig.tight_layout(pad=1.1)
+plt.show()
+```
+
+### Downstream impact
+
+The gate passes, and it passes weakly. That distinction is what running the gate buys.
+
+- **What it licenses.** The leading axis moves with severity rather than against it, so there is no evidence of a batch effect large enough to dominate the run. Differential-abundance testing can proceed.
+- **What it refuses to license.** A correlation of 0.5363 and a Control group with a PC1 standard deviation of 7.74 — larger than the gap between the Mild and Severe means — means PC1 is not a disease axis. Reporting a per-sample severity score read off PC1 would be reading more into the largest-variance direction than it contains. [Neutrophil Metabolomes as a Matrix](../neutrophil-metabolome-axis/) takes that argument further, showing that clustering this matrix does not recover the labels either.
+- **What the rank bound costs.** With 74 usable directions for 285 metabolites, rank-10 reconstruction still leaves 35.71% of the energy unexplained. Any claim that "a handful of components summarises the metabolome" fails on this matrix, and the reconstruction curve is where you check it rather than the scree plot's first two bars.
+
+## Probabilistic PCA
+
+Views 1 through 6 are one optimization problem and two ways of solving it. Probabilistic PCA is a different kind of statement, and the difference matters more than the agreement.
+
+It starts from a generative model rather than an objective. A latent $z \in \mathbb{R}^k$ generates an observation:
+
+$$
+x = Wz + \mu + \varepsilon, \qquad z \sim N(0, I_k), \quad \varepsilon \sim N(0, \sigma^2 I_d),
+$$
+
+so that marginally $x \sim N(\mu, WW^\top + \sigma^2 I_d)$. Tipping and Bishop (1999) maximised that likelihood and found
+
+$$
+W_{\mathrm{ML}} = V_k(\Lambda_k - \sigma^2 I_k)^{1/2} R,
+\qquad
+\sigma^2_{\mathrm{ML}} = \frac{1}{d-k}\sum_{j=k+1}^{d}\lambda_j,
+$$
+
+with $V_k$ and $\Lambda_k$ the leading eigenvectors and eigenvalues of the sample covariance, and $R$ an arbitrary $k \times k$ rotation. The columns of $W_{\mathrm{ML}}$ span the principal subspace, the leftover noise variance is the average discarded eigenvalue, and as $\sigma^2 \to 0$ the model's posterior mean for $z$ collapses onto the classical projection.
+
+Where it is *not* the same statement:
+
+- **$W_{\mathrm{ML}}$ is not orthonormal.** Its columns are scaled by $(\lambda_j - \sigma^2)^{1/2}$. The subspace matches; the basis does not, and $R$ leaves it undetermined anyway.
+- **It assumes a distribution.** Views 1–6 assume nothing about how $X$ arose. Probabilistic PCA assumes Gaussian latents and isotropic Gaussian noise, and those assumptions can be wrong in ways an algebraic identity cannot be.
+- **It agrees at the optimum, not everywhere.** The equivalences of @sec-equivalence are identities that hold for every $W$. This is a coincidence of maximisers between two different problems.
+
+What the extra assumptions buy is the reason to pay for them: a likelihood, and therefore missing data handled by EM rather than by aggregation, mixtures of PCA models, Bayesian selection of $k$, and a generative sampler. The MovieLens sparsity of @sec-movielens is a case where classical PCA has nothing to say and a probabilistic model does.
+
+## Constraints
+
+Where the chain of @sec-chain stops holding:
+
+- **Missing entries.** The projector identity needs every cell. ml-100k is 93.7% empty and the equivalence fails outright.
+- **A non-Frobenius loss.** Robust PCA and $\ell_1$ variants optimise something else and reach a different subspace; Eckart–Young covers the Frobenius and spectral norms and no others.
+- **Units and scaling.** Covariance PCA on metabolite peak areas and correlation PCA on the same file are different questions. Both dataset sections here scale first and say how.
+- **Centring choice.** Column centring, row centring, and double centring give three different leading components, as @sec-movielens measures.
+- **$n \ll d$.** The rank of the covariance is capped at $n-1$. Eigenvalues past that are zero by arithmetic, and any interpretation of them is interpretation of nothing.
+- **Nonlinear structure.** PCA fits a flat. A curved manifold gets a flat fitted to it, with no warning in the spectrum.
+- **Signs and rotations.** Loadings are determined only up to sign, and up to rotation inside a tied block. Compare reconstructions, not loadings.
+
+## Summary
+
+Every number in the table was computed, not quoted.
+
+| Perspective | Objective / operation | Intuition | Mathematical tool |
+|---|---|---|---|
+| Maximum variance | $\max_W \operatorname{tr}(W^\top S W)$ | find the directions the data spreads out along | Rayleigh quotient, Ky Fan |
+| Maximum projected energy | $\max_W \lVert XW\rVert_F^2$ | keep as much squared magnitude as $k$ directions can hold | Frobenius norm, Parseval |
+| Minimum reconstruction error | $\min_W \lVert X - XWW^\top\rVert_F^2$ | find the flat the cloud sits closest to | orthogonal projector, Pythagoras |
+| Best rank-$k$ approximation | $\min_{\operatorname{rank} B \le k}\lVert X - B\rVert_F$ | find the simplest matrix that still looks like $X$ | Eckart–Young–Mirsky |
+| Covariance eigendecomposition | $S = V\Lambda V^\top$, take $V_k$ | the axes of the data's ellipsoid, with their lengths | symmetric eigendecomposition |
+| Truncated SVD | $X = U\Sigma V^\top$, take $V_k$ | the same axes, without ever forming $S$ | singular value decomposition |
+| Probabilistic PCA | $\max_{W,\sigma^2} \ \log p(X \mid W, \sigma^2)$ | a generative model whose MLE lands on the same subspace | Gaussian latent variable model, EM |
+
+The first three rows are one objective in three notations. Rows 5 and 6 are two routes to its solution. Row 4 is the same optimum stated about matrices instead of subspaces. Row 7 is a different problem that happens to agree at its maximum.
+
+## From matrices to tensors
+
+PCA is the base case that makes higher-order factorizations legible, and the reason it is worth doing first is that the base case is the one where the six views coincide.
+
+The chain of @sec-chain runs on one fact that does not generalise: Eckart–Young. For matrices, the best rank-$k$ approximation is the truncation of one decomposition, the optimal rank-$k$ answer is nested inside the optimal rank-$(k{+}1)$ answer, and greedy is optimal. For tensors, all three fail. Truncated HOSVD is quasi-optimal, off by at most a factor $\sqrt{N}$ in $N$ modes but not optimal; the best rank-$k$ CP decomposition need not exist at all, since the set of tensors of rank at most $k$ is not closed; and CP components are not nested, so rank-2 is not rank-1 plus a correction.
+
+So the tensor posts spend their effort on things PCA never has to decide: which product the operator lives under, which mode to unfold, which decomposition trades memory for accuracy on this cube. [Tensor Factorizations and Tensor Inverses](../tensor-factorizations/) sets out CP, Tucker, TT, and t-SVD on a synthetic cube; [Uses of Tensor Factorizations](../uses-of-tensor-factorizations/) works the compression case. Both start from the assumption that a reader knows what a truncated SVD buys, and that is the assumption PCA supplies.
+
+One. Object. Six. Windows. Centre. First. Missing. Data. Breaks. It.
+
+## References
+
+- Eckart, C., and Young, G. (1936). [The approximation of one matrix by another of lower rank](https://doi.org/10.1007/BF02288367). *Psychometrika* 1(3), 211–218.
+- Golub, G. H., and Van Loan, C. F. (2013). *Matrix Computations*, 4th edition. Johns Hopkins University Press.
+- Hotelling, H. (1933). [Analysis of a complex of statistical variables into principal components](https://doi.org/10.1037/h0071325). *Journal of Educational Psychology* 24(6), 417–441.
+- Li, Y., et al. (2023). Neutrophil metabolomics in COVID-19. Metabolomics Workbench study [ST002477](https://www.metabolomicsworkbench.org/data/DRCCMetadata.php?Mode=Study&StudyID=ST002477), CC BY 4.0.
+- Mirsky, L. (1960). [Symmetric gauge functions and unitarily invariant norms](https://doi.org/10.1093/qmath/11.1.50). *The Quarterly Journal of Mathematics* 11(1), 50–59.
+- Pearson, K. (1901). [On lines and planes of closest fit to systems of points in space](https://doi.org/10.1080/14786440109462720). *Philosophical Magazine* 2(11), 559–572.
+- Tipping, M. E., and Bishop, C. M. (1999). [Probabilistic principal component analysis](https://doi.org/10.1111/1467-9868.00196). *Journal of the Royal Statistical Society, Series B* 61(3), 611–622.
+- [MovieLens 100K](https://grouplens.org/datasets/movielens/100k/) — GroupLens, University of Minnesota; Harper and Konstan (2015), *ACM TiiS* 5(4).
+- [The Directions a Matrix Refuses to Turn](../eigendecomposition/) — eigenvectors and eigenvalues from scratch.
+- [The Matrix That Rotates, Stretches, and Rotates Again](../svd-rotate-stretch-rotate/) — SVD geometry, and the precision case against forming $X^\top X$.
+- [Neutrophil Metabolomes as a Matrix](../neutrophil-metabolome-axis/) — clustering the same 75 × 285 file, and why a line through the group means is not a disease axis.
+- [Tensor Factorizations and Tensor Inverses](../tensor-factorizations/) — CP, Tucker, TT, and t-SVD, where Eckart–Young stops applying.
+- [Uses of Tensor Factorizations](../uses-of-tensor-factorizations/) — the compression case in three and four modes.
