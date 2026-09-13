@@ -8,9 +8,9 @@ Run it yourself; the post never touches the network.
 **MovieLens.** GroupLens ml-100k is 943 users x 1682 films with 100,000
 ratings, so 93.7% of the user-by-film grid is empty. Every equivalence this
 post derives assumes a fully observed matrix, and the largest complete
-rectangle inside ml-100k is tiny -- the script measures it and records the
-number in `manifest.json`, which the post quotes. So the matrix the post
-actually uses is the complete users-by-genre table: for each user, the mean
+rectangle a greedy peel can find is tiny -- the script measures that lower
+bound and records it in `manifest.json`, which the post quotes. So the matrix
+the post uses is the complete users-by-genre table: for each user, the mean
 rating they gave in each genre. A cell is defined whenever that user rated at
 least MIN_PER_GENRE films carrying that genre tag, and the script keeps the
 users for whom every kept genre clears that bar. No holes, no imputation.
@@ -92,8 +92,19 @@ def parse(data: str, items: str, genres: str):
     return user, film, score, names, flags
 
 
-def largest_complete_film_block(user, film, score) -> tuple[int, int]:
-    """Peel rows and columns until no cell is missing. Returns (users, films)."""
+def greedy_complete_film_block(user, film, score) -> tuple[int, int]:
+    """Find a complete users-by-films rectangle by greedy peeling.
+
+    Seeds on the 400 densest users and 200 densest films, then drops whichever
+    single row or column is emptiest until no cell is missing. The result is a
+    **lower bound**, not the maximum: finding the largest complete submatrix is
+    the maximum edge biclique problem, which is NP-hard, and the seed window
+    puts any block outside it out of reach. The post says so rather than
+    claiming a maximum, and compares the number against what aggregating to
+    genres returns instead.
+
+    Returns (users, films).
+    """
     grid = np.zeros((user.max() + 1, film.max() + 1))
     grid[user, film] = score
     seen = grid > 0
@@ -152,9 +163,13 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     user, film, score, names, flags = parse(*download())
 
-    block_users, block_films = largest_complete_film_block(user, film, score)
+    block_users, block_films = greedy_complete_film_block(user, film, score)
     users, kept, table, kept_counts, within = genre_table(
-        user, film, score, names, flags
+        user,
+        film,
+        score,
+        names,
+        flags,
     )
 
     header = ["user_id"] + [g.replace(",", ";") for g in kept]
@@ -180,7 +195,7 @@ def main() -> None:
             "url": MOVIELENS_URL,
             "release": "ml-100k",
             "grid_density": round(float(len(score) / ((user.max()) * (film.max()))), 4),
-            "largest_complete_film_block": [block_users, block_films],
+            "greedy_complete_film_block": [block_users, block_films],
             "n_genres": len(kept),
             "min_films_per_genre": MIN_PER_GENRE,
             "n_users": int(len(users)),
@@ -196,7 +211,7 @@ def main() -> None:
     }
     (OUT / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"wrote {OUT / 'manifest.json'}")
-    print(f"largest complete film block: {block_users} users x {block_films} films")
+    print(f"greedy complete film block: {block_users} users x {block_films} films")
 
     for name in ("abundances.tsv", "samples.tsv"):
         shutil.copyfile(SIBLING / name, OUT / name)

@@ -210,7 +210,7 @@ Neither is correct in general:
 - **Covariance** when the columns share a unit and their relative sizes are part of what you are measuring. Standardising then throws away real information.
 - **Something else** when a transform fits the measurement better than either. Dividing by an interquartile range rather than a standard deviation keeps a few extreme samples from setting the scale, and taking a log first fixes the skew a concentration usually has. @sec-metabolome does both, for those reasons.
 
-Both dataset sections settle this explicitly, and the two settle it differently: @sec-movielens has twelve columns on one $1$–$5$ rating scale, and @sec-metabolome has peak areas spanning ten orders of magnitude.
+Both dataset sections settle this explicitly, and the two settle it differently: @sec-movielens has twelve columns on one $1$–$5$ rating scale, and @sec-metabolome has per-metabolite variances spanning ten orders of magnitude.
 
 ## Singular value decomposition
 
@@ -597,7 +597,7 @@ assert np.isclose(abs(sk.components_[0] @ Vt[0]), 1.0)
 - **Provenance.** GroupLens ml-100k: 100,000 ratings from 943 users on 1,682 films, collected through the MovieLens site between September 1997 and April 1998 and released for research.
 - **Collector and motive.** The GroupLens lab at the University of Minnesota, building and evaluating recommender algorithms. Ratings are volunteered by people choosing what to rate, so they are not a random sample of opinions.
 - **What this post uses.** For each user, the mean rating they gave in each of the 12 most widely rated genres, keeping users with at least three rated films in every one of those genres. That is a complete $313 \times 12$ table with no missing cells.
-- **Why not the ratings matrix itself.** 93.7% of the user-by-film grid is empty, and the equivalences need every entry observed (@sec-assumptions). The largest fully observed user-by-film rectangle inside ml-100k is 30 users by 28 films — measured by peeling, not guessed. Aggregating to genres is how a complete matrix gets built at all.
+- **Why not the ratings matrix itself.** 93.7% of the user-by-film grid is empty, and the equivalences need every entry observed (@sec-assumptions). Peeling the densest rows and columns until no cell is missing leaves a complete rectangle of 30 users by 28 films. That is a lower bound and not the maximum — finding the largest complete submatrix is the maximum edge biclique problem, which is NP-hard, so the honest claim is that greedy peeling finds nothing better. Aggregating to genres is the alternative, and it returns 313 complete rows instead of 30.
 - **What one cell is.** A mean over anywhere from 3 films to 410, and the table records only the mean. A companion file keeps the counts, because a cell averaging 3 opinions and a cell averaging 400 are not the same measurement and the difference decides what the spectrum can support.
 - **Scale.** All twelve columns are mean ratings on the same $1$–$5$ scale, so @sec-scaling's units problem does not arise here — which is why this section can test the scaling choice rather than be forced into it.
 - **What being wrong costs.** Nothing clinical. A misread taste axis ships a worse recommendation.
@@ -616,9 +616,9 @@ WITHIN = manifest["within_cell_rating_variance"]
 print(f"table: {G.shape[0]} users x {G.shape[1]} genres, "
       f"missing cells: {int(np.isnan(G).sum())}")
 print(f"full grid density: {manifest['grid_density']:.4f}")
-print(f"largest complete user-by-film block: "
-      f"{manifest['largest_complete_film_block'][0]} x "
-      f"{manifest['largest_complete_film_block'][1]}")
+print(f"complete user-by-film block found by peeling: "
+      f"{manifest['greedy_complete_film_block'][0]} x "
+      f"{manifest['greedy_complete_film_block'][1]}")
 print(f"films behind a cell: min {C.min():.0f}, median {np.median(C):.0f}, "
       f"max {C.max():.0f}; {(C < 10).mean():.1%} of cells use fewer than 10")
 print(f"variance of a single rating within a cell: {WITHIN}")
@@ -627,7 +627,7 @@ for j in np.argsort(np.median(C, axis=0)):
     print(f"   {genres.columns[j]:12s} {np.median(C[:, j]):5.0f}")
 ```
 
-Drama cells average 69 films; Horror and Mystery cells average 9. Every cell is one number in the table regardless, and that mismatch comes back in @sec-support.
+Drama cells hold a median of 69 films; Horror and Mystery cells hold 9. Every cell is one number in the table regardless, and that mismatch comes back in @sec-support.
 
 ### The upstream ask
 
@@ -763,14 +763,25 @@ def pc1_of(M, standardise=False):
     return np.linalg.svd(A, full_matrices=False)[2][0]
 
 
-def bootstrap_wobble(M, standardise=False, n_boot=400):
-    """Angle between PC1 of a resample and PC1 of the table, in degrees."""
-    v0 = pc1_of(M, standardise)
-    cos = [
-        abs(pc1_of(M[rng.integers(0, M.shape[0], M.shape[0])], standardise) @ v0)
-        for _ in range(n_boot)
-    ]
-    return np.degrees(np.arccos(np.clip(cos, 0.0, 1.0)))
+def top_of(M, k):
+    A = M - M.mean(axis=0)
+    return np.linalg.svd(A, full_matrices=False)[2][:k].T
+
+
+def bootstrap_wobble(M, k=1, n_boot=400, seed=11):
+    """Largest principal angle between a resample's top-k subspace and the table's.
+
+    Its own generator, not the shared `rng`: otherwise these figures move
+    whenever an unrelated cell earlier in the post draws a different number of
+    random values, and the prose quoting them goes stale silently.
+    """
+    boot = np.random.default_rng(seed)
+    W0 = top_of(M, k)
+    out = []
+    for _ in range(n_boot):
+        Wb = top_of(M[boot.integers(0, M.shape[0], M.shape[0])], k)
+        out.append(principal_angles(W0, Wb).max())
+    return np.array(out)
 
 
 # Shrink each cell towards the user's own level in proportion to how few films
@@ -794,11 +805,21 @@ v_shrunk = pc1_of(S_shrunk)
 for j in np.argsort(-np.abs(v_shrunk))[:6]:
     print(f"   {genres.columns[j]:12s} {v_shrunk[j]:+.3f}")
 
+# How far down does a subspace stay put? Same question for the top two and top
+# three, since the bullet at the end of this section rests on the answer.
+print("\ndebiased + shrunk, top-k subspace under resampling:")
+subspace = {1: wobble["debiased + shrunk"]}
+for k_top in (2, 3):
+    subspace[k_top] = bootstrap_wobble(S_shrunk, k=k_top)
+for k_top, w in subspace.items():
+    print(f"   top {k_top}: median {np.median(w):5.1f} deg, "
+          f"90th pct {np.percentile(w, 90):5.1f} deg")
+
 assert np.median(wobble["raw"]) < np.median(wobble["debiased + shrunk"])
 assert np.median(wobble["debiased + shrunk"]) < np.median(wobble["debiased"])
 ```
 
-The generosity axis is solid — resampling moves it a median of $2.3^\circ$. The debiased leading axis moves $20.1^\circ$, with a tenth of resamples past $37.7^\circ$: it is not one direction, it is whichever of several near-tied directions the sample happened to favour. Weighting each cell by how many films it averages, through the shrinkage every recommender baseline already applies, halves that to $10.3^\circ$ and gives an axis that reads as an axis — Action $+0.507$, Sci-Fi $+0.342$, Adventure $+0.321$ against Drama $-0.483$ and Comedy $-0.387$.
+The generosity axis is solid — resampling moves it a median of $2.3^\circ$. The debiased leading axis moves $20.3^\circ$, with a tenth of resamples past $38.1^\circ$: it is not one direction, it is whichever of several near-tied directions the sample happened to favour. Weighting each cell by how many films it averages, through the shrinkage every recommender baseline already applies, halves that to $10.2^\circ$ and gives an axis that reads as an axis — Action $+0.507$, Sci-Fi $+0.342$, Adventure $+0.321$ against Drama $-0.483$ and Comedy $-0.387$.
 
 That also settles the scaling question @sec-scaling left open for this table.
 
@@ -812,17 +833,18 @@ print(f"   debiased and shrunk   {Ss.var(axis=0, ddof=1).max() / Ss.var(axis=0, 
 
 gap = float(np.degrees(np.arccos(min(1.0, abs(pc1_of(S_shrunk) @ pc1_of(S_shrunk, True))))))
 print(f"\nangle between covariance PC1 and correlation PC1: {gap:.2f} deg")
-print(f"bootstrap wobble of that same PC1:                {np.median(wobble['debiased + shrunk']):.2f} deg")
+print(f"bootstrap wobble of that same PC1:                {np.median(wobble["debiased + shrunk"]):.2f} deg")
 ```
 
-Covariance and correlation PCA disagree by $9.52^\circ$ here, which is inside the $10.3^\circ$ the direction moves under resampling. On twelve columns that already share a rating scale, the scaling choice is not resolvable and not worth arguing about. @sec-metabolome is the opposite case.
+Covariance and correlation PCA disagree by $9.52^\circ$ here, which is inside the $10.2^\circ$ the direction moves under resampling. On twelve columns that already share a rating scale, the scaling choice is not resolvable and not worth arguing about. @sec-metabolome is the opposite case.
 
 ### Downstream impact
 
 The team asked how many taste dimensions the catalogue has. The honest answer is not the number they were expecting.
 
 - **One axis is solid, and it is not taste.** Rating generosity, 65.66% of the raw variance, stable to $2.3^\circ$. It belongs in the model as a per-user offset, which is where recommender baselines have always put it, not in a taste profile.
-- **Two or three taste axes, reported with their wobble.** After debiasing and shrinking, the leading axis is Action/Sci-Fi/Adventure against Drama/Comedy and moves $10.3^\circ$ under resampling. The tempting reading — four components, 71% of the debiased variance — counts noise as taste: 64% of that variance is sampling error in cell means, and in the thinnest columns almost all of it is. Mystery is 88% noise and War 83%, which is what nine films per cell buys.
+- **A three-dimensional taste space, and one axis inside it worth naming.** After debiasing and shrinking, the leading axis is Action/Sci-Fi/Adventure against Drama/Comedy, stable to $10.2^\circ$. The three-dimensional span is stable too, at $14.6^\circ$. What is *not* stable is the pair in between: the top-two subspace moves $17.2^\circ$ with a tenth of resamples past $57^\circ$, because components 2 and 3 are near-tied and swap. Ship three coordinates; name only the first.
+- **Four components is over-reading.** The tempting reading — four components, 71% of the debiased variance — counts noise as taste: 64% of that variance is sampling error in cell means, and in the thinnest columns almost all of it is. Mystery is 88% noise on a median of nine films per cell, and War 83% on eighteen.
 - **The fix is more ratings per cell, not more components.** Noise per cell falls as $1/n_{ij}$, so the way to resolve a fourth axis is deeper sampling in the thin genres, not a larger $k$ on this table.
 
 The wider consequence is the assumption that forced the genre aggregation in the first place. On the raw user-by-film matrix, 93.7% of entries are missing, so $\|X\|_F^2$ is not a fixed quantity and the projector identity of @sec-projector has nothing to hold constant. Minimum reconstruction error over the *observed* entries and maximum variance stop being the same problem. That gap is why production recommenders fit a factorization to the observed cells directly — alternating least squares, or gradient descent on the observed residuals, both carrying the user-bias term this section arrived at the long way — instead of running PCA on a filled-in matrix.
@@ -830,7 +852,7 @@ The wider consequence is the assumption that forced the genre aggregation in the
 ```{python}
 #| label: fig-movielens
 #| fig-cap: "Left: PC1 score against the user's own mean rating, as measured. Centre: share of variance per component for the three tables over the 11 components the debiased ones have, against the average noise share. Right: how far PC1 moves under 400 bootstrap resamples."
-#| fig-alt: "Three panels. The left is a tight straight-line scatter of PC1 score against mean rating. The centre plots three descending explained-variance curves, the raw one starting near 0.66 and the debiased ones near 0.24, against a dashed noise floor. The right shows three bootstrap angle distributions, narrow for the raw table and wide for the debiased one."
+#| fig-alt: "Three panels. The left is a tight straight-line scatter of PC1 score against mean rating. The centre plots three descending explained-variance curves, the raw one starting near 0.66 and the debiased ones near 0.24, against a dashed noise floor for each normalisation. The right shows three bootstrap angle distributions, narrow for the raw table and wide for the debiased one."
 #| fig-width: 9.2
 #| fig-height: 3.4
 fig, (ax_a, ax_b, ax_c) = plt.subplots(1, 3, figsize=(9.2, 3.4))
@@ -852,10 +874,15 @@ for name, M, colour, mark in (
     sv = np.linalg.svd(M - M.mean(axis=0), compute_uv=False) ** 2
     ax_b.plot(ks, (sv / sv.sum())[:n_show], mark + "-", color=colour, ms=3.5,
               lw=1.3, label=name)
-floor_share = noise_cols.sum() / obs_deb / n_show
-ax_b.axhline(floor_share, color=MUTED, lw=1.0, ls="--")
-ax_b.text(n_show, floor_share + 0.015, "noise floor", color=MUTED,
-          fontsize=7.5, ha="right")
+# One floor per normalisation: each curve is a share of its own table's total
+# variance, and the two totals differ (3.3362 raw against 1.1528 debiased), so a
+# single line would not be comparable across them.
+for share, colour, label in (
+    (noise_raw / obs_raw / n_show, ACCENT, "noise floor, as measured"),
+    (noise_cols.sum() / obs_deb / n_show, CORAL, "noise floor, debiased"),
+):
+    ax_b.axhline(share, color=colour, lw=1.0, ls="--", alpha=0.8)
+    ax_b.text(n_show, share + 0.012, label, color=colour, fontsize=7, ha="right")
 ax_b.set_xlabel("component")
 ax_b.set_ylabel("share of variance")
 ax_b.set_ylim(0, 0.72)
@@ -898,6 +925,13 @@ assert list(abund.columns) == list(meta["sample_id"])
 Xm_raw = abund.to_numpy(dtype=np.float64).T
 labels = meta["group"].to_numpy()
 
+# Code severity once, here, and refuse anything the coding does not cover: a
+# fourth group or a stray case variant would otherwise be silently scored as
+# Severe and shift every correlation computed from it.
+GROUPS = ("Control", "Mild", "Severe")
+assert set(labels) == set(GROUPS), sorted(set(labels))
+severity = np.select([labels == "Control", labels == "Mild"], [0.0, 1.0], 2.0)
+
 t = np.log1p(Xm_raw)
 median = np.median(t, axis=0)
 iqr = np.subtract(*np.percentile(t, [75, 25], axis=0))
@@ -907,7 +941,7 @@ Xm = Zm - Zm.mean(axis=0)
 
 n_m, d_m = Xm.shape
 print(f"matrix: {n_m} samples x {d_m} metabolites")
-print("groups:", {g: int((labels == g).sum()) for g in ("Control", "Mild", "Severe")})
+print("groups:", {g: int((labels == g).sum()) for g in GROUPS})
 ```
 
 ### Scaling this file {#sec-metabolome-scaling}
@@ -949,17 +983,26 @@ ang = lambda a, b: float(np.degrees(np.arccos(min(1.0, abs(a @ b)))))
 print(f"\nangle from log/IQR PC1 to covariance PC1 : {ang(Vt_log_m[0], Vt_cov_m[0]):.2f} deg")
 print(f"angle from log/IQR PC1 to correlation PC1: {ang(Vt_log_m[0], Vt_cor_m[0]):.2f} deg")
 
-sev = np.select([labels == "Control", labels == "Mild"], [0.0, 1.0], 2.0)
 for name, A_, Vt_ in (("covariance", A_cov, Vt_cov_m), ("correlation", A_cor, Vt_cor_m),
                       ("log1p + IQR", A_log, Vt_log_m)):
-    print(f"  corr(PC1, severity) under {name:12s}: {np.corrcoef(A_ @ Vt_[0], sev)[0, 1]:+.4f}")
+    print(f"  corr(PC1, severity) under {name:12s}: "
+          f"{np.corrcoef(A_ @ Vt_[0], severity)[0, 1]:+.4f}")
+# Standard error of a correlation at this n, for reading those three apart.
+r_ref = float(np.corrcoef(A_log @ Vt_log_m[0], severity)[0, 1])
+print(f"  standard error of a correlation at n = {n_m}: "
+      f"{(1 - r_ref**2) / np.sqrt(n_m - 3):.4f}")
 
 assert ang(Vt_log_m[0], Vt_cov_m[0]) > 45.0
 ```
 
 Metabolite variances span a ratio of $9.49 \times 10^9$. Run covariance PCA on the file as measured and PC1 takes 49.5% of the variance with **51.9% of its squared loading on choline alone** — the single highest-variance column — with Glycylglutamine and Creatine next. That component is a report on which assay gave the biggest numbers.
 
-It is also a different answer, not a noisier version of the same one: covariance PC1 sits $78.35^\circ$ from the log/IQR PC1, close to orthogonal. Standardising pulls it back to $23.53^\circ$, and log-transforming first — which fixes the right-skew as well as the scale — is what the rest of this section uses. Correlation with severity follows: $+0.4561$ as measured, $+0.5472$ standardised, $+0.5363$ on log/IQR.
+It is also a different answer, not a noisier version of the same one: covariance PC1 sits $78.35^\circ$ from the log/IQR PC1, close to orthogonal. Standardising pulls it back to $23.53^\circ$, and log-transforming first — which fixes the right-skew as well as the scale — is what the rest of this section uses.
+
+Correlation with severity is $+0.4561$ as measured, $+0.5472$ standardised, and $+0.5363$ on log/IQR, and those numbers are worth reading carefully because they do **not** pick the winner. Two reasons.
+
+- **The gap is nothing.** A correlation at $n = 75$ carries a standard error of about $0.084$. The $0.011$ between standardised and log/IQR is an eighth of that, so the two are indistinguishable on this sample; only the as-measured route is visibly worse.
+- **Severity is not allowed to choose.** The job in @sec-metabolome is a quality-control gate that runs *before* the labels are used, and picking the transform that best correlates with the label is exactly the leak the gate exists to prevent. The transform has to be argued from the measurement — peak areas are right-skewed and outlier-prone, so log and an interquartile range — and then the severity correlation is a result, not a criterion.
 
 ```{python}
 #| label: fig-scaling
@@ -1028,13 +1071,12 @@ Both routes still agree — the chain does not care that the matrix is wide. Wha
 ```{python}
 #| label: metabolome-scores
 scores_m = Xm @ Vtm[:2].T
-severity = np.select([labels == "Control", labels == "Mild"], [0.0, 1.0], 2.0)
 corr_sev = float(np.corrcoef(scores_m[:, 0], severity)[0, 1])
 
 print(f"PC1 {lam_m[0] / lam_m.sum():.1%} of variance, "
       f"PC2 {lam_m[1] / lam_m.sum():.1%}, "
       f"first two together {np.cumsum(lam_m / lam_m.sum())[1]:.1%}")
-for g in ("Control", "Mild", "Severe"):
+for g in GROUPS:
     s = scores_m[labels == g, 0]
     print(f"  {g:8s} PC1 mean {s.mean():+6.2f}  sd {s.std():5.2f}")
 print(f"corr(PC1 score, severity coded 0/1/2) = {corr_sev:.4f}")
@@ -1070,7 +1112,7 @@ ax_s.set_ylabel("eigenvalue (log scale)")
 ax_s.set_title(f"{d_m} features, {n_m - 1} directions")
 
 COLOURS = {"Control": TEAL, "Mild": GOLD, "Severe": CORAL}
-for g in ("Control", "Mild", "Severe"):
+for g in GROUPS:
     sel = labels == g
     ax_p.scatter(scores_m[sel, 0], scores_m[sel, 1], s=26,
                  color=COLOURS[g], alpha=0.85, label=g)
@@ -1128,7 +1170,7 @@ Where the chain of @sec-chain stops holding:
 - **A non-Frobenius loss.** Robust PCA and $\ell_1$ variants optimise something else and reach a different subspace; Eckart–Young covers the Frobenius and spectral norms and no others.
 - **Units and scaling.** Covariance PCA on metabolite peak areas and correlation PCA on the same file are different questions, $78.35^\circ$ apart. @sec-scaling has the choice; @sec-metabolome-scaling has the bill.
 - **Centring choice.** Column centring and row centring give different leading components, as @sec-movielens measures — and which one is right is a statement about the measurement, not about the data.
-- **Measurement noise sets a floor on $k$.** A component whose eigenvalue is the size of the sampling noise in the entries is not a direction. On the debiased MovieLens table, 64% of the variance is noise in the cell means and the leading direction moves $20.1^\circ$ under resampling. The scree plot does not show this; only a noise model or a resample does.
+- **Measurement noise sets a floor on $k$.** A component whose eigenvalue is the size of the sampling noise in the entries is not a direction. On the debiased MovieLens table, 64% of the variance is noise in the cell means and the leading direction moves $20.3^\circ$ under resampling. The scree plot does not show this; only a noise model or a resample does.
 - **$n \ll d$.** The rank of the covariance is capped at $n-1$. Eigenvalues past that are zero by arithmetic, and any interpretation of them is interpretation of nothing.
 - **Nonlinear structure.** PCA fits a flat. A curved manifold gets a flat fitted to it, with no warning in the spectrum.
 - **Signs and rotations.** Loadings are determined only up to sign, and up to rotation inside a tied block — which is the multiplier matrix of @sec-lagrange being free up to an orthogonal $R$. Compare reconstructions, not loadings.
