@@ -128,7 +128,24 @@ def genre_table(user, film, score, names, flags):
     enough[0] = False  # user ids start at 1
     users = np.where(enough)[0]
     table = totals[np.ix_(users, keep)] / counts[np.ix_(users, keep)]
-    return users, [names[i] for i in keep], table
+    kept_counts = counts[np.ix_(users, keep)]
+
+    # Pooled variance of single ratings *within* a user-by-genre cell. This is
+    # the scale of the sampling noise in each cell mean, and it is much smaller
+    # than the variance of all 100,000 ratings, because the user's own level and
+    # the genre's own level are already out of it.
+    ss = 0.0
+    df = 0
+    for gi in keep:
+        sel = flags[film, gi]
+        u_sel, s_sel = user[sel], score[sel]
+        for uid in users:
+            vals = s_sel[u_sel == uid]
+            if vals.size > 1:
+                ss += float(((vals - vals.mean()) ** 2).sum())
+                df += vals.size - 1
+    within = ss / df
+    return users, [names[i] for i in keep], table, kept_counts, within
 
 
 def main() -> None:
@@ -136,7 +153,9 @@ def main() -> None:
     user, film, score, names, flags = parse(*download())
 
     block_users, block_films = largest_complete_film_block(user, film, score)
-    users, kept, table = genre_table(user, film, score, names, flags)
+    users, kept, table, kept_counts, within = genre_table(
+        user, film, score, names, flags
+    )
 
     header = ["user_id"] + [g.replace(",", ";") for g in kept]
     lines = [",".join(header)]
@@ -145,6 +164,16 @@ def main() -> None:
     dest = OUT / "movielens_genres.csv"
     dest.write_text("\n".join(lines) + "\n")
     print(f"wrote {dest} ({len(users)} users x {len(kept)} genres, no missing cells)")
+
+    # How many films each cell averages over. A mean of three ratings and a mean
+    # of two hundred are both one number in the table, and the post needs to say
+    # which cells are which.
+    lines = [",".join(header)]
+    for uid, row in zip(users, kept_counts):
+        lines.append(",".join([str(uid)] + [str(int(v)) for v in row]))
+    dest = OUT / "movielens_counts.csv"
+    dest.write_text("\n".join(lines) + "\n")
+    print(f"wrote {dest} (films behind each cell)")
 
     manifest = {
         "movielens": {
@@ -155,6 +184,7 @@ def main() -> None:
             "n_genres": len(kept),
             "min_films_per_genre": MIN_PER_GENRE,
             "n_users": int(len(users)),
+            "within_cell_rating_variance": round(within, 4),
             "genres": kept,
         },
         "metabolome": {

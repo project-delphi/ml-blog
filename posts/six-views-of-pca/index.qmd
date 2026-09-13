@@ -1,12 +1,12 @@
 ---
 title: "Six Views of PCA"
 subtitle: "Maximum variance, maximum projected energy, minimum reconstruction error, best rank-k approximation, covariance eigenvectors, truncated SVD — one optimization problem, written six ways, with the bridge derived rather than asserted."
-description: "PCA is not six algorithms. One projector identity turns minimum reconstruction error into maximum projected energy, the trace turns energy into variance, Ky Fan turns variance into eigenvectors, and the SVD closes the loop onto the best rank-k approximation. Then the chain is run on MovieLens genre ratings and a neutrophil metabolome."
+description: "PCA is not six algorithms. One projector identity turns minimum reconstruction error into maximum projected energy, the trace turns energy into variance, a Lagrange multiplier turns variance into the eigenvector equation, and the SVD closes the loop onto the best rank-k approximation. Then the chain is run on MovieLens genre ratings and a neutrophil metabolome, where the scaling choice and the noise floor decide the answer."
 author: "Ravi Kalia"
 date: "2026-09-13"
 categories: [Linear Algebra, Machine Learning, Mathematics]
 image: "./cover.png"
-tags: [PCA, SVD, eigendecomposition, low-rank approximation, dimensionality reduction, probabilistic PCA, Eckart-Young]
+tags: [PCA, SVD, eigendecomposition, low-rank approximation, dimensionality reduction, probabilistic PCA, Eckart-Young, Lagrange multipliers, correlation matrix]
 jupyter: pca-blog
 resources:
   - cover.png
@@ -116,7 +116,7 @@ $$
 w_1 = \arg\max_{w \neq 0} \frac{w^\top X^\top X w}{w^\top w}.
 $$
 
-The quotient measures how much $X^\top X$ stretches a direction, with the length of $w$ divided out so that only the direction matters. Its maximum is the largest eigenvalue of $X^\top X$, attained at the matching eigenvector — that is the Rayleigh–Ritz theorem, and @sec-kyfan sketches why.
+The quotient measures how much $X^\top X$ stretches a direction, with the length of $w$ divided out so that only the direction matters. Its maximum is the largest eigenvalue of $X^\top X$, attained at the matching eigenvector — that is the Rayleigh–Ritz theorem, and @sec-lagrange derives it from the constraint rather than quoting it.
 
 For $k$ components, sum the variances of the $k$ projected coordinates. That sum is a trace:
 
@@ -158,7 +158,7 @@ Geometrically, $\hat x_i = WW^\top x_i$ is the closest point to $x_i$ on the sub
 
 This is the one view that is not obviously about variance at all. It asks for a good *fit*, not a large *spread*. @sec-projector is the line that makes them the same question.
 
-## Best rank-$k$ approximation
+## Best rank-$k$ approximation {#sec-lowrank}
 
 Forget subspaces and ask for a matrix. Among all $n \times d$ matrices $B$ of rank at most $k$, which is closest to $X$?
 
@@ -192,6 +192,25 @@ S = V\Lambda V^\top, \qquad \Lambda = \operatorname{diag}(\lambda_1 \ge \dots \g
 $$
 
 The principal directions are the leading columns of $V$, and $\lambda_j$ is the variance of the data along direction $v_j$ — set $W = v_j$ in the trace objective and read it off. Because $\operatorname{tr}(S) = \sum_j \lambda_j$ is the total variance across all $d$ features, $\lambda_j / \sum_i \lambda_i$ is the fraction of variance explained by component $j$.
+
+## Covariance or correlation {#sec-scaling}
+
+Which matrix you hand to the six views is a decision, and it is made before any of them runs.
+
+- **Covariance PCA** works on $S = X^\top X/(n-1)$ with the columns as measured.
+- **Correlation PCA** divides each column by its standard deviation first. The covariance of the standardised columns *is* the correlation matrix, so this is the same algorithm on a different matrix — not a seventh view.
+
+The reason it matters is that $\operatorname{tr}(S) = \sum_j \lambda_j$ is the sum of the column variances, so a column with a large variance brings a large share of the total for the components to compete over. Push that to the limit: if one column has a variance a thousand times any other, the direction of largest variance is that column, and PC1 reports the loudest instrument rather than the strongest pattern.
+
+The sharper way to say it: **covariance PCA is not invariant to rescaling a column.** Measure a length in metres instead of centimetres and its variance falls by $10^4$, the eigenvectors of $S$ move, and PC1 changes — even though nothing about the data changed. So for features in different units, covariance PCA is answering a question that depends on a choice of units, which is rarely the question anyone meant. Correlation PCA removes the choice by making every column variance $1$.
+
+Neither is correct in general:
+
+- **Correlation** when columns carry different units or wildly different scales, or when you want every feature to get an equal vote. The cost is that a column which is pure noise is amplified to the same variance as a column carrying signal.
+- **Covariance** when the columns share a unit and their relative sizes are part of what you are measuring. Standardising then throws away real information.
+- **Something else** when a transform fits the measurement better than either. Dividing by an interquartile range rather than a standard deviation keeps a few extreme samples from setting the scale, and taking a log first fixes the skew a concentration usually has. @sec-metabolome does both, for those reasons.
+
+Both dataset sections settle this explicitly, and the two settle it differently: @sec-movielens has twelve columns on one $1$–$5$ rating scale, and @sec-metabolome has peak areas spanning ten orders of magnitude.
 
 ## Singular value decomposition
 
@@ -267,9 +286,49 @@ $$
 
 $W^\top X^\top X W$ is the $k \times k$ covariance of the scores, up to the factor $n-1$. Its trace is the total projected variance. So maximum energy is maximum projected variance, and the $(n-1)$ never affects the maximiser.
 
-### From variance to eigenvectors {#sec-kyfan}
+### Where the eigenvectors come from {#sec-lagrange}
 
-What maximises $\operatorname{tr}(W^\top A W)$ over $W^\top W = I_k$, for symmetric $A$ with eigenvalues $\lambda_1 \ge \dots \ge \lambda_d$?
+Nothing so far mentioned eigenvectors. They arrive as the solution of a constrained maximisation, and the constraint is what puts them there.
+
+Maximising $w^\top A w$ with $A = X^\top X$ has no answer on its own: scale $w$ up and the objective grows without bound. The constraint $w^\top w = 1$ is what makes the problem well posed, and a constrained stationary point is found by **Lagrange multipliers** — add the constraint to the objective with an unknown coefficient, then look for a point where the combined function is flat in every direction:
+
+$$
+\mathcal{L}(w, \lambda) = w^\top A w - \lambda\,(w^\top w - 1).
+$$
+
+Differentiating in $w$ and setting the gradient to zero gives
+
+$$
+\nabla_w \mathcal{L} = 2Aw - 2\lambda w = 0
+\qquad \Longleftrightarrow \qquad
+Aw = \lambda w .
+$$
+
+The eigenvector equation is the first-order condition. It was not assumed, and no eigendecomposition was invoked to get it: **every stationary point of projected variance on the unit sphere is an eigenvector of $X^\top X$**, and nothing else is.
+
+The multiplier is not bookkeeping either. At a stationary point,
+
+$$
+w^\top A w = w^\top (\lambda w) = \lambda\,w^\top w = \lambda ,
+$$
+
+so $\lambda$ *is* the value of the objective there — the projected energy, and $\lambda/(n-1)$ the projected variance. The $d$ stationary points are the $d$ eigenvectors, each scoring its own eigenvalue, so the maximum is the largest one and the argmax is its eigenvector. That is Rayleigh–Ritz, derived rather than quoted.
+
+For $k$ components the constraint $W^\top W = I_k$ is $k(k+1)/2$ scalar equations, so the multiplier is a symmetric $k \times k$ matrix $\Lambda$:
+
+$$
+\mathcal{L}(W, \Lambda) = \operatorname{tr}(W^\top A W) - \operatorname{tr}\!\left[\Lambda (W^\top W - I_k)\right],
+\qquad
+\nabla_W \mathcal{L} = 2AW - 2W\Lambda = 0 .
+$$
+
+So $AW = W\Lambda$. A stationary $W$ need not hold eigenvectors — but $\Lambda$ is symmetric, so $\Lambda = RDR^\top$ for an orthogonal $R$, and $\widetilde W = WR$ satisfies $A\widetilde W = \widetilde W D$. Its columns *are* eigenvectors, and it spans the same subspace as $W$.
+
+That is the rotation indeterminacy of @sec-lowrank falling out of the derivation: the stationarity condition pins the **subspace**, and leaves the basis inside it free up to the orthogonal $R$ that diagonalises the multiplier.
+
+### Which eigenvectors {#sec-kyfan}
+
+Stationarity gives $k$ eigenvectors; it does not say which $k$. For that, take $A$ symmetric with eigenvalues $\lambda_1 \ge \dots \ge \lambda_d$ and ask what maximises $\operatorname{tr}(W^\top A W)$ over $W^\top W = I_k$.
 
 Write $A = V\Lambda V^\top$ and set $M = V^\top W$, which satisfies $M^\top M = I_k$. Then
 
@@ -315,7 +374,7 @@ The chain holds under conditions, and each one is a real way to break it.
 - **$X$ is centred.** Without it, $X^\top X/(n-1)$ is a second-moment matrix, not a covariance, and its leading eigenvector chases the mean. The reconstruction view is then fitting a subspace through the origin rather than through the data.
 - **Every entry is observed.** The projector identity needs a complete $X$. With missing cells there is no single $\|X\|_F^2$ to hold fixed and the equivalence fails; @sec-movielens is the case.
 - **The loss is Frobenius.** Eckart–Young also holds in the spectral norm with the same minimiser, but an $\ell_1$ or Huber loss gives a different optimum and none of these identities.
-- **Feature scaling is fixed.** Rescaling a column rescales its contribution to every trace. Covariance PCA and correlation PCA are different questions with different answers, not two algorithms for one question.
+- **Feature scaling is fixed.** Rescaling a column rescales its contribution to every trace, so covariance PCA changes answer when you change units. @sec-scaling sets out the choice; @sec-metabolome measures what it costs to get wrong.
 - **The spectrum has a gap at $k$.** If $\sigma_k = \sigma_{k+1}$, the optimal subspace is not unique.
 - **Signs and rotations are free.** $v_j$ and $-v_j$ are both valid; within a tied block, so is any rotation. Reconstructions are unique where loadings are not.
 
@@ -410,7 +469,7 @@ flowchart TD
   L["<b>Best rank-k<br/>approximation</b><br/>X̂ = U_kΣ_kV_kᵀ"]
   R -->|"‖X‖²_F − ‖XW‖²_F<br/>projector identity"| E
   E -->|"‖XW‖²_F = tr(WᵀXᵀXW)<br/>cyclic trace"| V
-  V -->|"Ky Fan<br/>W = V_k"| G
+  V -->|"stationarity + Ky Fan<br/>W = V_k"| G
   G -->|"XᵀX = VΣ²Vᵀ<br/>λ = σ²/(n−1)"| D
   D -->|"Eckart–Young–Mirsky"| L
 ```
@@ -462,6 +521,34 @@ assert np.isclose(var_sweep.max(), lam[0], rtol=1e-6)
 
 A 3,601-point sweep of directions picks the same angle for maximum energy, maximum variance, and minimum residual, and that angle is PC1 to within the sweep's own resolution.
 
+The Lagrange conditions of @sec-lagrange are checkable too. The gradient $2Aw - 2\lambda w$ should vanish at PC1, and the multiplier should equal the objective there.
+
+```{python}
+#| label: demo-lagrange
+A = X.T @ X
+w1 = Vt[0]
+lam1 = float(w1 @ A @ w1)                   # the objective at the stationary point
+
+print(f"||grad L|| = ||2Aw - 2*lambda*w|| = {np.linalg.norm(2 * A @ w1 - 2 * lam1 * w1):.3e}")
+print(f"multiplier lambda        = {lam1:.6f}")
+print(f"projected energy ||Xw||^2 = {np.sum((X @ w1) ** 2):.6f}")
+print(f"lambda / (n-1)           = {lam1 / (n - 1):.6f}  vs eigenvalue {lam[0]:.6f}")
+
+# The multiplier IS the objective, and the gradient vanishes at the eigenvector.
+assert np.allclose(A @ w1, lam1 * w1)
+assert np.isclose(lam1, np.sum((X @ w1) ** 2))
+assert np.isclose(lam1 / (n - 1), lam[0])
+
+# Every eigenvector is stationary, not just the leading one -- including the
+# worst direction, which is the minimum rather than the maximum.
+for j in (0, 1):
+    wj = Vt[j]
+    assert np.allclose(A @ wj, float(wj @ A @ wj) * wj)
+print("both eigenvectors satisfy Aw = lambda w; only the larger lambda is the maximum")
+```
+
+The residual gradient is at the level of rounding, the multiplier reproduces the projected energy to six decimals, and dividing it by $n-1$ returns the eigenvalue. Both directions are stationary — the second one minimises rather than maximises, which is why stationarity alone is not enough and @sec-kyfan is needed to pick the $k$ to keep.
+
 Last, the rank ladder and the Eckart–Young claim.
 
 ```{python}
@@ -511,22 +598,36 @@ assert np.isclose(abs(sk.components_[0] @ Vt[0]), 1.0)
 - **Collector and motive.** The GroupLens lab at the University of Minnesota, building and evaluating recommender algorithms. Ratings are volunteered by people choosing what to rate, so they are not a random sample of opinions.
 - **What this post uses.** For each user, the mean rating they gave in each of the 12 most widely rated genres, keeping users with at least three rated films in every one of those genres. That is a complete $313 \times 12$ table with no missing cells.
 - **Why not the ratings matrix itself.** 93.7% of the user-by-film grid is empty, and the equivalences need every entry observed (@sec-assumptions). The largest fully observed user-by-film rectangle inside ml-100k is 30 users by 28 films — measured by peeling, not guessed. Aggregating to genres is how a complete matrix gets built at all.
+- **What one cell is.** A mean over anywhere from 3 films to 410, and the table records only the mean. A companion file keeps the counts, because a cell averaging 3 opinions and a cell averaging 400 are not the same measurement and the difference decides what the spectrum can support.
+- **Scale.** All twelve columns are mean ratings on the same $1$–$5$ scale, so @sec-scaling's units problem does not arise here — which is why this section can test the scaling choice rather than be forced into it.
 - **What being wrong costs.** Nothing clinical. A misread taste axis ships a worse recommendation.
 
 ```{python}
 #| label: movielens-load
 genres = pd.read_csv(DATA / "movielens_genres.csv", index_col=0)
+counts = pd.read_csv(DATA / "movielens_counts.csv", index_col=0)
 manifest = json.loads((DATA / "manifest.json").read_text())["movielens"]
+assert list(genres.columns) == list(counts.columns)
 
 G = genres.to_numpy()
+C = counts.to_numpy().astype(float)
+WITHIN = manifest["within_cell_rating_variance"]
+
 print(f"table: {G.shape[0]} users x {G.shape[1]} genres, "
       f"missing cells: {int(np.isnan(G).sum())}")
 print(f"full grid density: {manifest['grid_density']:.4f}")
 print(f"largest complete user-by-film block: "
       f"{manifest['largest_complete_film_block'][0]} x "
       f"{manifest['largest_complete_film_block'][1]}")
-print("genres:", ", ".join(genres.columns))
+print(f"films behind a cell: min {C.min():.0f}, median {np.median(C):.0f}, "
+      f"max {C.max():.0f}; {(C < 10).mean():.1%} of cells use fewer than 10")
+print(f"variance of a single rating within a cell: {WITHIN}")
+print("\ngenre        median films behind a cell")
+for j in np.argsort(np.median(C, axis=0)):
+    print(f"   {genres.columns[j]:12s} {np.median(C[:, j]):5.0f}")
 ```
+
+Drama cells average 69 films; Horror and Mystery cells average 9. Every cell is one number in the table regardless, and that mismatch comes back in @sec-support.
 
 ### The upstream ask
 
@@ -583,67 +684,201 @@ Every loading is positive and they are nearly equal, between 0.267 and 0.316. A 
 
 **PC1 is not a taste. It is rating generosity.** Some users give fours and fives to every genre, some give twos and threes, and that single habit is two thirds of the variance in the table. The upstream ask was about taste dimensions, and the largest-variance direction is a property of the rating scale.
 
-### Downstream impact
+### Removing the rating scale {#sec-dropfirst}
 
-The fix follows from @sec-assumptions: centring choice is part of the question. Remove each user's own mean before centring the columns, and the generosity axis is gone by construction.
+There are two ways to get the rating scale out of the answer, and it is worth being clear that they are nearly the same operation before choosing between them.
+
+- **Drop it afterwards.** Run PCA on the table as measured and throw PC1 away, keeping components 2 onwards.
+- **Remove it first.** Subtract each user's own mean rating before centring the columns — the user-bias term every recommender baseline starts with — and then run PCA.
 
 ```{python}
-#| label: movielens-double-centred
+#| label: movielens-drop-vs-debias
+def principal_angles(A, B):
+    """Angles in degrees between the column spaces of two matrices."""
+    Qa, _ = np.linalg.qr(A)
+    Qb, _ = np.linalg.qr(B)
+    s = np.linalg.svd(Qa.T @ Qb, compute_uv=False)
+    return np.degrees(np.arccos(np.clip(s, -1.0, 1.0)))
+
+
 R = G - G.mean(axis=1, keepdims=True)         # remove each user's own level
 Rc = R - R.mean(axis=0)                       # then centre the columns
 Ur, Sr, Vtr = np.linalg.svd(Rc, full_matrices=False)
 lam_r = Sr**2 / (Rc.shape[0] - 1)
 
-print(f"rank of the row-centred table: {np.linalg.matrix_rank(Rc)} (was {np.linalg.matrix_rank(Gc)})")
-print("explained variance ratio:", (lam_r / lam_r.sum())[:4].round(4))
-print("cumulative              :", np.cumsum(lam_r / lam_r.sum())[:4].round(4))
-print(f"corr(new PC1, user mean rating) = {np.corrcoef(Rc @ Vtr[0], user_mean)[0, 1]:+.4f}")
+print(f"rank: {np.linalg.matrix_rank(Rc)} after debiasing, "
+      f"{np.linalg.matrix_rank(Gc)} before")
+print("angles between PC2-PC3 of the raw fit and PC1-PC2 of the debiased fit:",
+      principal_angles(Vtg[1:3].T, Vtr[:2].T).round(2), "deg")
+share = float((Rc @ Vtg[0]).var(ddof=1) / Rc.var(axis=0, ddof=1).sum())
+print(f"share of debiased variance lying along the raw PC1: {share:.4%}")
 
-top = np.argsort(-np.abs(Vtr[0]))[:5]
-print("\nnew PC1 loadings, largest magnitude first:")
-for j in top:
-    print(f"   {genres.columns[j]:12s} {Vtr[0][j]:+.3f}")
-
-assert abs(float(np.corrcoef(Rc @ Vtr[0], user_mean)[0, 1])) < 0.05
+assert principal_angles(Vtg[1:3].T, Vtr[:2].T).max() < 5.0
 ```
 
-Three things changed, and each one is a decision the team has to make.
+The two routes land in the same place: the subspace you get by discarding PC1 sits $0.20^\circ$ and $1.33^\circ$ from the one you get by debiasing first, and only $0.045\%$ of the debiased variance survives along the direction PCA called PC1. Removing the user's level and deleting the leading component are, on this table, the same subtraction.
 
-- **The rank dropped from 12 to 11.** Subtracting each row's mean puts every row in the space orthogonal to the all-ones vector, which costs exactly one dimension. That is not a bug; the generosity direction was a real dimension of the original table and it has been deliberately removed.
-- **The answer to the ask changed.** With column centring alone, one component covered 65.66% and the report was "one axis, and it is not taste". After row centring, the leading component takes 23.53%, two take 42.33%, and four take 71.09%. A user taste profile needs about four numbers, not one.
-- **PC1 became a taste.** Children's $-0.717$ against Horror $+0.571$: a family-viewing axis with the two ends of the catalogue at the two ends of the component. Correlation with rating generosity is $-0.0168$.
+Remove it first anyway. Dropping PC1 works only while generosity happens to *be* PC1, which is a fact about this sample rather than about rating behaviour; debiasing is decided by the measurement model — a user's overall level is a nuisance parameter — and holds whatever the spectrum does. It also costs a dimension honestly: the rank falls from 12 to 11, because subtracting each row's mean puts every row in the space orthogonal to the all-ones vector.
 
-The wider consequence is the assumption that forced the genre aggregation in the first place. On the raw user-by-film matrix, 93.7% of entries are missing, so $\|X\|_F^2$ is not a fixed quantity and the projector identity of @sec-projector has nothing to hold constant. Minimum reconstruction error over the *observed* entries and maximum variance stop being the same problem. That gap is why production recommenders fit a factorization to the observed cells directly — alternating least squares, or gradient descent on the observed residuals — instead of running PCA on a filled-in matrix.
+### The noise floor {#sec-support}
+
+With the rating scale gone, the obvious next move is to read off the leading taste axis. The spectrum says not to.
+
+```{python}
+#| label: movielens-noise
+d_g = G.shape[1]
+Mrow = np.eye(d_g) - np.ones((d_g, d_g)) / d_g     # the row-centring operator
+
+# Sampling noise in a cell mean is WITHIN / (films behind that cell). Push that
+# through the row-centring operator to get the noise left in each column.
+noise_cols = np.zeros(d_g)
+for i in range(G.shape[0]):
+    noise_cols += np.diag(Mrow @ np.diag(WITHIN / C[i]) @ Mrow)
+noise_cols /= G.shape[0]
+
+obs_raw = G.var(axis=0, ddof=1).sum()
+noise_raw = (WITHIN / C).mean(axis=0).sum()
+obs_deb = Rc.var(axis=0, ddof=1).sum()
+
+print(f"before debiasing: variance {obs_raw:.4f}, of which noise {noise_raw:.4f} "
+      f"({noise_raw / obs_raw:.0%})")
+print(f"after  debiasing: variance {obs_deb:.4f}, of which noise {noise_cols.sum():.4f} "
+      f"({noise_cols.sum() / obs_deb:.0%})")
+
+obs_by_col = Rc.var(axis=0, ddof=1)
+print("\nnoise share of the debiased variance, by genre:")
+for j in np.argsort(-noise_cols / obs_by_col):
+    print(f"   {genres.columns[j]:12s} {noise_cols[j] / obs_by_col[j]:4.0%}")
+print("\nexplained variance ratio, debiased:", (lam_r / lam_r.sum())[:5].round(4))
+```
+
+Debiasing removes the largest real signal in the table and leaves the noise behind, so the noise share goes from 24% to **64%**. The spectrum flattens to match: 23.5%, 18.8%, 15.8%, 12.9%, 9.9% — no gap anywhere, which is @sec-assumptions' last condition failing on real data. A leading direction picked out of a flat spectrum is not determined, and resampling says how badly.
+
+```{python}
+#| label: movielens-bootstrap
+def pc1_of(M, standardise=False):
+    A = M - M.mean(axis=0)
+    if standardise:
+        A = A / A.std(axis=0, ddof=1)
+    return np.linalg.svd(A, full_matrices=False)[2][0]
+
+
+def bootstrap_wobble(M, standardise=False, n_boot=400):
+    """Angle between PC1 of a resample and PC1 of the table, in degrees."""
+    v0 = pc1_of(M, standardise)
+    cos = [
+        abs(pc1_of(M[rng.integers(0, M.shape[0], M.shape[0])], standardise) @ v0)
+        for _ in range(n_boot)
+    ]
+    return np.degrees(np.arccos(np.clip(cos, 0.0, 1.0)))
+
+
+# Shrink each cell towards the user's own level in proportion to how few films
+# it averages: the empirical-Bayes baseline every recommender uses.
+between = max(obs_deb / d_g - noise_cols.mean(), 1e-6)
+k_shrink = WITHIN / between
+S_shrunk = (C * G + k_shrink * user_mean[:, None]) / (C + k_shrink)
+S_shrunk = S_shrunk - S_shrunk.mean(axis=1, keepdims=True)   # then debias the same way
+
+print(f"shrinkage constant k = within/between = {k_shrink:.1f} films")
+wobble = {}
+for name, M in (("raw", G), ("debiased", R), ("debiased + shrunk", S_shrunk)):
+    wobble[name] = bootstrap_wobble(M)
+    ratios = np.linalg.svd(M - M.mean(axis=0), compute_uv=False) ** 2
+    print(f"  {name:18s} top ratios {(ratios / ratios.sum())[:3].round(3)}   "
+          f"PC1 wobble: median {np.median(wobble[name]):4.1f} deg, "
+          f"90th pct {np.percentile(wobble[name], 90):4.1f} deg")
+
+print("\ndebiased + shrunk PC1:")
+v_shrunk = pc1_of(S_shrunk)
+for j in np.argsort(-np.abs(v_shrunk))[:6]:
+    print(f"   {genres.columns[j]:12s} {v_shrunk[j]:+.3f}")
+
+assert np.median(wobble["raw"]) < np.median(wobble["debiased + shrunk"])
+assert np.median(wobble["debiased + shrunk"]) < np.median(wobble["debiased"])
+```
+
+The generosity axis is solid — resampling moves it a median of $2.3^\circ$. The debiased leading axis moves $20.1^\circ$, with a tenth of resamples past $37.7^\circ$: it is not one direction, it is whichever of several near-tied directions the sample happened to favour. Weighting each cell by how many films it averages, through the shrinkage every recommender baseline already applies, halves that to $10.3^\circ$ and gives an axis that reads as an axis — Action $+0.507$, Sci-Fi $+0.342$, Adventure $+0.321$ against Drama $-0.483$ and Comedy $-0.387$.
+
+That also settles the scaling question @sec-scaling left open for this table.
+
+```{python}
+#| label: movielens-scaling
+print("genre variance ratio, largest/smallest:")
+print(f"   as measured           {G.var(axis=0, ddof=1).max() / G.var(axis=0, ddof=1).min():.2f}")
+print(f"   after debiasing       {Rc.var(axis=0, ddof=1).max() / Rc.var(axis=0, ddof=1).min():.2f}")
+Ss = S_shrunk - S_shrunk.mean(axis=0)
+print(f"   debiased and shrunk   {Ss.var(axis=0, ddof=1).max() / Ss.var(axis=0, ddof=1).min():.2f}")
+
+gap = float(np.degrees(np.arccos(min(1.0, abs(pc1_of(S_shrunk) @ pc1_of(S_shrunk, True))))))
+print(f"\nangle between covariance PC1 and correlation PC1: {gap:.2f} deg")
+print(f"bootstrap wobble of that same PC1:                {np.median(wobble['debiased + shrunk']):.2f} deg")
+```
+
+Covariance and correlation PCA disagree by $9.52^\circ$ here, which is inside the $10.3^\circ$ the direction moves under resampling. On twelve columns that already share a rating scale, the scaling choice is not resolvable and not worth arguing about. @sec-metabolome is the opposite case.
+
+### Downstream impact
+
+The team asked how many taste dimensions the catalogue has. The honest answer is not the number they were expecting.
+
+- **One axis is solid, and it is not taste.** Rating generosity, 65.66% of the raw variance, stable to $2.3^\circ$. It belongs in the model as a per-user offset, which is where recommender baselines have always put it, not in a taste profile.
+- **Two or three taste axes, reported with their wobble.** After debiasing and shrinking, the leading axis is Action/Sci-Fi/Adventure against Drama/Comedy and moves $10.3^\circ$ under resampling. The tempting reading — four components, 71% of the debiased variance — counts noise as taste: 64% of that variance is sampling error in cell means, and in the thinnest columns almost all of it is. Mystery is 88% noise and War 83%, which is what nine films per cell buys.
+- **The fix is more ratings per cell, not more components.** Noise per cell falls as $1/n_{ij}$, so the way to resolve a fourth axis is deeper sampling in the thin genres, not a larger $k$ on this table.
+
+The wider consequence is the assumption that forced the genre aggregation in the first place. On the raw user-by-film matrix, 93.7% of entries are missing, so $\|X\|_F^2$ is not a fixed quantity and the projector identity of @sec-projector has nothing to hold constant. Minimum reconstruction error over the *observed* entries and maximum variance stop being the same problem. That gap is why production recommenders fit a factorization to the observed cells directly — alternating least squares, or gradient descent on the observed residuals, both carrying the user-bias term this section arrived at the long way — instead of running PCA on a filled-in matrix.
 
 ```{python}
 #| label: fig-movielens
-#| fig-cap: "Left: cumulative explained variance for the two centrings, with the generosity axis present and removed. Right: PC1 score against the user's own mean rating under column centring only."
-#| fig-alt: "Two panels. The left plots two cumulative explained-variance curves against number of components; the column-centred curve starts near 0.66 and the row-centred curve starts near 0.24. The right is a tight straight-line scatter of PC1 score against mean rating."
-#| fig-width: 8.6
-#| fig-height: 3.6
-fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(8.6, 3.6))
+#| fig-cap: "Left: PC1 score against the user's own mean rating, as measured. Centre: share of variance per component for the three tables over the 11 components the debiased ones have, against the average noise share. Right: how far PC1 moves under 400 bootstrap resamples."
+#| fig-alt: "Three panels. The left is a tight straight-line scatter of PC1 score against mean rating. The centre plots three descending explained-variance curves, the raw one starting near 0.66 and the debiased ones near 0.24, against a dashed noise floor. The right shows three bootstrap angle distributions, narrow for the raw table and wide for the debiased one."
+#| fig-width: 9.2
+#| fig-height: 3.4
+fig, (ax_a, ax_b, ax_c) = plt.subplots(1, 3, figsize=(9.2, 3.4))
 
-ks = np.arange(1, 13)
-ax_a.plot(ks, np.cumsum(lam_g / lam_g.sum()), "o-", color=ACCENT, ms=4,
-          label="column-centred")
-ax_a.plot(ks, np.cumsum(lam_r / lam_r.sum()), "s-", color=CORAL, ms=4,
-          label="row- then column-centred")
-ax_a.set_xlabel("components kept")
-ax_a.set_ylabel("cumulative explained variance")
-ax_a.set_ylim(0, 1.02)
-ax_a.legend(frameon=False, fontsize=8, loc="lower right")
-ax_a.set_title("What centring decides")
+ax_a.scatter(user_mean, pc1_scores, s=14, color=TEAL, alpha=0.6)
+ax_a.set_xlabel("user's mean rating")
+ax_a.set_ylabel("PC1 score")
+ax_a.set_title(f"PC1 is generosity (r = {r:.4f})")
 
-ax_b.scatter(user_mean, pc1_scores, s=16, color=TEAL, alpha=0.6)
-ax_b.set_xlabel("user's mean rating across 12 genres")
-ax_b.set_ylabel("PC1 score")
-ax_b.set_title(f"PC1 is generosity (r = {r:.4f})")
+# Only the 11 components the debiased tables have: row-centring costs
+# one dimension, so their twelfth is zero and carries no information.
+n_show = 11
+ks = np.arange(1, n_show + 1)
+for name, M, colour, mark in (
+    ("as measured", G, ACCENT, "o"),
+    ("debiased", R, CORAL, "s"),
+    ("debiased + shrunk", S_shrunk, GOLD, "^"),
+):
+    sv = np.linalg.svd(M - M.mean(axis=0), compute_uv=False) ** 2
+    ax_b.plot(ks, (sv / sv.sum())[:n_show], mark + "-", color=colour, ms=3.5,
+              lw=1.3, label=name)
+floor_share = noise_cols.sum() / obs_deb / n_show
+ax_b.axhline(floor_share, color=MUTED, lw=1.0, ls="--")
+ax_b.text(n_show, floor_share + 0.015, "noise floor", color=MUTED,
+          fontsize=7.5, ha="right")
+ax_b.set_xlabel("component")
+ax_b.set_ylabel("share of variance")
+ax_b.set_ylim(0, 0.72)
+ax_b.legend(frameon=False, fontsize=7.5, loc="upper right")
+ax_b.set_title("The spectrum flattens")
+
+parts = [wobble["raw"], wobble["debiased"], wobble["debiased + shrunk"]]
+bp = ax_c.boxplot(parts, showfliers=False, widths=0.55, patch_artist=True,
+                  medianprops={"color": INK, "lw": 1.4})
+for patch, colour in zip(bp["boxes"], (ACCENT, CORAL, GOLD)):
+    patch.set_facecolor(colour)
+    patch.set_alpha(0.55)
+    patch.set_edgecolor(colour)
+ax_c.set_xticks([1, 2, 3], ["as\nmeasured", "debiased", "debiased\n+ shrunk"],
+                fontsize=8)
+ax_c.set_ylabel("PC1 angle under resampling (deg)")
+ax_c.set_title("How sure is PC1?")
 
 fig.tight_layout(pad=1.1)
 plt.show()
 ```
 
-## Biotech: neutrophil metabolomes
+## Biotech: neutrophil metabolomes {#sec-metabolome}
 
 ### The data
 
@@ -674,6 +909,88 @@ n_m, d_m = Xm.shape
 print(f"matrix: {n_m} samples x {d_m} metabolites")
 print("groups:", {g: int((labels == g).sum()) for g in ("Control", "Mild", "Severe")})
 ```
+
+### Scaling this file {#sec-metabolome-scaling}
+
+@sec-scaling said the choice of matrix is made before any of the six views runs. On peak areas it is the largest single decision in this section, because the columns are nowhere near comparable as measured.
+
+```{python}
+#| label: metabolome-scaling
+raw_var = Xm_raw.var(axis=0, ddof=1)
+names_m = abund.index.to_numpy()
+print(f"per-metabolite variance runs {raw_var.min():.3e} to {raw_var.max():.3e}, "
+      f"a ratio of {raw_var.max() / raw_var.min():.2e}")
+print("largest by variance:", ", ".join(names_m[j] for j in np.argsort(-raw_var)[:3]))
+
+
+def fit(M):
+    A = M - M.mean(axis=0)
+    U_, s_, Vt_ = np.linalg.svd(A, full_matrices=False)
+    return A, Vt_, s_**2 / (s_**2).sum()
+
+
+A_cov, Vt_cov_m, r_cov = fit(Xm_raw)                                    # covariance
+A_cor, Vt_cor_m, r_cor = fit(Xm_raw / Xm_raw.std(axis=0, ddof=1))       # correlation
+A_log, Vt_log_m, r_log = fit(Zm)                                        # log + IQR
+
+for name, Vt_, ratios in (("covariance, as measured", Vt_cov_m, r_cov),
+                          ("correlation", Vt_cor_m, r_cor),
+                          ("log1p + IQR", Vt_log_m, r_log)):
+    print(f"  {name:24s} PC1 takes {ratios[0]:6.1%}")
+
+biggest = int(np.argmax(raw_var))
+print(f"\nshare of covariance PC1 sitting on {names_m[biggest]} alone: "
+      f"{Vt_cov_m[0][biggest] ** 2:.1%}")
+print("covariance PC1, largest loadings:")
+for j in np.argsort(-np.abs(Vt_cov_m[0]))[:3]:
+    print(f"   {names_m[j][:32]:34s} {Vt_cov_m[0][j]:+.3f}")
+
+ang = lambda a, b: float(np.degrees(np.arccos(min(1.0, abs(a @ b)))))
+print(f"\nangle from log/IQR PC1 to covariance PC1 : {ang(Vt_log_m[0], Vt_cov_m[0]):.2f} deg")
+print(f"angle from log/IQR PC1 to correlation PC1: {ang(Vt_log_m[0], Vt_cor_m[0]):.2f} deg")
+
+sev = np.select([labels == "Control", labels == "Mild"], [0.0, 1.0], 2.0)
+for name, A_, Vt_ in (("covariance", A_cov, Vt_cov_m), ("correlation", A_cor, Vt_cor_m),
+                      ("log1p + IQR", A_log, Vt_log_m)):
+    print(f"  corr(PC1, severity) under {name:12s}: {np.corrcoef(A_ @ Vt_[0], sev)[0, 1]:+.4f}")
+
+assert ang(Vt_log_m[0], Vt_cov_m[0]) > 45.0
+```
+
+Metabolite variances span a ratio of $9.49 \times 10^9$. Run covariance PCA on the file as measured and PC1 takes 49.5% of the variance with **51.9% of its squared loading on choline alone** — the single highest-variance column — with Glycylglutamine and Creatine next. That component is a report on which assay gave the biggest numbers.
+
+It is also a different answer, not a noisier version of the same one: covariance PC1 sits $78.35^\circ$ from the log/IQR PC1, close to orthogonal. Standardising pulls it back to $23.53^\circ$, and log-transforming first — which fixes the right-skew as well as the scale — is what the rest of this section uses. Correlation with severity follows: $+0.4561$ as measured, $+0.5472$ standardised, $+0.5363$ on log/IQR.
+
+```{python}
+#| label: fig-scaling
+#| fig-cap: "Left: per-metabolite variance as measured, sorted, over ten orders of magnitude. Right: squared loadings of PC1, sorted, under covariance PCA on the file as measured and under the log/IQR transform."
+#| fig-alt: "Two panels. The left is a steeply falling curve of variance against metabolite rank on a log scale spanning ten decades. The right shows two sorted squared-loading curves: the covariance one starts above 0.5 and collapses, the log/IQR one starts near 0.01 and decays gently."
+#| fig-width: 8.6
+#| fig-height: 3.4
+fig, (ax_v, ax_l) = plt.subplots(1, 2, figsize=(8.6, 3.4))
+
+ax_v.semilogy(np.sort(raw_var)[::-1], color=ACCENT, lw=1.6)
+ax_v.set_xlabel("metabolite, sorted by variance")
+ax_v.set_ylabel("variance as measured (log scale)")
+ax_v.set_title("Ten orders of magnitude")
+
+ax_l.semilogy(np.sort(Vt_cov_m[0] ** 2)[::-1], color=CORAL, lw=1.6,
+              label="covariance, as measured")
+ax_l.semilogy(np.sort(Vt_log_m[0] ** 2)[::-1], color=TEAL, lw=1.6,
+              label="log1p + IQR")
+ax_l.axhline(1 / d_m, color=MUTED, lw=1.0, ls="--")
+ax_l.text(d_m, 1 / d_m * 1.4, "equal weight on every metabolite",
+          color=MUTED, fontsize=7.5, ha="right")
+ax_l.set_xlabel("metabolite, sorted by loading")
+ax_l.set_ylabel("squared PC1 loading (log scale)")
+ax_l.legend(frameon=False, fontsize=7.5, loc="lower left")
+ax_l.set_title("One spike, or a direction")
+
+fig.tight_layout(pad=1.1)
+plt.show()
+```
+
+The transform is not tidying done before the real work. It is the choice of what "largest variance" is going to mean, and on this file it moves the answer nearly ninety degrees.
 
 ### The upstream ask
 
@@ -809,11 +1126,12 @@ Where the chain of @sec-chain stops holding:
 
 - **Missing entries.** The projector identity needs every cell. ml-100k is 93.7% empty and the equivalence fails outright.
 - **A non-Frobenius loss.** Robust PCA and $\ell_1$ variants optimise something else and reach a different subspace; Eckart–Young covers the Frobenius and spectral norms and no others.
-- **Units and scaling.** Covariance PCA on metabolite peak areas and correlation PCA on the same file are different questions. Both dataset sections here scale first and say how.
-- **Centring choice.** Column centring, row centring, and double centring give three different leading components, as @sec-movielens measures.
+- **Units and scaling.** Covariance PCA on metabolite peak areas and correlation PCA on the same file are different questions, $78.35^\circ$ apart. @sec-scaling has the choice; @sec-metabolome-scaling has the bill.
+- **Centring choice.** Column centring and row centring give different leading components, as @sec-movielens measures — and which one is right is a statement about the measurement, not about the data.
+- **Measurement noise sets a floor on $k$.** A component whose eigenvalue is the size of the sampling noise in the entries is not a direction. On the debiased MovieLens table, 64% of the variance is noise in the cell means and the leading direction moves $20.1^\circ$ under resampling. The scree plot does not show this; only a noise model or a resample does.
 - **$n \ll d$.** The rank of the covariance is capped at $n-1$. Eigenvalues past that are zero by arithmetic, and any interpretation of them is interpretation of nothing.
 - **Nonlinear structure.** PCA fits a flat. A curved manifold gets a flat fitted to it, with no warning in the spectrum.
-- **Signs and rotations.** Loadings are determined only up to sign, and up to rotation inside a tied block. Compare reconstructions, not loadings.
+- **Signs and rotations.** Loadings are determined only up to sign, and up to rotation inside a tied block — which is the multiplier matrix of @sec-lagrange being free up to an orthogonal $R$. Compare reconstructions, not loadings.
 
 ## Summary
 
@@ -821,7 +1139,7 @@ Every number in the table was computed, not quoted.
 
 | Perspective | Objective / operation | Intuition | Mathematical tool |
 |---|---|---|---|
-| Maximum variance | $\max_W \operatorname{tr}(W^\top S W)$ | find the directions the data spreads out along | Rayleigh quotient, Ky Fan |
+| Maximum variance | $\max_W \operatorname{tr}(W^\top S W)$ | find the directions the data spreads out along | Lagrange multipliers, Rayleigh quotient, Ky Fan |
 | Maximum projected energy | $\max_W \lVert XW\rVert_F^2$ | keep as much squared magnitude as $k$ directions can hold | Frobenius norm, Parseval |
 | Minimum reconstruction error | $\min_W \lVert X - XWW^\top\rVert_F^2$ | find the flat the cloud sits closest to | orthogonal projector, Pythagoras |
 | Best rank-$k$ approximation | $\min_{\operatorname{rank} B \le k}\lVert X - B\rVert_F$ | find the simplest matrix that still looks like $X$ | Eckart–Young–Mirsky |
@@ -839,7 +1157,7 @@ The chain of @sec-chain runs on one fact that does not generalise: Eckart–Youn
 
 So the tensor posts spend their effort on things PCA never has to decide: which product the operator lives under, which mode to unfold, which decomposition trades memory for accuracy on this cube. [Tensor Factorizations and Tensor Inverses](../tensor-factorizations/) sets out CP, Tucker, TT, and t-SVD on a synthetic cube; [Uses of Tensor Factorizations](../uses-of-tensor-factorizations/) works the compression case. Both start from the assumption that a reader knows what a truncated SVD buys, and that is the assumption PCA supplies.
 
-One. Object. Six. Windows. Centre. First. Missing. Data. Breaks. It.
+One. Object. Six. Windows. Centre. Scale. Then. Ask. Flat. Spectra. Answer. Nothing.
 
 ## References
 
