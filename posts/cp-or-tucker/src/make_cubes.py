@@ -114,21 +114,47 @@ def _draw_solid_cube(ax, origin, size, color, alpha: float = 0.92) -> None:
     ax.add_collection3d(coll)
 
 
-def _axis_frame(ax, labels: tuple[str, str, str], lim: float = 1.35) -> None:
+def _axis_frame(
+    ax,
+    labels: tuple[str, str, str],
+    lim: float = 1.35,
+    origin: np.ndarray | None = None,
+    size: np.ndarray | None = None,
+) -> None:
+    """Label the three modes of the box that was just drawn.
+
+    The offsets are measured from that box, not from the axes limits, so a
+    small core keeps its labels against its own edges instead of floating a
+    core-width away from the thing they name.
+    """
     ax.set_xlim(0, lim)
     ax.set_ylim(0, lim)
     ax.set_zlim(0, lim)
     ax.set_box_aspect((1, 1, 1), zoom=0.92)
     ax.set_axis_off()
+    lo = np.zeros(3) if origin is None else np.asarray(origin, dtype=float)
+    ext = np.ones(3) if size is None else np.asarray(size, dtype=float)
+    hi = lo + ext
+    mid = lo + 0.5 * ext
+    pad = 0.20 * lim
     # Hang the labels off the corner nearest the camera. Placed on the far side
     # they project onto the faces, and matplotlib draws text over a
     # Poly3DCollection regardless of depth, so "Month" lands on the cube's lid.
-    ax.text(0.5, 1.26, -0.12, labels[0], ha="center", fontsize=11, color=INK)
-    ax.text(1.26, 0.5, -0.12, labels[1], ha="center", fontsize=11, color=INK)
+    drop = lo[2] - 0.10 * lim
+    ax.text(mid[0], hi[1] + pad, drop, labels[0], ha="center", fontsize=11, color=INK)
+    ax.text(hi[0] + pad, mid[1], drop, labels[1], ha="center", fontsize=11, color=INK)
     # The vertical label goes beside the right-hand silhouette edge. On the near
     # corner it would sit on the cube: that corner's outward direction points at
     # the camera, so pushing it out moves it nowhere on screen.
-    ax.text(-0.14, 1.34, 0.52, labels[2], ha="center", fontsize=11, color=INK)
+    ax.text(
+        lo[0] - 0.12 * lim,
+        hi[1] + pad,
+        mid[2],
+        labels[2],
+        ha="center",
+        fontsize=11,
+        color=INK,
+    )
 
 
 def _cube_frame(
@@ -144,7 +170,7 @@ def _cube_frame(
     size = np.broadcast_to(np.asarray(scale, dtype=float), (3,)).copy()
     origin = (1.0 - size) * 0.5
     _draw_solid_cube(ax, origin, size, color)
-    _axis_frame(ax, labels)
+    _axis_frame(ax, labels, origin=origin, size=size)
     ax.view_init(elev=18, azim=azim)
     if title:
         ax.set_title(title, fontsize=12, pad=4, color=INK)
@@ -215,7 +241,30 @@ def _rank1(n: int, centres: tuple[float, float, float], width: float) -> np.ndar
     return a[:, None, None] * b[None, :, None] * c[None, None, :]
 
 
-def _draw_voxels(ax, vol: np.ndarray, color: str, thresh: float = 0.18) -> None:
+def _occupied_bounds(vol: np.ndarray, thresh: float = 0.18, pad: int = 1) -> tuple:
+    """Smallest cube-shaped window holding every lit voxel.
+
+    The bumps fill about half of the 0..12 grid, so framing on the grid leaves
+    the panels mostly white and the blobs tiny once the figure is scaled into
+    the text column. One window is shared by every panel, or the terms would
+    move between the sum and their own panels.
+    """
+    mag = np.abs(vol)
+    idx = np.argwhere(mag > thresh * (mag.max() + 1e-12))
+    lo = idx.min(axis=0) - pad
+    hi = idx.max(axis=0) + 1 + pad
+    side = float(np.max(hi - lo))
+    centre = 0.5 * (lo + hi)
+    return centre - 0.5 * side, centre + 0.5 * side
+
+
+def _draw_voxels(
+    ax,
+    vol: np.ndarray,
+    color: str,
+    thresh: float = 0.18,
+    bounds: tuple | None = None,
+) -> None:
     mag = np.abs(vol)
     peak = mag.max() + 1e-12
     filled = mag > thresh * peak
@@ -224,11 +273,14 @@ def _draw_voxels(ax, vol: np.ndarray, color: str, thresh: float = 0.18) -> None:
     fc[..., 0], fc[..., 1], fc[..., 2] = rgb
     fc[..., 3] = np.where(filled, 0.28 + 0.65 * mag / peak, 0.0)
     ax.voxels(filled, facecolors=fc, edgecolor="none")
-    box = vol.shape[0]
-    ax.set_xlim(0, box)
-    ax.set_ylim(0, box)
-    ax.set_zlim(0, box)
-    ax.set_box_aspect((1, 1, 1), zoom=0.88)
+    lo, hi = bounds if bounds is not None else (np.zeros(3), np.array(vol.shape))
+    ax.set_xlim(lo[0], hi[0])
+    ax.set_ylim(lo[1], hi[1])
+    ax.set_zlim(lo[2], hi[2])
+    # The three terms sit in different corners, so their shared window is most
+    # of the grid; the remaining whitespace is the 3D axes margin, and zoom is
+    # what removes it.
+    ax.set_box_aspect((1, 1, 1), zoom=1.28)
     ax.set_axis_off()
     ax.view_init(elev=18, azim=40)
 
@@ -245,6 +297,7 @@ def write_cp_png(path: Path) -> Path:
     specs = CP_SPECS
     terms = [_rank1(n, c, 0.28) for c, _ in specs]
     total = sum(terms)
+    bounds = _occupied_bounds(total)
     panels = [(total, ACCENT, r"sum of concepts")] + [
         (vol, color, rf"$r={i}$")
         for i, (vol, (_, color)) in enumerate(zip(terms, specs), start=1)
@@ -261,7 +314,7 @@ def write_cp_png(path: Path) -> Path:
     fig.patch.set_facecolor(PAPER)
     for ax, (vol, color, title) in zip(axes.ravel(), panels):
         ax.set_facecolor(PAPER)
-        _draw_voxels(ax, vol, color)
+        _draw_voxels(ax, vol, color, bounds=bounds)
         ax.set_title(title, fontsize=11, pad=6, color=INK)
     fig.subplots_adjust(
         left=0.01,
@@ -305,13 +358,22 @@ def write_tucker_png(path: Path) -> Path:
     ax_x.set_facecolor(PAPER)
     ax_g.set_facecolor(PAPER)
     _draw_solid_cube(ax_x, np.zeros(3), np.ones(3), ACCENT)
-    _axis_frame(ax_x, ("$I$", "$J$", "$K$"), lim=1.15)
+    _axis_frame(ax_x, ("$I$", "$J$", "$K$"), lim=1.15, size=np.ones(3))
     ax_x.view_init(elev=18, azim=40)
     ax_x.set_title(r"$\mathcal{X}$", fontsize=12, pad=6)
-    g_origin = np.array([0.05, 0.05, 0.05])
-    g_size = np.array([r1 / n, r2 / n, r3 / n]) * 1.6
+    g_origin = np.zeros(3)
+    # True scale against the unit cube beside it: a 4x4x3 core of a 12-cube is
+    # 1/36 of the volume, and inflating it to fit the eye would understate what
+    # Tucker saves — the one number this figure exists to show.
+    g_size = np.array([r1 / n, r2 / n, r3 / n])
     _draw_solid_cube(ax_g, g_origin, g_size, TEAL)
-    _axis_frame(ax_g, (r"$R_1$", r"$R_2$", r"$R_3$"), lim=1.15)
+    _axis_frame(
+        ax_g,
+        (r"$R_1$", r"$R_2$", r"$R_3$"),
+        lim=1.15,
+        origin=g_origin,
+        size=g_size,
+    )
     ax_g.view_init(elev=18, azim=40)
     ax_g.set_title(r"core $\mathcal{G}$", fontsize=12, pad=6)
     names = (r"$U$", r"$V$", r"$W$")
@@ -342,8 +404,9 @@ def write_cover_png(path: Path) -> Path:
     ax_tk = fig.add_subplot(122, projection="3d")
 
     ax_cp.set_facecolor(PAPER)
+    bounds = _occupied_bounds(sum(_rank1(n, c, 0.28) for c, _ in CP_SPECS))
     for centres, color in CP_SPECS:
-        _draw_voxels(ax_cp, _rank1(n, centres, 0.28), color)
+        _draw_voxels(ax_cp, _rank1(n, centres, 0.28), color, bounds=bounds)
     ax_cp.set_box_aspect((1, 1, 1), zoom=1.15)
     ax_cp.set_title(
         r"CP: $\sum_r a_r \circ b_r \circ c_r$",
