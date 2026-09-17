@@ -296,12 +296,22 @@ chosen on that scale rather than by looking at the fit. That gives
 
 Two models, fixed before either was run:
 
-- **Baseline** — negative-binomial GLM, linear in load, gap and $\log(1 + \text{neighbour
-  load})$, with the same offset and the same random effects.
+- **Baseline** — negative-binomial, linear in load, gap and $\log(1 + \text{neighbour
+  load})$, with the same offset.
 - **Main model** — the same likelihood with $f_1$, $f_2$ and $f_3$ as penalised cubic
   B-splines. The penalty is a second-order random walk on the basis coefficients, which
-  is the P-spline prior ([Wood 2017](https://doi.org/10.1201/9781315370279)), written non-centred so the sampler sees unit-scale
-  parameters. Fitted in PyMC ([Abril-Pla et al. 2023](https://doi.org/10.7717/peerj-cs.1516)).
+  is the P-spline prior ([Wood 2017](https://doi.org/10.1201/9781315370279)), written
+  non-centred so the sampler sees unit-scale parameters. Fitted in PyMC
+  ([Abril-Pla et al. 2023](https://doi.org/10.7717/peerj-cs.1516)), with donor and well
+  random effects.
+
+The two are fitted by different machinery, and that matters for what the comparison
+means. The smooths and their credible bands come from the Bayesian fit, random effects
+included. The model comparison in the next section refits **both** models by maximum
+likelihood **without** random effects, because full leave-one-donor-out on two Bayesian
+models was out of compute budget. The approximation is the same on both sides, so the
+comparison is fair, but it is not a comparison of the two models exactly as specified
+here.
 
 ```{python}
 #| label: fit-gam
@@ -312,8 +322,12 @@ import nutpie
 t0 = time.perf_counter()
 weights = np.ones(len(fit_panel))
 compiled = nutpie.compile_pymc_model(fitting.gam_model(design, weights))
+# `cores` is pinned, not left to the machine. nutpie is bit-reproducible for a
+# fixed seed only when the chain-to-core allocation is also fixed; leaving it to
+# whatever the host has free moves the posterior summaries in the last digit.
 trace = nutpie.sample(
-    compiled, chains=2, draws=300, tune=300, seed=20260917, progress_bar=False,
+    compiled, chains=2, cores=2, draws=300, tune=300,
+    seed=20260917, progress_bar=False,
 )
 t0 = lap("sample", t0)
 ```
@@ -386,9 +400,9 @@ satiety survives. The quantitative recovery is poor: the estimated peak sits at 
 `{python} f"{rmse_load:.3f}"` on the log-intensity scale, and the 95% credible band
 covers the true curve over only `{python} f"{cover_load:.0%}"` of the grid.
 
-That last number is the honest headline. A band that excludes the truth over roughly
-three-quarters of the range is **under-covering**, so the intervals here are too narrow
-to be taken at face value. The random-walk penalty is doing more shrinking than the data
+That last number is the honest headline. A band that excludes the truth over
+`{python} f"{1 - cover_load:.0%}"` of the range is **under-covering**, so the intervals
+here are too narrow to be taken at face value. The random-walk penalty is doing more shrinking than the data
 warrant, and the 1.5-hour aggregation blurs the covariate within each block. The refractory
 term is better behaved, at root-mean-square error `{python} f"{rmse_gap:.3f}"`. Only
 `{python} f"{float((fit_panel['load'] > 4).mean()):.1%}"` of rows carry a load above 4,
@@ -422,10 +436,11 @@ print(f"diff    {score['diff']:9.2f}  (se {score['se']:.2f}, n = {score['n']})")
 print(f"margin met: {kept}")
 ```
 
-Each donor is held out in turn, both models are refitted on the remaining donors, and
-the held-out donor's counts are scored. These are **plug-in log scores at the fitted
-coefficients, not expected log predictive densities** ([Vehtari et al. 2017](https://doi.org/10.1007/s11222-016-9696-4)): they ignore
-coefficient uncertainty and predict the held-out donor at the average donor. The
+Each donor is held out in turn, both models are refitted by maximum likelihood on the
+remaining donors, and the held-out donor's counts are scored. These are **plug-in log
+scores at the fitted coefficients, not expected log predictive densities** ([Vehtari et al. 2017](https://doi.org/10.1007/s11222-016-9696-4)): they ignore
+coefficient uncertainty, carry no random effects, and predict the held-out donor at the
+average donor. The
 approximation is identical for both models, so the comparison is fair, but neither
 number is an ELPD. The scoring rule is the log score, which is strictly proper
 ([Gneiting and Raftery 2007](https://doi.org/10.1198/016214506000001437)).
@@ -610,10 +625,11 @@ conservative.
   assay. Recovering $f_1$ here says the estimator works when the model is true; it says
   nothing about how it behaves under a mechanism nobody wrote down. **This is modelling
   opinion, not an empirical finding.**
-- **The evaluation is a plug-in score, not an ELPD.** Full leave-one-donor-out with both
-  Bayesian models was out of compute budget, so the fold comparison uses maximum
-  likelihood. Coefficient uncertainty is ignored and the held-out donor is predicted at
-  the average donor.
+- **The evaluation is a plug-in score, not an ELPD, and not of the fitted models.** Full
+  leave-one-donor-out with both Bayesian models was out of compute budget, so the fold
+  comparison refits by maximum likelihood with no random effects. Coefficient
+  uncertainty is ignored and the held-out donor is predicted at the average donor. The
+  smooths shown above come from the Bayesian fit; the score below does not.
 - **The score is sensitive to the aggregation grid.** The 1.5 h block was chosen against
   the refractory time constant, before looking at the fit; a coarser grid narrows the gap
   between the two models substantially. A comparison that moves with a nuisance choice
@@ -621,7 +637,7 @@ conservative.
 - **Six donors is a small random-effect sample.** The donor standard deviation is
   estimated from six values, and its posterior is correspondingly wide.
 - **The credible bands under-cover.** The 95% band for $f_1$ contains the generating
-  curve over about a quarter of its range. Reported rather than tuned away: a penalty
+  curve over `{python} f"{cover_load:.0%}"` of its range. Reported rather than tuned away: a penalty
   prior and an aggregation grid both chosen before fitting should not be adjusted until
   the intervals look right. The shape conclusion stands; the interval widths do not.
 - **$f_3$ is the weakest of the three.** Depletion and signalling are separable in
@@ -648,10 +664,16 @@ print(f"python {sys.version.split()[0]}  numpy {np.__version__}  pandas {pd.__ve
 print(f"pymc {pymc.__version__}  nutpie {nutpie.__version__}")
 ```
 
-Every seed is fixed in `src/sim.py` and at each call site. The post's numbers are
+Every seed is fixed in `src/sim.py` and at each call site, and the post's numbers are
 computed at render time and interpolated into the prose, so a figure and the sentence
-beside it cannot drift apart. To rerun it, build the environment in
-`requirements.txt`, register the kernel, and render this document.
+beside it cannot drift apart.
+
+The simulation, the maximum-likelihood scoring and the power curve are deterministic and
+reproduce exactly. The posterior summaries need one more thing: nutpie is
+bit-reproducible for a fixed seed only when the chain-to-core allocation is fixed too,
+so `cores` is pinned alongside `chains` above. Left to the host, the smooth summaries
+moved in the last reported digit between runs on this machine. To rerun it, build the
+environment in `requirements.txt`, register the kernel, and render this document.
 
 Means. Hide. Mechanisms. Offsets. Restore. Opportunity. Assignment. Beats. Observation. Every. Time.
 

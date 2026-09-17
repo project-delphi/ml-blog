@@ -324,6 +324,13 @@ def coarsen(panel: pd.DataFrame, factor: int = 6) -> pd.DataFrame:
     """
     p = panel.copy()
     p["block"] = p["bin"] // factor
+    # Exposure is summed, not averaged. `second_wave_panel` has already dropped
+    # bins where the cell was untracked or had nothing in reach, so a block can
+    # hold fewer than `factor` bins. Crediting it the full block width would
+    # hand a cell that was at risk for one bin the exposure of six, and it
+    # would do so precisely for the censored and target-depleted cells the
+    # offset exists to handle.
+    p["exposure"] = p["opportunity"] * DT
     out = (
         p.sort_values("bin")
         .groupby(["uid", "block"], as_index=False)
@@ -332,11 +339,13 @@ def coarsen(panel: pd.DataFrame, factor: int = 6) -> pd.DataFrame:
             load=("load", "first"),
             gap=("gap", "first"),
             nbr=("nbr", "first"),
+            exposure=("exposure", "sum"),
             opportunity=("opportunity", "mean"),
+            bins=("bin", "size"),
             donor=("donor", "first"),
             well=("well", "first"),
             arm=("arm", "first"),
         )
     )
-    out["log_offset"] = np.log(out["opportunity"] * DT * factor)
+    out["log_offset"] = np.log(out["exposure"])
     return out

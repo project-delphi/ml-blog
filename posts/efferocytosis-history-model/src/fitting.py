@@ -1,9 +1,11 @@
 """Penalised-spline intensity model, its linear baseline, and the scoring.
 
-The two models share a likelihood, an offset and a random-effect structure, so
-their expected log predictive densities are comparable. Hold-out is carried by a
-weight vector of fixed length rather than by subsetting the data, which lets
-nutpie compile each model graph once and reuse it for every fold.
+The Bayesian spline model is fitted once, in PyMC, and supplies the smooths and
+their credible bands. The leave-one-donor-out comparison against a linear
+baseline is a separate, cheaper maximum-likelihood fit: full Bayesian
+leave-one-donor-out on both models was out of compute budget. The two paths
+share a basis, an offset and a dispersion estimate, but not a fitting method,
+and the maximum-likelihood path carries no random effects.
 """
 
 from __future__ import annotations
@@ -44,9 +46,18 @@ class Basis:
 def make_basis(x: np.ndarray, n_basis: int = 8, degree: int = 3) -> Basis:
     x = np.asarray(x, dtype=float)
     n_interior = n_basis - degree - 1
-    interior = np.quantile(x, np.linspace(0, 1, n_interior + 2)[1:-1])
     lo, hi = x.min(), x.max()
+    # Quantile knots collapse onto a boundary when the covariate is integer and
+    # piles up at one end: `load` is zero in a quarter of rows, which put a
+    # fifth knot on top of the boundary and left one basis function identically
+    # zero. Keep the interior strictly inside, and evenly spaced if the
+    # quantiles cannot supply enough distinct values.
+    interior = np.unique(np.quantile(x, np.linspace(0, 1, n_interior + 2)[1:-1]))
+    interior = interior[(interior > lo) & (interior < hi)]
+    if interior.size < n_interior:
+        interior = np.linspace(lo, hi, n_interior + 2)[1:-1]
     knots = np.concatenate([np.repeat(lo, degree + 1), interior, np.repeat(hi, degree + 1)])
+    n_basis = len(knots) - degree - 1
     raw = BSpline.design_matrix(np.clip(x, lo, hi), knots, degree).toarray()
     return Basis(knots=knots, degree=degree, centre=raw.mean(axis=0))
 
@@ -132,162 +143,31 @@ def gam_model(d: Design, weights: np.ndarray, n_basis: int = 8) -> pm.Model:
     return model
 
 
-def linear_model(d: Design, weights: np.ndarray) -> pm.Model:
-    """The pre-registered baseline: the same likelihood and offset, linear in
-    the same three covariates.
-    """
-    with pm.Model() as model:
-        intercept, u_donor, u_well, alpha = _shared(model, d)
-        b = pm.Normal("b", 0, 1, shape=d.linear.shape[1])
-        eta = intercept + u_donor[d.donor] + u_well[d.well] + pt.dot(d.linear, b)
-        _finish(model, d, eta, alpha, weights)
-    return model
-
-
 # ------------------------------------------------------------------ scoring
-
-
-def _draws(trace, name: str) -> np.ndarray:
-    """Posterior draws as (draw, ...), flattening chains."""
-    arr = trace.posterior[name].to_numpy()
-    return arr.reshape((-1,) + arr.shape[2:])
-
-
-def heldout_logscore(
-    trace,
-    d: Design,
-    rows: np.ndarray,
-    kind: str,
-    rng: np.random.Generator,
-    max_draws: int = 400,
-) -> np.ndarray:
-    """Pointwise log predictive density on held-out rows, for a *new* donor.
-
-    The held-out donor was never in the fit, so its offset is drawn from the
-    fitted population of donors rather than read off a fitted value. Scoring it
-    with a fitted donor effect would flatter every model that has one.
-    """
-    intercept = _draws(trace, "intercept")
-    sd_donor = _draws(trace, "sd_donor")
-    sd_well = _draws(trace, "sd_well")
-    alpha = _draws(trace, "alpha")
-    n = intercept.shape[0]
-    idx = rng.choice(n, size=min(max_draws, n), replace=False)
-
-    eta = intercept[idx][:, None] + np.zeros((1, rows.size))
-    if kind == "gam":
-        for s in SMOOTHS:
-            eta = eta + _draws(trace, f"beta_{s}")[idx] @ d.X[s][rows].T
-    else:
-        eta = eta + _draws(trace, "b")[idx] @ d.linear[rows].T
-
-    # One new donor, and one new well per held-out well.
-    eta = eta + rng.normal(0, 1, size=(idx.size, 1)) * sd_donor[idx][:, None]
-    wells = pd.factorize(d.well[rows])[0]
-    eta = eta + (rng.normal(0, 1, size=(idx.size, wells.max() + 1)) * sd_well[idx][:, None])[:, wells]
-
-    mu = np.exp(eta + d.log_offset[rows])
-    a = alpha[idx][:, None]
-    lp = nbinom.logpmf(d.y[rows], a, a / (a + mu))
-    # log mean exp over draws, in a numerically safe form
-    m = lp.max(axis=0)
-    return m + np.log(np.exp(lp - m).mean(axis=0))
-
-
-@dataclass
-class Fold:
-    donor: int
-    gam: np.ndarray
-    linear: np.ndarray
-
-
-def elpd_summary(folds: list[Fold]) -> dict[str, float]:
-    gam = np.concatenate([f.gam for f in folds])
-    lin = np.concatenate([f.linear for f in folds])
-    diff = gam - lin
-    return {
-        "elpd_gam": float(gam.sum()),
-        "elpd_linear": float(lin.sum()),
-        "diff": float(diff.sum()),
-        "se": float(np.sqrt(diff.size) * diff.std(ddof=1)),
-        "n": int(diff.size),
-    }
-
-
-# -------------------------------------------------------------------- power
-
-
-def naive_share(cells: pd.DataFrame) -> pd.DataFrame:
-    """Share of second-wave uptake taken by cells that ate nothing in wave 1.
-
-    This is the quantity the arms actually move. Mean uptake per cell is nearly
-    identical across arms by construction -- that is the point of the post -- so
-    powering the design on the mean would be powering it on the one number the
-    experiment was built not to change.
-    """
-    c = cells.copy()
-    c["naive"] = c["wave1_uptake"] == 0
-    g = c.groupby(["donor", "arm"], as_index=False).apply(
-        lambda s: pd.Series({
-            "share": s.loc[s["naive"], "wave2_uptake"].sum() / max(s["wave2_uptake"].sum(), 1),
-            "naive_frac": float(s["naive"].mean()),
-            "total": float(s["wave2_uptake"].sum()),
-        }),
-        include_groups=False,
-    )
-    return g
-
-
-def _logit(p: np.ndarray, eps: float = 1e-3) -> np.ndarray:
-    p = np.clip(p, eps, 1 - eps)
-    return np.log(p / (1 - p))
-
-
-def arm_contrast(cells: pd.DataFrame) -> float:
-    """Donor-paired contrast in the naive share, focal minus broad, on the
-    logit scale.
-    """
-    g = naive_share(cells).pivot(index="donor", columns="arm", values="share")
-    return float(np.mean(_logit(g["focal"].to_numpy()) - _logit(g["broad"].to_numpy())))
-
-
-def power_curve(donor_counts, n_rep: int = 200, seed: int = 4,
-                base_seed: int = 90000, **kw) -> pd.DataFrame:
-    """Probability of detecting the assigned broad-versus-focal contrast.
-
-    The test is a donor-paired t-test on the logit naive share, which is
-    cheaper than the fitted intensity model and therefore conservative.
-    """
-    from scipy import stats
-
-    rows = []
-    for n_donors in donor_counts:
-        hits = 0
-        for r in range(n_rep):
-            cells = _power_draw(n_donors, base_seed + 1000 * n_donors + r, **kw)
-            g = naive_share(cells).pivot(index="donor", columns="arm", values="share")
-            contrast = _logit(g["focal"].to_numpy()) - _logit(g["broad"].to_numpy())
-            if contrast.size > 1 and contrast.std(ddof=1) > 0:
-                _, pval = stats.ttest_1samp(contrast, 0.0)
-                hits += int(pval < 0.05)
-        rows.append({"donors": int(n_donors), "power": hits / n_rep, "n_rep": n_rep})
-    return pd.DataFrame(rows)
-
-
-def _power_draw(n_donors, seed, **kw):
-    """One synthetic experiment, cells only, for the power loop."""
-    import sim as _sim
-
-    return _sim.simulate_experiment(
-        seed=seed, n_donors=n_donors, arms=("broad", "focal"), **kw,
-    ).cells
 
 
 # ------------------------------------------- fast leave-one-donor-out scoring
 
 
 def _nb_logpmf(y: np.ndarray, mu: np.ndarray, alpha: float) -> np.ndarray:
+    """Log pmf under the size/theta convention: Var = mu + mu**2 / alpha, so
+    large alpha is the Poisson limit.
+    """
     return nbinom.logpmf(y, alpha, alpha / (alpha + mu))
+
+
+def _nb_family(alpha: float):
+    """Statsmodels parameterises the negative binomial the other way round.
+
+    Its family takes Var = mu + a * mu**2, where *small* a is the Poisson
+    limit, while `estimate_alpha` and `_nb_logpmf` here use the size/theta
+    convention where *large* alpha is the Poisson limit. Passing one where the
+    other is expected silently fits a wildly overdispersed model, so the
+    conversion happens here and nowhere else.
+    """
+    import statsmodels.api as sm
+
+    return sm.families.NegativeBinomial(alpha=1.0 / alpha)
 
 
 def _independent_columns(X: np.ndarray, tol: float = 1e-8) -> np.ndarray:
@@ -332,8 +212,8 @@ def estimate_alpha(panel: pd.DataFrame, d: Design) -> float:
     mu = np.asarray(fitted.fittedvalues)
     excess = float((((d.y - mu) ** 2) - mu).sum())
     if excess <= 0:
-        return 1e4  # indistinguishable from Poisson
-    return float((mu**2).sum() / excess)
+        return 1e4  # indistinguishable from Poisson; 1/alpha is then ~0
+    return float(min((mu**2).sum() / excess, 1e4))
 
 
 def lodo_glm(panel: pd.DataFrame, d: Design, alpha: float) -> pd.DataFrame:
@@ -357,7 +237,7 @@ def lodo_glm(panel: pd.DataFrame, d: Design, alpha: float) -> pd.DataFrame:
         for name, X in (("gam", Xg), ("linear", Xl)):
             res = sm.GLM(
                 d.y[train], X[train],
-                family=sm.families.NegativeBinomial(alpha=alpha),
+                family=_nb_family(alpha),
                 offset=d.log_offset[train],
             ).fit()
             mu = np.exp(X[test] @ res.params + d.log_offset[test])
@@ -392,7 +272,7 @@ def calibration_table(panel: pd.DataFrame, d: Design, alpha: float,
             train = d.donor != held
             res = sm.GLM(
                 d.y[train], X[train],
-                family=sm.families.NegativeBinomial(alpha=alpha),
+                family=_nb_family(alpha),
                 offset=d.log_offset[train],
             ).fit()
             pred[~train] = np.exp(X[~train] @ res.params + d.log_offset[~train])
@@ -411,3 +291,71 @@ def calibration_table(panel: pd.DataFrame, d: Design, alpha: float,
                 "n": int(m.sum()),
             })
     return pd.DataFrame(out)
+
+
+# ------------------------------------------------------- the assigned contrast
+
+
+def naive_share(cells: pd.DataFrame) -> pd.DataFrame:
+    """Share of second-wave uptake taken by cells that ate nothing in wave 1.
+
+    This is the quantity the arms actually move. Mean uptake per cell is nearly
+    identical across arms by construction -- that is the point of the post -- so
+    powering the design on the mean would be powering it on the one number the
+    experiment was built not to change.
+    """
+    c = cells.copy()
+    c["naive"] = c["wave1_uptake"] == 0
+    return c.groupby(["donor", "arm"], as_index=False).apply(
+        lambda s: pd.Series({
+            "share": s.loc[s["naive"], "wave2_uptake"].sum() / max(s["wave2_uptake"].sum(), 1),
+            "naive_frac": float(s["naive"].mean()),
+            "total": float(s["wave2_uptake"].sum()),
+        }),
+        include_groups=False,
+    )
+
+
+def _logit(p: np.ndarray, eps: float = 1e-3) -> np.ndarray:
+    p = np.clip(p, eps, 1 - eps)
+    return np.log(p / (1 - p))
+
+
+def arm_contrast(cells: pd.DataFrame) -> float:
+    """Donor-paired contrast in the naive share, focal minus broad, on the
+    logit scale.
+    """
+    g = naive_share(cells).pivot(index="donor", columns="arm", values="share")
+    return float(np.mean(_logit(g["focal"].to_numpy()) - _logit(g["broad"].to_numpy())))
+
+
+def power_curve(donor_counts, n_rep: int = 200,
+                base_seed: int = 90000, **kw) -> pd.DataFrame:
+    """Probability of detecting the assigned broad-versus-focal contrast.
+
+    The test is a donor-paired t-test on the logit naive share, which is
+    cheaper than the fitted intensity model and therefore conservative.
+    """
+    from scipy import stats
+
+    rows = []
+    for n_donors in donor_counts:
+        hits = 0
+        for r in range(n_rep):
+            cells = _power_draw(n_donors, base_seed + 1000 * n_donors + r, **kw)
+            g = naive_share(cells).pivot(index="donor", columns="arm", values="share")
+            contrast = _logit(g["focal"].to_numpy()) - _logit(g["broad"].to_numpy())
+            if contrast.size > 1 and contrast.std(ddof=1) > 0:
+                _, pval = stats.ttest_1samp(contrast, 0.0)
+                hits += int(pval < 0.05)
+        rows.append({"donors": int(n_donors), "power": hits / n_rep, "n_rep": n_rep})
+    return pd.DataFrame(rows)
+
+
+def _power_draw(n_donors, seed, **kw):
+    """One synthetic experiment, cells only, for the power loop."""
+    import sim as _sim
+
+    return _sim.simulate_experiment(
+        seed=seed, n_donors=n_donors, arms=("broad", "focal"), **kw,
+    ).cells
