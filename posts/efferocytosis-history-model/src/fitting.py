@@ -36,6 +36,10 @@ class Basis:
     degree: int
     centre: np.ndarray
 
+    @property
+    def n_basis(self) -> int:
+        return len(self.knots) - self.degree - 1
+
     def __call__(self, x: np.ndarray) -> np.ndarray:
         lo, hi = self.knots[self.degree], self.knots[-self.degree - 1]
         xc = np.clip(np.asarray(x, dtype=float), lo, hi)
@@ -57,7 +61,6 @@ def make_basis(x: np.ndarray, n_basis: int = 8, degree: int = 3) -> Basis:
     if interior.size < n_interior:
         interior = np.linspace(lo, hi, n_interior + 2)[1:-1]
     knots = np.concatenate([np.repeat(lo, degree + 1), interior, np.repeat(hi, degree + 1)])
-    n_basis = len(knots) - degree - 1
     raw = BSpline.design_matrix(np.clip(x, lo, hi), knots, degree).toarray()
     return Basis(knots=knots, degree=degree, centre=raw.mean(axis=0))
 
@@ -126,7 +129,7 @@ def _finish(model: pm.Model, d: Design, eta: pt.TensorVariable, alpha, weights: 
     pm.Potential("loglik", (w * pm.logp(dist, d.y)).sum())
 
 
-def gam_model(d: Design, weights: np.ndarray, n_basis: int = 8) -> pm.Model:
+def gam_model(d: Design, weights: np.ndarray) -> pm.Model:
     """Penalised splines: a second-order random walk on the basis coefficients,
     written non-centred so the sampler sees a unit-scale parameter.
     """
@@ -135,7 +138,7 @@ def gam_model(d: Design, weights: np.ndarray, n_basis: int = 8) -> pm.Model:
         eta = intercept + u_donor[d.donor] + u_well[d.well]
         for s in SMOOTHS:
             tau = pm.HalfNormal(f"tau_{s}", 0.5)
-            z = pm.Normal(f"z_{s}", 0, 1, shape=n_basis)
+            z = pm.Normal(f"z_{s}", 0, 1, shape=d.bases[s].n_basis)
             raw = tau * pt.cumsum(pt.cumsum(z))
             beta = pm.Deterministic(f"beta_{s}", raw - raw.mean())
             eta = eta + pt.dot(d.X[s], beta)
@@ -154,6 +157,28 @@ def _nb_logpmf(y: np.ndarray, mu: np.ndarray, alpha: float) -> np.ndarray:
     large alpha is the Poisson limit.
     """
     return nbinom.logpmf(y, alpha, alpha / (alpha + mu))
+
+
+RIDGE = 1e-3  # shrinks the spline columns only; see _fit_glm
+
+
+def _fit_glm(y, X, family, offset):
+    """Ridge-penalised GLM fit.
+
+    The Bayesian model penalises its splines through a random-walk prior, so
+    the maximum-likelihood stand-in has to be penalised too. Left unpenalised,
+    a held-out fold whose training donors do not span the knot range
+    extrapolates without limit -- one fold scored -418,046 against a typical
+    -1,250, and another produced non-finite log densities. The intercept is
+    left unpenalised; everything else gets a small ridge.
+    """
+    import statsmodels.api as sm
+
+    penalty = np.full(X.shape[1], RIDGE)
+    penalty[0] = 0.0
+    return sm.GLM(y, X, family=family, offset=offset).fit_regularized(
+        alpha=penalty, L1_wt=0.0,
+    )
 
 
 def _nb_family(alpha: float):
@@ -226,7 +251,6 @@ def lodo_glm(panel: pd.DataFrame, d: Design, alpha: float) -> pd.DataFrame:
     approximation for both models, so the comparison is fair even though
     neither number is an ELPD.
     """
-    import statsmodels.api as sm
 
     Xg, Xl = glm_designs(panel, d)
     rows = []
@@ -235,11 +259,7 @@ def lodo_glm(panel: pd.DataFrame, d: Design, alpha: float) -> pd.DataFrame:
         test = ~train
         got = {}
         for name, X in (("gam", Xg), ("linear", Xl)):
-            res = sm.GLM(
-                d.y[train], X[train],
-                family=_nb_family(alpha),
-                offset=d.log_offset[train],
-            ).fit()
+            res = _fit_glm(d.y[train], X[train], _nb_family(alpha), d.log_offset[train])
             mu = np.exp(X[test] @ res.params + d.log_offset[test])
             got[name] = _nb_logpmf(d.y[test], mu, alpha)
         rows.append(pd.DataFrame({"donor": held, **got}))
@@ -247,13 +267,25 @@ def lodo_glm(panel: pd.DataFrame, d: Design, alpha: float) -> pd.DataFrame:
 
 
 def score_summary(folds: pd.DataFrame) -> dict[str, float]:
+    """Totals and a standard error taken at the donor, not the row.
+
+    Rows within a fold share one set of fitted coefficients, so they are not
+    independent draws and the usual row-wise leave-one-out formula understates
+    the correlation. The resampling unit here is the donor, so the error is
+    taken across the six per-donor totals.
+    """
     diff = folds["gam"].to_numpy() - folds["linear"].to_numpy()
+    by_donor = (
+        folds.assign(diff=diff).groupby("donor")["diff"].sum().to_numpy()
+    )
     return {
         "gam": float(folds["gam"].sum()),
         "linear": float(folds["linear"].sum()),
         "diff": float(diff.sum()),
-        "se": float(np.sqrt(diff.size) * diff.std(ddof=1)),
+        "se": float(np.sqrt(by_donor.size) * by_donor.std(ddof=1)),
+        "se_row": float(np.sqrt(diff.size) * diff.std(ddof=1)),
         "n": int(diff.size),
+        "n_donors": int(by_donor.size),
     }
 
 
@@ -262,7 +294,6 @@ def calibration_table(panel: pd.DataFrame, d: Design, alpha: float,
     """Observed against predicted counts on held-out donors, by bin of
     predicted rate.
     """
-    import statsmodels.api as sm
 
     Xg, Xl = glm_designs(panel, d)
     out = []
@@ -270,11 +301,7 @@ def calibration_table(panel: pd.DataFrame, d: Design, alpha: float,
         pred = np.zeros(len(panel))
         for held in np.sort(panel["donor"].unique()):
             train = d.donor != held
-            res = sm.GLM(
-                d.y[train], X[train],
-                family=_nb_family(alpha),
-                offset=d.log_offset[train],
-            ).fit()
+            res = _fit_glm(d.y[train], X[train], _nb_family(alpha), d.log_offset[train])
             pred[~train] = np.exp(X[~train] @ res.params + d.log_offset[~train])
         edges = np.quantile(pred, np.linspace(0, 1, n_bins + 1))
         idx = np.clip(np.digitize(pred, edges[1:-1]), 0, n_bins - 1)

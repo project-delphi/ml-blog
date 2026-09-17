@@ -153,7 +153,10 @@ print(f"final totals differ by {total_gap:.0f} targets")
 print(f"experienced-cell share: priming {share_p:.3f}, satiety {share_s:.3f}")
 ```
 
-The two population curves differ by `{python} f"{total_gap:.0f}"` targets out of 900.
+The two population curves are identical, not merely close: the pool empties on a fixed
+schedule, so the allocation rule cannot change the total. That is the construction, not
+a finding — it is what lets the figure vary the mechanism with the population curve held
+exactly still.
 The share of the work done by experienced cells is
 `{python} f"{share_p:.2f}"` against `{python} f"{share_s:.2f}"` — a factor of
 `{python} f"{share_p / share_s:.1f}"`. The mean is the same; the mechanism is not.
@@ -410,8 +413,9 @@ which is where the band is widest and the estimate worst.
 
 The estimated dispersion is
 `{python} "effectively Poisson" if alpha_hat > 1e3 else f"{alpha_hat:.1f}"`: with the
-offset and the random effects in place, there is no extra-Poisson variation left for the
-negative binomial to absorb. The negative binomial nests the Poisson, so this costs
+opportunity offset in place, there is no extra-Poisson variation left for the negative
+binomial to absorb. That estimate comes from a fixed-effect Poisson fit on the same
+design, not from the Bayesian model's own dispersion posterior. The negative binomial nests the Poisson, so this costs
 nothing, but it is worth saying rather than reporting a dispersion that is doing no work.
 
 ## Out-of-donor evaluation
@@ -432,7 +436,9 @@ t0 = lap("evaluation", t0)
 kept = (score["diff"] > 4) and (score["diff"] > 2 * score["se"])
 print(f"spline  {score['gam']:9.1f}")
 print(f"linear  {score['linear']:9.1f}")
-print(f"diff    {score['diff']:9.2f}  (se {score['se']:.2f}, n = {score['n']})")
+print(f"diff    {score['diff']:9.2f}")
+print(f"  se     {score['se']:9.2f}  (across {score['n_donors']} donors, the resampling unit)")
+print(f"  se_row {score['se_row']:9.2f}  (across {score['n']} rows, which are not independent)")
 print(f"margin met: {kept}")
 ```
 
@@ -443,7 +449,11 @@ coefficient uncertainty, carry no random effects, and predict the held-out donor
 average donor. The
 approximation is identical for both models, so the comparison is fair, but neither
 number is an ELPD. The scoring rule is the log score, which is strictly proper
-([Gneiting and Raftery 2007](https://doi.org/10.1198/016214506000001437)).
+([Gneiting and Raftery 2007](https://doi.org/10.1198/016214506000001437)). Both fits
+carry a small ridge on the non-intercept columns, because an unpenalised spline GLM
+extrapolates without limit on a fold whose training donors do not span the knot range.
+The standard error is taken across donors, the unit that is actually resampled; the
+row-wise figure is printed beside it and is the larger of the two here.
 
 The spline model scores `{python} f"{score['diff']:.1f}"` log points above the baseline
 with a standard error of `{python} f"{score['se']:.1f}"`, so it
@@ -612,7 +622,8 @@ adequate = power[power["power"] >= 0.8]["donors"]
 n_needed = int(adequate.min()) if len(adequate) else None
 ```
 
-`{python} f"{n_needed}"` donors reach 80% power for this contrast at this effect size.
+`{python} f"{n_needed}" if n_needed else "More than the largest grid point simulated"`
+donors reach 80% power for this contrast at this effect size.
 That is a statement about the naive-cell share; the same experiment is badly underpowered
 for the population mean, which the design deliberately holds still. The test used here is
 a donor-paired comparison, which is cheaper than the fitted intensity model and therefore
@@ -640,6 +651,16 @@ conservative.
   curve over `{python} f"{cover_load:.0%}"` of its range. Reported rather than tuned away: a penalty
   prior and an aggregation grid both chosen before fitting should not be adjusted until
   the intervals look right. The shape conclusion stands; the interval widths do not.
+- **The penalty shrinks more than a P-spline should.** The random walk is written
+  `tau * cumsum(cumsum(z))`, which puts the constant and linear components of each
+  smooth under the same `tau` as the curvature. A standard P-spline leaves that
+  two-dimensional null space unpenalised. The result is asymmetric in the basis index —
+  the first coefficient is pinned hardest — which is a specific structural reason the
+  estimated peak sits to the right of the true one, over and above block blurring.
+- **The folds are not fully held out.** The dispersion estimate, the spline knots and
+  the covariate standardisation are all computed on the full panel, so a held-out donor
+  contributes to them. It is the same leakage on both sides, so the comparison stays
+  fair, but each absolute score is optimistic.
 - **$f_3$ is the weakest of the three.** Depletion and signalling are separable in
   principle through the offset, but the two generating modes are not compared head to
   head here.

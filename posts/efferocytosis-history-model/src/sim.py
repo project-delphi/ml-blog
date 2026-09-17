@@ -178,6 +178,15 @@ def _well(
     uptake_by_wave = np.zeros((n_cells, 2), dtype=int)
 
     for b in range(N_BINS):
+        if b == WAVE1[1]:
+            # The wash. Uneaten first-wave corpses are removed, which is what
+            # makes "naive" mean "ate nothing in the first wave" rather than
+            # "has not got round to the leftovers yet". Without this the first
+            # wave never ends: leftovers stay edible for the whole run, they
+            # inflate the second-wave opportunity differentially by arm, and
+            # over half of first-wave uptake lands after the first wave.
+            alive[wave == 1] = False
+
         slot = b % DIGEST_BINS
         load = load - queue[:, slot]
         queue[:, slot] = 0.0
