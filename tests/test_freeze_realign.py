@@ -117,6 +117,15 @@ def test_padded_fence_in_record_is_tolerated():
     assert rec["result"]["markdown"].endswith("three, edited\n")
 
 
+def test_changed_segment_keeps_a_blank_line_before_the_next_div():
+    # Source with no blank line between the heading and the fence.
+    parts = ("### Heading\n", "\ntwo\n", "\nthree\n")
+    old = source(*parts)
+    new = old.replace("### Heading", "### New heading")
+    rec = realign_ok(old, new, parts)
+    assert "### New heading\n\n" + OUT_A in rec["result"]["markdown"]
+
+
 def test_prose_added_between_adjacent_cells_lands_after_the_output():
     parts = ("one\n", "\n", "\nthree\n")
     old = source(*parts)

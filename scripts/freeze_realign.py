@@ -216,7 +216,9 @@ def cell_end(
         # `execution_count` other than the one this cell would have received.
         div_id = DIV_ID_RE.match(markdown, pos)
         line_end = markdown.find("\n", pos)
-        count = EXEC_COUNT_RE.search(markdown, pos, line_end if line_end > 0 else None)
+        count = EXEC_COUNT_RE.search(
+            markdown, pos, line_end if line_end > 0 else len(markdown)
+        )
         # An unlabelled cell gets a random hex id, so only a `cell-` id (the
         # form a label produces) proves the div is someone else's.
         ours = True
@@ -363,7 +365,12 @@ def realign(old_src: str, new_src: str, record: dict) -> dict:
         if old_p == new_p:
             out.append(m.group(0))
         else:
-            out.append(pad_blocks(with_inline_values(new_p, anchor, m.groups())))
+            text = pad_blocks(with_inline_values(new_p, anchor, m.groups()))
+            # The match swallowed the blank line Quarto pads before the next
+            # div; without it pandoc reads the div opener as paragraph text.
+            if i < n:
+                text = text.rstrip("\n") + "\n\n"
+            out.append(text)
         pos = m.end()
     if markdown[pos:].strip():
         raise RealignError(
@@ -435,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
     if not record_path.exists():
         print(f"{slug}: has no _freeze/ record, so there is nothing to realign.")
         return 1
-    record = json.loads(record_path.read_text())
+    record = json.loads(record_path.read_text(encoding="utf-8"))
     new_src = source.read_bytes().decode("utf-8")
     new_hash = hashlib.md5(new_src.encode("utf-8")).hexdigest()
     if record["hash"] == new_hash:
@@ -456,7 +463,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         print(f"{slug}: prose-only change; realign would succeed.")
         return 0
-    record_path.write_text(json.dumps(new_record, indent=2, ensure_ascii=False) + "\n")
+    record_path.write_text(
+        json.dumps(new_record, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
     print(
         f"{slug}: realigned {record['hash'][:8]} -> {new_hash[:8]}. "
         "Now run the project render and commit docs/ with the source."

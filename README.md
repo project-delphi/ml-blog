@@ -125,17 +125,19 @@ the reasons each step is there.
 
 ### Checks
 
-- `make check-posts` — run it before any full render. It verifies that code posts pin
-  a kernel and a `requirements.txt`, that every pinned kernel appears in
-  `make kernels-stub`, and that no post's frozen output has drifted from its source.
-  Stdlib-only, so it runs on any interpreter.
-- `.venv/bin/pre-commit run --files <your paths>` for lint (black, ruff, mypy,
-  pyupgrade). It is not on `PATH`, and the hooks are not installed into `.git/hooks/`,
-  so nothing runs automatically on commit. Scope it to what you changed —
-  `--all-files` rewrites a few hundred files of pre-existing lint debt. For spelling,
-  `uvx codespell <file>`: it is configured in `pyproject.toml` but no hook runs it.
-
-There is no test suite.
+- `make check` — everything that does not need Quarto: `make lint` (ruff check and
+  format), `make spell` (codespell over the prose), `make test` (pytest over the two
+  scripts under `scripts/`), and `make check-posts`.
+- `make check-posts` — run it before any full render (`make render` does). It verifies
+  that code posts pin a kernel and a `requirements.txt`, that every pinned kernel
+  appears in `make kernels-stub`, that no post's frozen output has drifted from its
+  source, and that every post is in the site listing. Stdlib-only, so it runs on any
+  interpreter.
+- `make freeze-realign SLUG=<slug>` — after a prose-only edit to a freeze-backed post,
+  accepts the change without re-executing the post.
+- The pre-commit hooks (ruff, codespell, shellcheck, the whitespace fixers) run on the
+  staged files at every commit once installed with `.venv/bin/pre-commit install`.
+  Never `--all-files`: the formatters fix in place.
 
 ## Further reading
 
