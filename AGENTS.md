@@ -329,7 +329,7 @@ series c1–c6) under different values, and the mermaid palette. Anything styled
 - **Never set `theme:` in a post.** Quarto 1.6 cannot merge a document-level `theme:`
   with the project's light/dark pair: the render dies with `Path must be a string` on
   that post, after `docs/` is deleted. Per-post styling goes in a plain CSS file via
-  `css: post.css`, written against the tokens. The nine posts that carried a `theme:`
+  `css: post.css`, written against the tokens. The eleven posts that carried a `theme:`
   from before the pair existed were converted with `make freeze-realign` (their
   `theme.scss` compiled to `post.css` with Quarto's bundled dart-sass,
   `/Applications/quarto/bin/tools/*/dart-sass/sass`).

@@ -13,7 +13,7 @@ the algebra and the arithmetic disagree.
 
 ```
 index.qmd              the post (Quarto, jupyter engine, Python)
-theme.scss             post-scoped theme layered over the site's `zephyr`
+post.css             post-scoped stylesheet, compiled from the former theme.scss, included via `css:`
 widgets.js             the seven interactive widgets, dependency-free
 cover.png              social card, the Dirichlet simplex figure
 requirements.txt       pinned dependencies
