@@ -1,5 +1,4 @@
-"""
-Email router + RAG drafter with a 3-reply cap — LlamaIndex Workflows version.
+"""Email router + RAG drafter with a 3-reply cap — LlamaIndex Workflows version.
 
 Business rule: the agent may reply to a customer thread at most 3 times.
 On the 4th inbound email, it stops drafting and forwards the whole thread
@@ -98,9 +97,7 @@ def _format_transcript(history: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 class EmailThreadWorkflow(Workflow):
     @step
-    async def intake(
-        self, ctx: Context, ev: StartEvent
-    ) -> RoutedEvent | EscalateEvent:
+    async def intake(self, ctx: Context, ev: StartEvent) -> RoutedEvent | EscalateEvent:
         """Record the inbound email, enforce the reply cap, route."""
         email: str = ev.email
 

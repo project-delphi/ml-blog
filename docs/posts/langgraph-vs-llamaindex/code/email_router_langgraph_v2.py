@@ -1,5 +1,4 @@
-"""
-Email router + RAG drafter with a 3-reply cap — LangGraph version.
+"""Email router + RAG drafter with a 3-reply cap — LangGraph version.
 
 Business rule: the agent may reply to a customer thread at most 3 times.
 On the 4th inbound email, it stops drafting and forwards the whole thread
@@ -224,5 +223,4 @@ if __name__ == "__main__":
             print("\n--- INTERNAL FORWARD ---")
             print(result["forward"])
         else:
-            print(f"AGENT ({result['department']}): "
-                  f"{result['messages'][-1].content}")
+            print(f"AGENT ({result['department']}): {result['messages'][-1].content}")
