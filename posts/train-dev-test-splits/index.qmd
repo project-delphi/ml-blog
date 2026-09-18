@@ -6,6 +6,8 @@ date: "2024-09-20"
 categories: [Machine Learning, Statistics]
 tags: [train-test-split, validation, leakage, cross-validation, scikit-learn]
 image: "./cover.png"
+resources:
+  - widgets.js
 aliases:
   - /posts/minimal-data-inspection-pre-splitting/
 format:
@@ -72,14 +74,59 @@ mistake.
   that depends on the test rows into every training row.
 - **Dimensionality reduction.** A PCA fitted on the whole table chooses the axes with
   the test rows' help, and every training feature is then expressed in those axes.
+- **Feature selection.** Keeping the features most correlated with the target, scored
+  over the whole table, is the one step that is dramatic by itself. The next section
+  measures it.
 
-None of these is dramatic on its own. Together they are why a model can post a
+None of the first four is dramatic on its own. Together they are why a model can post a
 respectable test score and then disappoint in production: the test set was not unseen,
-it was seen through the preprocessing. The fix has two parts. Split first, before any
-step that fits anything. Then put the preprocessing inside the model's pipeline, so it
-is fitted on the training fold only and merely applied to the rest. In scikit-learn
-that is the `Pipeline`, and it is the reason to use one even when the model is a single
-estimator:
+it was seen through the preprocessing.
+
+## What one leaky step is worth, in points
+
+The widget runs the same experiment twice on data that contains nothing to find. Every
+feature is standard-normal noise, every label is a coin flip, and the two are
+independent by construction, so the only honest accuracy is 50%. The procedure is the
+one above: score each feature by its correlation with the label, keep the best few,
+split 80/20, fit a nearest-centroid classifier on the training rows, and report its
+accuracy on the held-out rows. The only difference between the two bars is *when* the
+scoring happens.
+
+::: {#widget-leakage}
+:::
+
+```{=html}
+<script src="widgets.js"></script>
+```
+
+At the settings it opens on, 100 rows and 500 noise features with the best 10 kept, the
+bar for selection done before the split reads about 83% and the bar for selection done
+inside it reads about 53%. Step the seed through all forty of its values and the two
+bars behave differently in a way worth watching. The leaky bar stays high, between 70%
+and 83%, never once touching chance. The honest bar scatters from 43% to 60% around
+the 50% line, because a 20-row test set moves five points every time one row changes
+its mind.
+
+That is the distinction the picture is for. The honest estimate is *noisy*, and the
+cure for noise is more data or more folds. The leaky estimate is *biased*, and no
+amount of either will cure it: it is wrong in the same direction every time, by twenty
+to thirty points of accuracy that do not exist.
+
+Three of the sliders make it worse in the direction intuition gets backwards. Raise
+*features kept* to 40 and the leaky bar climbs to about 88%, because more chances to
+pick a feature that happens to line up with the labels means more of the test set
+smuggled in. Raise *noise features* and the same thing happens, since the best of 800
+coincidences beats the best of 50. And *drop* the row count to 40 and it climbs again,
+to about 89%, because coincidences are easier to find in a small sample. A leaky
+pipeline therefore looks most convincing exactly where the data is thinnest, which is
+where a practitioner is most tempted to squeeze the features first.
+
+## Split first, then fit inside
+
+The fix has two parts. Split first, before any step that fits anything. Then put the
+preprocessing inside the model's pipeline, so it is fitted on the training fold only
+and merely applied to the rest. In scikit-learn that is the `Pipeline`, and it is the
+reason to use one even when the model is a single estimator:
 
 ```python
 from sklearn.ensemble import RandomForestClassifier
