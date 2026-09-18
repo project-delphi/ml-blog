@@ -1,192 +1,111 @@
 ---
-title: "An Overview of Apache Airflow"
+title: "Airflow Earns Its Keep at the Third Retry"
+description: "When a scheduled script stops being enough and a workflow orchestrator starts paying for itself: the handful of Airflow concepts that matter, and what each replaces. As of early 2025."
 author: "Ravi Kalia"
 date: "2025-03-31"
-categories: [Data Engineering, Workflow Automation, Apache Airflow]
+categories: [Data Engineering, Tooling]
+tags: [airflow, orchestration, dag, scheduling, pipelines]
 image: "./cover.png"
-format: html
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
 ---
 
-![An Overview of Apache Airflow](./cover.png)
+![Apache Airflow](./cover.png)
 
-Airflow runs scheduled tasks that depend on each other. That machinery only earns its keep past a certain point, and a handful of concepts come first.
+The first version of every data pipeline is a script and a cron entry. It works until
+the night the upstream file is late, the script fails, nobody notices until the
+dashboard is stale on Monday, and the fix is a rerun by hand. Airflow is the tool
+people reach for at that point, and it is worth being precise about what it adds,
+because it is a lot of machinery and most of it is for the failure cases. This post
+says what an orchestrator does that a script does not, and the four concepts needed
+to use Airflow for it, as of early 2025.
 
-## Introduction
+## A script hides its structure; a DAG declares it
 
-Apache Airflow is an open-source platform for orchestrating complex workflows. It allows you to define, schedule, and monitor workflows as Directed Acyclic Graphs (DAGs). It is widely used for data engineering, machine learning pipelines, and ETL processes due to its scalability, flexibility, and monitoring capabilities.
-
-## Why Use Apache Airflow?
-
-Airflow is useful when you need:
-- Task scheduling: Automate workflow execution.
-- Dependency management: Ensure tasks run in a specific order.
-- Scalability: Run workflows on a single machine or a distributed cluster.
-- Monitoring & Logging: Track execution with a built-in web UI.
-- Integration: Connect with databases, cloud services, APIs, and more.
-
-## Why Use Airflow Instead of a Plain Python Script?
-
-While a plain Python script can handle simple workflows, Airflow provides many advantages for complex workflows:
-
-### 1. Built-in Scheduling and Dependency Management
-
-- Python scripts typically require manual scheduling (e.g., using `cron` or `sleep` loops), whereas Airflow allows you to set schedules declaratively.
-- Airflow ensures dependencies between tasks are correctly followed using DAGs, making workflows easier to maintain and debug.
-
-### 2. Scalability
-
-- A Python script runs tasks sequentially or with manual threading, whereas Airflow can distribute tasks across multiple workers using `CeleryExecutor` or `KubernetesExecutor`.
-
-### 3. Robust Monitoring & Logging
-
-- Airflow provides a web UI to visualize DAG execution, task retries, and logs, making debugging easier.
-- Python scripts require manual logging setup and tracking.
-
-### 4. Fault Tolerance & Retries
-
-- Airflow allows defining automatic retries with exponential backoff, handling transient failures gracefully.
-- A Python script needs explicit error handling and retry logic.
-
-### 5. Integration with External Systems
-
-- Airflow provides built-in operators and hooks for databases, cloud storage (AWS, GCP, Azure), APIs, and messaging systems (Kafka, RabbitMQ).
-- A Python script requires writing custom integration logic.
-
-### 6. Dynamic Workflow Execution
-
-- Airflow DAGs can generate tasks dynamically based on conditions or external inputs.
-- Python scripts require explicit conditional logic and looping.
-
-### 7. Versioning & Reproducibility
-
-- Airflow enables version-controlled workflows via Git, ensuring reproducibility.
-- Python scripts must be manually versioned.
-
-If your workflow is simple and requires only a few steps, a Python script may suffice. For workflows that retry, scale, and stay versioned, Airflow is the better choice.
-
-## Core Concepts in Airflow
-### 1. DAG (Directed Acyclic Graph)
-
-A DAG represents a workflow with dependencies between tasks. Each DAG has a schedule, start date, and a set of tasks.
+A pipeline is a set of steps with an order: fetch, then clean, then load, then report.
+In a script that order is implicit in the lines. Airflow makes it explicit as a
+**DAG**, a directed acyclic graph of tasks, with a schedule and a start date. Once the
+structure is data rather than code, the scheduler can do things a script cannot: run
+independent tasks in parallel, retry one failed task without redoing the others, show
+which task is running and which failed, and rerun a day's work for a range of past
+dates. The smallest DAG is a few lines:
 
 ```python
-from airflow import DAG
-from airflow.operators.python import PythonOperator
 from datetime import datetime
 
-def my_task():
-    print("Hello, Airflow!")
+from airflow import DAG
+from airflow.operators.python import PythonOperator
 
-with DAG(dag_id="my_dag",
-         start_date=datetime(2024, 3, 31),
-         schedule_interval="@daily",
-         catchup=False) as dag:
 
-    task = PythonOperator(
-        task_id="print_message",
-        python_callable=my_task,
-    )
+def fetch():
+    print("fetching")
+
+
+with DAG(dag_id="daily_report", start_date=datetime(2024, 3, 31),
+         schedule="@daily", catchup=False) as dag:
+    fetch_task = PythonOperator(task_id="fetch", python_callable=fetch)
 ```
 
-#### Important DAG Methods
+The declaration is the whole value. The scheduler reads it and runs the graph at each
+tick, while the script would have had to be a loop with `sleep` in it, or a cron entry
+with no memory of what it ran last time.
 
-- `dag.run()`: Manually trigger the DAG execution.
-- `dag.get_task(task_id)`: Retrieve a specific task by ID.
-- `dag.clear()`: Reset task states so they can be re-run.
+## Four concepts cover most pipelines
 
-### 2. Operators
-Operators define the type of tasks in a DAG. Some common operators include:
-- `PythonOperator`: Runs a Python function.
-- `BashOperator`: Executes shell commands.
-- `EmailOperator`: Sends email notifications.
-- `SQLExecuteQueryOperator`: Runs SQL queries.
+- **Tasks and operators.** A task is one node; an operator is its type. `PythonOperator`
+  runs a function, `BashOperator` a command, and the SQL and cloud providers ship
+  operators for their systems, so a task that loads a table into a warehouse is
+  configuration rather than code.
+- **Dependencies.** `a >> b` says b runs after a. Two tasks with no edge between them
+  run in parallel when the executor allows it.
+- **Sensors.** A task that waits for a condition, a file appearing, a table being
+  populated, an API returning ready, and times out if it never comes. This is the
+  answer to the late upstream file:
 
-#### Important Operator Methods
+  ```python
+  from airflow.sensors.filesystem import FileSensor
 
-- `task.execute(context)`: Manually executes a task.
-- `task.render_template_fields(context)`: Renders Jinja templates in the task.
-- `task.set_upstream(task)`: Defines that a task must run before the given task.
-- `task.set_downstream(task)`: Defines that a task must run after the given task.
+  wait = FileSensor(task_id="wait_for_input", filepath="/data/input.csv", timeout=600)
+  wait >> fetch_task
+  ```
 
-### 3. Executors
+- **Executors.** Where tasks run: the `LocalExecutor` on one machine, `CeleryExecutor`
+  across a pool of workers, `KubernetesExecutor` as one pod per task. The DAG does not
+  change when the executor does, which is how a pipeline grows from a laptop to a
+  cluster without a rewrite.
 
-Executors determine how tasks are run:
-- `LocalExecutor`: Runs tasks sequentially on a single machine.
-- `CeleryExecutor`: Distributes tasks across multiple workers.
-- `KubernetesExecutor`: Runs tasks in a Kubernetes cluster.
+Retries, with a delay and a back-off, are one argument on a task. Logs are captured
+per task and shown in the web UI, which `airflow standalone` serves on port 8080
+after `pip install apache-airflow`. Together those are the features the failure cases
+need, and none of them exists in the cron version.
 
-#### Important Executor Methods
+## The cost is the scheduler itself
 
-- `executor.heartbeat()`: Checks the status of running tasks.
-- `executor.start()`: Starts the execution engine.
-- `executor.end()`: Stops the execution engine.
+Airflow is a scheduler, a web server, a metadata database and a worker pool, and
+someone runs them. For a single script on a schedule it is more infrastructure than
+the job, which is why the managed offerings exist (Amazon's MWAA, Google's Cloud
+Composer, Astronomer): they charge for what a team would otherwise spend keeping the
+scheduler alive. The point at which the machinery pays for itself is easy to name. It
+is the third time someone reruns a failed step by hand, or the first time two steps
+that could run in parallel take twice as long in series.
 
-### 4. Hooks and Sensors
+## Where it stops holding
 
-- Hooks connect to external systems (e.g., databases, cloud storage).
-- Sensors wait for an event before proceeding (e.g., file arrival, API response).
-
-```python
-from airflow.sensors.filesystem import FileSensor
-
-file_sensor = FileSensor(
-    task_id="wait_for_file",
-    filepath="/data/input.csv",
-    timeout=600,
-    dag=dag
-)
-```
-
-#### Important Hook and Sensor Methods
-
-- `hook.get_conn()`: Returns a connection to an external service.
-- `hook.run(sql)`: Executes a SQL query (for database hooks).
-- `sensor.poke(context)`: Checks if the condition is met.
-- `sensor.execute(context)`: Runs the sensor until the condition is met.
-
-## Installing and Running Airflow
-
-To install Airflow:
-
-```bash
-pip install apache-airflow
-```
-
-To start the Airflow web server and scheduler:
-
-```bash
-airflow standalone
-```
-
-The UI will be available at [http://localhost:8080](http://localhost:8080).
-
-## Task Dependencies and Execution Order
-
-Tasks can be arranged using `>>` (sequential execution) or `<<` (parallel execution):
-
-```python
-task1 >> task2  # task2 runs after task1
-task3.set_upstream(task1)  # Equivalent to task1 >> task3
-task4.set_downstream(task5)  # Equivalent to task4 >> task5
-```
-
-## Monitoring and Debugging Workflows
-
-- Web UI: Provides a visual representation of DAGs and task execution.
-- Logs: Available for each task in the UI.
-- Retries: Automatically re-run failed tasks with exponential backoff.
-
-## Scaling Airflow
-
-For larger workflows, use:
-- CeleryExecutor: Distributed execution using Celery workers.
-- KubernetesExecutor: Dynamically schedules tasks in Kubernetes.
-- Database-backed queues: Store execution state in PostgreSQL/MySQL instead of SQLite.
-
-## Conclusion
-
-Apache Airflow orchestrates data engineering, ETL, and machine learning pipelines. DAGs, operators, hooks, and executors are the pieces you use to automate those jobs.
-
-Would you like an advanced example using cloud services like AWS or GCP? Let me know!
+Airflow schedules and runs; it does not transform, and a DAG whose tasks do heavy
+work in the worker process is misusing it. The tasks should hand work to the system
+built for it: a [dbt](../dbt/) run for SQL, a Spark job for data that does not fit,
+a container for anything else. Airflow's task is to say when, in what order, and what
+to do when it fails. And the DAG file is Python that the scheduler imports repeatedly,
+so top-level code in it (a database call, a slow import) runs every few seconds
+forever; the recurring beginner's outage is a DAG file that does work at import time.
 
 Scripts. Break. Quietly. DAGs. Retry. Log. Scale. Orchestrate. When. Order. Matters.
+
+## References
+
+- [Apache Airflow documentation](https://airflow.apache.org/docs/)
+- [Airflow: best practices for DAG files](https://airflow.apache.org/docs/apache-airflow/stable/best-practices.html)
+- [dbt](../dbt/) and [Kafka, NiFi and Flink](../streaming-kafka-flink-nifi/) on this blog

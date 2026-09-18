@@ -1,165 +1,149 @@
 ---
-title: "dbt"
-description: "Learn how dbt simplifies data transformations with modular SQL, testing, and automation."
+title: "dbt Turns a Pile of SQL Scripts Into a Project"
+description: "What changes when SQL transformations get references, tests, documentation and version control: the dbt setup end to end on Amazon Redshift. As of early 2025."
 author: "Ravi Kalia"
 date: "2025-03-22"
-categories: [dbt, AWS, Data Engineering]
+categories: [Data Engineering]
+tags: [dbt, sql, redshift, elt, data-transformation]
 image: "./cover.png"
-tags: [dbt, SQL, Redshift, Data Transformation]
-format: html
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
 ---
 
 ![dbt](./cover.png)
 
-dbt turns a pile of loose SQL scripts into a tested, documented, version-controlled project. Here is that setup end to end on Amazon Redshift.
+Every analytics team has a folder of SQL scripts that build the tables the dashboards
+read. Nobody is sure which script has to run before which, the one that broke last
+quarter was fixed by hand in the warehouse and the file was never updated, and the
+question "where does this column come from" takes an afternoon. dbt is a small tool
+with one idea for that folder: treat the scripts as a software project. Each query
+becomes a model that refers to the others by name, the project knows the order, and
+tests, documentation and a lineage graph come from the same files. This post sets that
+up end to end on Amazon Redshift, as of early 2025.
 
-## Introduction to dbt
+## A model is a SELECT that knows what it depends on
 
-Modern data teams rely on dbt (Data Build Tool) to manage SQL-based transformations efficiently. Unlike traditional ETL tools, dbt follows an ELT approach, allowing analysts and engineers to:
+dbt runs *inside* the warehouse: it does no transformation itself, it just sends SQL
+and materialises the results as tables or views. That is the ELT shape, load first and
+transform in place, and it is why dbt is thin. The project is a directory:
 
-*  Write modular SQL models
-* Automate testing & documentation
-* Optimize query performance with incremental models
-* Integrate with CI/CD & Git
-
----
-
-## ️ Setting Up dbt with Redshift
-
-###  Install dbt for Redshift
 ```sh
 pip install dbt-redshift
+dbt init my_dbt_project && cd my_dbt_project
 ```
 
-###  Initialize a dbt Project
-```sh
-dbt init my_dbt_project
-cd my_dbt_project
-```
-
-This creates a structured project:
 ```
 my_dbt_project/
-│── models/           # SQL transformations
-│── dbt_project.yml   # Project settings
-│── profiles.yml      # Redshift connection info
+├── models/            # one .sql file per model
+├── dbt_project.yml    # project settings
+└── profiles.yml       # the warehouse connection (kept out of git)
 ```
 
-###  Configure Redshift Connection (`profiles.yml`)
+The connection is a profile; `dbt debug` proves it works before anything else:
+
 ```yaml
 my_dbt_project:
+  target: dev
   outputs:
     dev:
       type: redshift
-      host: my-redshift-cluster.xxxx.region.redshift.amazonaws.com
+      host: my-cluster.xxxx.region.redshift.amazonaws.com
+      port: 5439
       user: my_user
       password: my_password
-      port: 5439
       dbname: my_database
       schema: analytics
       threads: 4
-  target: dev
-```
-Run a connection test:
-```sh
-dbt debug
 ```
 
----
+A model is a `SELECT`. The thing that makes it a model rather than a script is
+`ref()`: a model names its inputs through it, and dbt resolves the name to the right
+table for the target environment and, more importantly, learns the dependency:
 
-## Transforming Data with dbt Models
-
-###  Create a Simple dbt Model
-```sh
-touch models/orders_summary.sql
-```
-
-#### Example: `models/orders_summary.sql`
 ```sql
-WITH orders AS (
-    SELECT
-        user_id,
-        COUNT(*) AS total_orders,
-        SUM(order_value) AS total_spent
-    FROM raw_data.orders
-    WHERE status = 'completed'
-    GROUP BY user_id
-)
-SELECT * FROM orders;
+-- models/orders_summary.sql
+SELECT
+    user_id,
+    COUNT(*)          AS total_orders,
+    SUM(order_value)  AS total_spent
+FROM {{ ref('orders') }}
+WHERE status = 'completed'
+GROUP BY user_id
 ```
-- Aggregates total orders and spending per user.
-- Uses `{{ ref('orders') }}` for modular design.
 
-###  Run the Transformation
-```sh
-dbt run
-```
-* Creates `analytics.orders_summary` in Redshift.
+`dbt run` builds every model in dependency order and creates
+`analytics.orders_summary`. The earlier version of this post read from
+`raw_data.orders` directly while claiming to use `ref()`; the claim was right and the
+code was wrong, and with the hard-coded table dbt would not have known the order.
+The raw table itself is declared once as a *source*, so the boundary between what dbt
+owns and what it reads is explicit.
 
-###  Automate Data Testing
+## Tests and docs come from the same file
+
+Next to the model sits a YAML file that says what must be true of it. dbt ships four
+tests (`unique`, `not_null`, `accepted_values`, `relationships`) and each is one line:
+
 ```yaml
 version: 2
 models:
   - name: orders_summary
-    tests:
-      - unique:
-          column_name: user_id
-      - not_null:
-          column_name: total_orders
-```
-Run tests:
-```sh
-dbt test
-```
-* Ensures data integrity before deployment.
-
----
-
-## Generating Documentation & Lineage Graph
-
-Run:
-```sh
-dbt docs generate
-dbt docs serve
+    description: One row per user who has completed at least one order.
+    columns:
+      - name: user_id
+        tests: [unique, not_null]
+      - name: total_orders
+        tests: [not_null]
 ```
 
-Open http://localhost:8080 to explore:
-* Data lineage graphs
-* Auto-generated table definitions
+`dbt test` runs them as queries against the built tables and fails the run when a
+row violates one, which is the difference between a broken dashboard discovered on
+Monday and a failed build discovered on Sunday night. The same YAML carries the
+descriptions, and `dbt docs generate && dbt docs serve` renders a site with every
+model, every column, and the lineage graph that `ref()` built, so "where does this
+column come from" is a click.
 
----
+Two other pieces are worth knowing before they are needed. An *incremental* model
+processes only new rows on each run instead of rebuilding the table, which is what
+keeps a large fact table's build time flat. And because the project is files, it
+lives in git and runs in CI like any other code: a pull request builds the models and
+runs the tests against a development schema before it touches production.
 
-## Automating dbt with Apache Airflow
+## Scheduling is someone else's job
 
-If you're using AWS MWAA (Managed Airflow), schedule dbt runs with:
+dbt builds; it does not schedule. In production the run is triggered by an
+orchestrator, and on AWS that is usually Managed Airflow calling either the dbt CLI or
+dbt Cloud's API:
+
 ```python
-from airflow.providers.dbt.cloud.operators.dbt import DbtRunOperator
+from airflow.providers.dbt.cloud.operators.dbt import DbtCloudRunJobOperator
 
-dbt_run = DbtRunOperator(
+run_models = DbtCloudRunJobOperator(
     task_id="run_dbt",
     dbt_cloud_conn_id="dbt_cloud_default",
-    job_id=12345
+    job_id=12345,
 )
 ```
-* Integrates dbt into your data pipeline.
 
----
+[Airflow](../airflow/) is the post on what the orchestrator adds; here it is enough
+that dbt is one task in that graph, and that its tests failing is what stops the
+downstream tasks.
 
-## Why Use dbt Instead of Pure SQL?
+## Where it stops holding
 
-| Feature           | Pure SQL | dbt |
-|------------------|---------|-----|
-| Modularity  | ❌ Manual reuse | ✅ References & macros |
-| Testing     | ❌ Manual checks | ✅ Automated (`dbt test`) |
-| Documentation | ❌ Hard to track | ✅ Auto-generated |
-| Lineage Graph | ❌ No built-in support | ✅ Interactive visualization |
-| CI/CD & Git  | ❌ Manual scripts | ✅ Git + CI/CD |
-| Incremental Models | ❌ Full recompute | ✅ Efficient updates |
-
- Final Verdict: `dbt` makes SQL transformations scalable, testable, and production-ready. Ready to explore? Try dbt Cloud or set it up in your AWS stack!
-
----
-
-💡 Got questions or need help with dbt? Contact me!
+dbt is SQL. Transformations that need Python, loops over files, or calls to an API
+belong somewhere else, and the Python-model support that exists runs on a warehouse's
+own Python runtime rather than in dbt. It also assumes the raw data is already in the
+warehouse; getting it there is loading, not dbt's problem. Within those lines, the
+question is not whether to use dbt but how soon: the second script that depends on the
+first is the moment the pile becomes a project.
 
 SQL. Alone. Doesn't. Scale. Models. Test. Document. Themselves. Lineage. Comes. Free.
+
+## References
+
+- [dbt documentation](https://docs.getdbt.com/)
+- [dbt-redshift adapter](https://docs.getdbt.com/docs/core/connect-data-platform/redshift-setup)
+- [Airflow](../airflow/) on this blog, for the orchestrator around it
