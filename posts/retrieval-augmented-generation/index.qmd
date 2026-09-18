@@ -1,0 +1,214 @@
+---
+title: "Retrieval-Augmented Generation Is Nearest-Neighbour Search Wired Into the Prompt"
+description: "What RAG adds to a language model, why the retrieval step bounds the answer, and how a vector store finds the neighbours fast enough to matter. Merges three earlier posts."
+author: "Ravi Kalia"
+date: "2025-02-03"
+categories: [LLM, Machine Learning, NLP]
+tags: [rag, retrieval, embeddings, vector-database, faiss, nearest-neighbours]
+image: "./cover.png"
+aliases:
+  - /posts/vector-databases-and-rag/
+  - /posts/how-does-rag-work/
+  - /posts/rag-again/
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
+---
+
+![Retrieval-Augmented Generation](./cover.png)
+
+A language model answers from what it saw in training, so it cannot know last week's
+incident report or your team's design notes. Retrieval-augmented generation (RAG) fixes
+that by looking the facts up first: embed the question, find the stored passages nearest
+to it, paste them into the prompt, and let the model write from those. This post says
+what that pipeline is made of, why the search step decides how good the answer can be,
+and how a vector store makes the search fast. It replaces three earlier posts on the
+same ground, whose addresses now redirect here.
+
+## The model already knows how to write; it does not know your documents
+
+Ask a chat model about a paper published after its training cut-off and it will either
+say so or make something up. Nothing is wrong with the model: the paper was never in
+its weights. Fine-tuning would put it there, at the cost of a training run every time
+the documents change. The cheaper move is to keep the documents outside the model and
+hand it the relevant ones at answer time, which is what RAG does. The model's job
+shrinks to reading and writing, and the burden of knowing moves to a search.
+
+Three objects are enough to build it, and naming them keeps the diagram honest:
+
+- **`Embedding()`** maps a piece of text to a vector, so that texts about the same
+  thing land near each other.
+- **`KNearestNeighbourSearch()`** holds the document vectors and, given a query vector,
+  returns the $k$ closest.
+- **`LLM()`** takes a prompt and writes an answer.
+
+A vector database is `KNearestNeighbourSearch()` with persistence and an API. Everything
+else in a RAG system is glue: chunking documents before embedding them, formatting the
+retrieved passages into the prompt, and returning the sources with the answer.
+
+## Retrieval bounds the answer
+
+Write the pipeline as probabilities and the dependence is explicit. Given a query $q$,
+the retriever scores every document $d_i$ by the similarity of their embeddings,
+usually the cosine
+
+$$
+S(q, d_i) = \frac{\mathbf{q} \cdot \mathbf{d}_i}{\|\mathbf{q}\|\,\|\mathbf{d}_i\|},
+$$
+
+and the softmax of those scores is a distribution over documents,
+
+$$
+P(d_i \mid q) = \frac{\exp S(q, d_i)}{\sum_j \exp S(q, d_j)}.
+$$
+
+The generator writes the answer $y$ token by token, conditioned on the query and a
+document. The answer distribution marginalises over which document was retrieved:
+
+$$
+P(y \mid q) = \sum_{d} P(y \mid q, d)\, P(d \mid q).
+$$
+
+In practice nobody sums over every document. The retriever keeps the top $k$ by score,
+concatenates them into the prompt, and the sum collapses to one term. That truncation is
+where RAG lives or dies: if the passage that holds the answer is not among the $k$
+nearest neighbours of the query, no amount of model quality recovers it, because the
+model never sees it. Retrieval recall is a ceiling on answer quality, which is why the
+useful engineering in a RAG system is almost all on the search side: how documents are
+chunked, which embedding model is used, and how $k$ is chosen.
+
+## A vector store is an array and a dot product
+
+The search itself is small enough to write in full. The store keeps a matrix of
+document vectors; a query is one more vector; the scores are one matrix-vector product;
+the top $k$ are an `argsort`. The corpus here is three synthetic sentences, chosen so
+the nearest neighbour is obvious by eye; it stands in for a few thousand chunks of a
+real document set. These blocks are illustrative and do not execute in the build.
+
+```python
+from typing import Optional
+
+import numpy as np
+
+
+class SimpleVectorDB:
+    def __init__(self, dim: int):
+        self.dim = dim
+        self.vectors: list[np.ndarray] = []
+        self.metadata: list[Optional[dict]] = []
+
+    def add(self, vector: np.ndarray, meta: Optional[dict] = None) -> int:
+        self.vectors.append(vector)
+        self.metadata.append(meta)
+        return len(self.vectors) - 1
+
+    def search(self, query: np.ndarray, k: int = 5) -> list[tuple[int, float]]:
+        if not self.vectors:
+            return []
+        matrix = np.array(self.vectors)
+        scores = matrix @ query / (np.linalg.norm(matrix, axis=1) * np.linalg.norm(query))
+        top = np.argsort(-scores)[:k]
+        return [(int(i), float(scores[i])) for i in top]
+```
+
+That is exact search: every query touches every document, so the cost grows linearly
+with the corpus. For a few thousand chunks it is instant. For a few hundred million it
+is not, and the libraries that RAG systems lean on exist to make the search
+sublinear. FAISS is the common one; the same store, backed by an exact FAISS index,
+is a few lines:
+
+```python
+import faiss
+
+
+class FaissVectorDB:
+    def __init__(self, dim: int):
+        self.index = faiss.IndexFlatL2(dim)  # exact, L2 distance
+
+    def add(self, vector: np.ndarray) -> None:
+        self.index.add(vector.reshape(1, -1))
+
+    def search(self, query: np.ndarray, k: int = 5):
+        distances, indices = self.index.search(query.reshape(1, -1), k)
+        return list(zip(indices[0], distances[0]))
+```
+
+Swap `IndexFlatL2` for an approximate index and the store scales. The approximate
+methods trade a little recall for a lot of speed, and they differ in how:
+
+- **HNSW** (hierarchical navigable small world) builds a layered graph over the
+  vectors and answers a query by a greedy walk from the top layer down; query time is
+  roughly logarithmic in the corpus size, and recall is high. It is the default in most
+  vector databases, and the usual choice when queries arrive one at a time.
+- **IVF with product quantisation** clusters the vectors with $k$-means, searches only
+  the nearest clusters, and stores each vector compressed; query time is roughly
+  $\sqrt{N}$ and memory drops by an order of magnitude, at some cost in recall.
+- **Locality-sensitive hashing** hashes vectors with random projections so that near
+  vectors share buckets; constant-time lookups, lower recall, and rarely the first
+  choice now.
+
+The trade is always the same: recall against time and memory. Because retrieval recall
+is the ceiling from the previous section, an approximate index that loses the right
+passage one query in twenty costs one answer in twenty, whatever the model.
+
+## The pipeline, end to end
+
+With the three objects named, a working RAG loop is short. Indexing happens once per
+document set; querying happens per question. As of early 2025 the pieces named here are
+`sentence-transformers` for the embedding model and FAISS for the index; both are
+interchangeable with any other embedding model and any other vector store.
+
+```python
+from sentence_transformers import SentenceTransformer
+import faiss
+
+embed = SentenceTransformer("all-MiniLM-L6-v2")
+documents = [
+    "RAG adds retrieved passages to a language model's prompt.",
+    "A vector database stores embeddings and answers nearest-neighbour queries.",
+    "An embedding is a dense vector that places similar texts near each other.",
+]
+vectors = embed.encode(documents)
+
+index = faiss.IndexFlatL2(vectors.shape[1])
+index.add(vectors)
+
+query = "How does RAG improve a language model?"
+_, ids = index.search(embed.encode([query]), k=2)
+context = "\n".join(documents[i] for i in ids[0])
+
+prompt = f"Answer from these passages.\n\n{context}\n\nQuestion: {query}"
+# answer = llm(prompt)
+```
+
+The three synthetic sentences make the retrieval visible: the first two come back for
+that query, the third does not. On a real corpus the same two lines decide whether the
+answer is grounded or invented, and the model at the end is the part least worth
+tuning first.
+
+## Where it stops holding
+
+RAG grounds the model in the passages it retrieves, not in the truth. A corpus that is
+wrong, stale, or chunked so that a fact is split across two passages produces confident
+answers with citations to the wrong thing. And the marginal above assumes the model
+reads the retrieved text faithfully; long prompts with many passages are read unevenly,
+so $k$ is a knob with a sweet spot, not a dial to turn up. Which store to put behind
+`KNearestNeighbourSearch()` is a separate decision, compared for two managed and
+open-source options in [Weaviate vs Pinecone](../pinecone-vs-weaviate/).
+
+Embed. Search. Paste. Answer. Recall. Caps. Quality. Search. First. Model. Last.
+
+## References
+
+- Lewis, P. et al. (2020). Retrieval-augmented generation for knowledge-intensive NLP
+  tasks. *NeurIPS 33*. [arXiv:2005.11401](https://arxiv.org/abs/2005.11401)
+- Malkov, Y. A. and Yashunin, D. A. (2018). Efficient and robust approximate nearest
+  neighbor search using Hierarchical Navigable Small World graphs. *IEEE TPAMI* **42**(4).
+  [arXiv:1603.09320](https://arxiv.org/abs/1603.09320)
+- Johnson, J., Douze, M. and Jégou, H. (2019). Billion-scale similarity search with
+  GPUs. *IEEE Transactions on Big Data*. [FAISS](https://github.com/facebookresearch/faiss)
+- Reimers, N. and Gurevych, I. (2019). Sentence-BERT.
+  [sentence-transformers](https://www.sbert.net/)
+- [Weaviate vs Pinecone](../pinecone-vs-weaviate/) on this blog, for the store.

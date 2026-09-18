@@ -196,7 +196,7 @@ of that is machine-written, and none of it needs to be read to be checked.
   bundle land, is the post in `search.json`, did the media survive the render — is a
   `grep -c` question. Ask `docs-inspect` when it needs more than one.
 - **Send render output to a log**, then read `tail -40` and
-  `grep -inE 'error|not found|traceback'` of it. A 120-post project render emits thousands
+  `grep -inE 'error|not found|traceback'` of it. A 113-post project render emits thousands
   of lines and the useful part is the last screenful. `render-verify` does this and returns
   a verdict.
 - **Slice posts for targeted edits.** `grep -n` for the phrase, then read from that offset.
@@ -218,7 +218,7 @@ and hand back a verdict, because a subagent's tool output never enters the calli
 |---|---|
 | `render-verify` | the whole project render, the `docs/` deletion check, `make check-posts` |
 | `docs-inspect` | any yes/no question about rendered output under `docs/` |
-| `post-locate` | finding where something is said or configured across the 120 posts |
+| `post-locate` | finding where something is said or configured across the 113 posts |
 
 **Do not delegate the prose.** A fresh agent re-reads this file, `STYLE.md`, and the post
 before it can write a sentence, then hands back a diff that has to be read and re-verified

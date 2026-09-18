@@ -7,9 +7,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 <meta name="author" content="Ravi Kalia">
-<meta name="dcterms.date" content="2025-03-27">
+<meta name="dcterms.date" content="2025-02-03">
+<meta name="description" content="What RAG adds to a language model, why the retrieval step bounds the answer, and how a vector store finds the neighbours fast enough to matter. Merges three earlier posts.">
 
-<title>Exploring Vector Databases: Weaviate vs Pinecone – Synthetic Musings</title>
+<title>Retrieval-Augmented Generation Is Nearest-Neighbour Search Wired Into the Prompt – Synthetic Musings</title>
 <style>
 code{white-space: pre-wrap;}
 span.smallcaps{font-variant: small-caps;}
@@ -107,16 +108,45 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <style>html{ scroll-behavior: smooth; }</style>
 <script src="../../widget-kit/kit.js"></script>
 
+  <script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
 
-<meta property="og:title" content="Exploring Vector Databases: Weaviate vs Pinecone – Synthetic Musings">
-<meta property="og:description" content="Technical write-ups on machine learning, statistics, linear algebra, and the tooling around them, by Ravi Kalia.">
-<meta property="og:image" content="https://project-delphi.github.io/ml-blog/posts/pinecone-vs-weaviate/cover.png">
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN") {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+<meta property="og:title" content="Retrieval-Augmented Generation Is Nearest-Neighbour Search Wired Into the Prompt – Synthetic Musings">
+<meta property="og:description" content="What RAG adds to a language model, why the retrieval step bounds the answer, and how a vector store finds the neighbours fast enough to matter. Merges three earlier posts.">
+<meta property="og:image" content="https://project-delphi.github.io/ml-blog/posts/retrieval-augmented-generation/cover.png">
 <meta property="og:site_name" content="Synthetic Musings">
 <meta property="og:image:height" content="630">
 <meta property="og:image:width" content="1200">
-<meta name="twitter:title" content="Exploring Vector Databases: Weaviate vs Pinecone – Synthetic Musings">
-<meta name="twitter:description" content="Technical write-ups on machine learning, statistics, linear algebra, and the tooling around them, by Ravi Kalia.">
-<meta name="twitter:image" content="https://project-delphi.github.io/ml-blog/posts/pinecone-vs-weaviate/cover.png">
+<meta name="twitter:title" content="Retrieval-Augmented Generation Is Nearest-Neighbour Search Wired Into the Prompt – Synthetic Musings">
+<meta name="twitter:description" content="What RAG adds to a language model, why the retrieval step bounds the answer, and how a vector store finds the neighbours fast enough to matter. Merges three earlier posts.">
+<meta name="twitter:image" content="https://project-delphi.github.io/ml-blog/posts/retrieval-augmented-generation/cover.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image-height" content="630">
 <meta name="twitter:image-width" content="1200">
@@ -181,10 +211,16 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <header id="title-block-header" class="quarto-title-block default page-columns page-full">
   <div class="quarto-title-banner page-columns page-full">
     <div class="quarto-title column-body">
-      <h1 class="title">Exploring Vector Databases: Weaviate vs Pinecone</h1>
-                                <div class="quarto-categories">
-                <div class="quarto-category">Data Engineering</div>
+      <h1 class="title">Retrieval-Augmented Generation Is Nearest-Neighbour Search Wired Into the Prompt</h1>
+                  <div>
+        <div class="description">
+          What RAG adds to a language model, why the retrieval step bounds the answer, and how a vector store finds the neighbours fast enough to matter. Merges three earlier posts.
+        </div>
+      </div>
+                          <div class="quarto-categories">
                 <div class="quarto-category">LLM</div>
+                <div class="quarto-category">Machine Learning</div>
+                <div class="quarto-category">NLP</div>
               </div>
                   </div>
   </div>
@@ -202,7 +238,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <div>
       <div class="quarto-title-meta-heading">Published</div>
       <div class="quarto-title-meta-contents">
-        <p class="date">March 27, 2025</p>
+        <p class="date">February 3, 2025</p>
       </div>
     </div>
     
@@ -218,27 +254,14 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#exploring-vector-databases-weaviate-vs-pinecone" id="toc-exploring-vector-databases-weaviate-vs-pinecone" class="nav-link active" data-scroll-target="#exploring-vector-databases-weaviate-vs-pinecone">Exploring Vector Databases: Weaviate vs Pinecone</a>
-  <ul class="collapse">
-  <li><a href="#what-are-vector-databases" id="toc-what-are-vector-databases" class="nav-link" data-scroll-target="#what-are-vector-databases">What Are Vector Databases?</a></li>
-  <li><a href="#weaviate-open-source-vector-database" id="toc-weaviate-open-source-vector-database" class="nav-link" data-scroll-target="#weaviate-open-source-vector-database">Weaviate: Open-Source Vector Database</a>
-  <ul class="collapse">
-  <li><a href="#installing-weaviate" id="toc-installing-weaviate" class="nav-link" data-scroll-target="#installing-weaviate">Installing Weaviate</a></li>
-  <li><a href="#storing-and-querying-vectors-in-weaviate" id="toc-storing-and-querying-vectors-in-weaviate" class="nav-link" data-scroll-target="#storing-and-querying-vectors-in-weaviate">Storing and Querying Vectors in Weaviate</a></li>
-  <li><a href="#features-of-weaviate" id="toc-features-of-weaviate" class="nav-link" data-scroll-target="#features-of-weaviate">Features of Weaviate</a></li>
-  <li><a href="#pinecone-fully-managed-vector-database" id="toc-pinecone-fully-managed-vector-database" class="nav-link" data-scroll-target="#pinecone-fully-managed-vector-database">Pinecone: Fully Managed Vector Database</a></li>
-  </ul></li>
-  <li><a href="#comparison-weaviate-vs-pinecone" id="toc-comparison-weaviate-vs-pinecone" class="nav-link" data-scroll-target="#comparison-weaviate-vs-pinecone">Comparison: Weaviate vs Pinecone</a>
-  <ul class="collapse">
-  <li><a href="#when-to-use-which" id="toc-when-to-use-which" class="nav-link" data-scroll-target="#when-to-use-which">When to Use Which?</a></li>
-  </ul></li>
-  <li><a href="#conclusion" id="toc-conclusion" class="nav-link" data-scroll-target="#conclusion">Conclusion</a>
-  <ul class="collapse">
-  <li><a href="#further-reading" id="toc-further-reading" class="nav-link" data-scroll-target="#further-reading">Further Reading</a></li>
-  </ul></li>
-  </ul></li>
+  <li><a href="#the-model-already-knows-how-to-write-it-does-not-know-your-documents" id="toc-the-model-already-knows-how-to-write-it-does-not-know-your-documents" class="nav-link active" data-scroll-target="#the-model-already-knows-how-to-write-it-does-not-know-your-documents">The model already knows how to write; it does not know your documents</a></li>
+  <li><a href="#retrieval-bounds-the-answer" id="toc-retrieval-bounds-the-answer" class="nav-link" data-scroll-target="#retrieval-bounds-the-answer">Retrieval bounds the answer</a></li>
+  <li><a href="#a-vector-store-is-an-array-and-a-dot-product" id="toc-a-vector-store-is-an-array-and-a-dot-product" class="nav-link" data-scroll-target="#a-vector-store-is-an-array-and-a-dot-product">A vector store is an array and a dot product</a></li>
+  <li><a href="#the-pipeline-end-to-end" id="toc-the-pipeline-end-to-end" class="nav-link" data-scroll-target="#the-pipeline-end-to-end">The pipeline, end to end</a></li>
+  <li><a href="#where-it-stops-holding" id="toc-where-it-stops-holding" class="nav-link" data-scroll-target="#where-it-stops-holding">Where it stops holding</a></li>
+  <li><a href="#references" id="toc-references" class="nav-link" data-scroll-target="#references">References</a></li>
   </ul>
-<div class="toc-actions"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/pinecone-vs-weaviate/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></nav>
+<div class="toc-actions"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/retrieval-augmented-generation/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></nav>
     </div>
 <!-- main -->
 <main class="content quarto-banner-title-block" id="quarto-document-content">
@@ -250,168 +273,126 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
 <p><img src="./cover.png" class="img-fluid figure-img"></p>
-<figcaption>Exploring Vector Databases: Weaviate vs Pinecone</figcaption>
+<figcaption>Retrieval-Augmented Generation</figcaption>
 </figure>
 </div>
-<section id="exploring-vector-databases-weaviate-vs-pinecone" class="level1">
-<h1>Exploring Vector Databases: Weaviate vs Pinecone</h1>
-<p><strong>Weaviate</strong> and <strong>Pinecone</strong> are two vector databases. They store and query <strong>vector embeddings</strong>, numerical representations of text, images, or audio. That is the index behind <strong>semantic search</strong>, <strong>recommendation systems</strong>, and <strong>retrieval-augmented generation (RAG)</strong>.</p>
-<section id="what-are-vector-databases" class="level2">
-<h2 class="anchored" data-anchor-id="what-are-vector-databases">What Are Vector Databases?</h2>
-<p>Traditional databases store structured data (e.g., SQL) in tables, but vector databases store data as <strong>vectors</strong>—numerical representations that capture semantic meaning. Vectors enable fast similarity search, which allows you to find the most relevant data based on its meaning rather than just matching keywords.</p>
-<p>Some key benefits of vector databases: - <strong>Efficient similarity search</strong> - <strong>Support for unstructured data</strong> like text and images - <strong>Scalability</strong> to handle large amounts of data</p>
+<p>A language model answers from what it saw in training, so it cannot know last week’s incident report or your team’s design notes. Retrieval-augmented generation (RAG) fixes that by looking the facts up first: embed the question, find the stored passages nearest to it, paste them into the prompt, and let the model write from those. This post says what that pipeline is made of, why the search step decides how good the answer can be, and how a vector store makes the search fast. It replaces three earlier posts on the same ground, whose addresses now redirect here.</p>
+<section id="the-model-already-knows-how-to-write-it-does-not-know-your-documents" class="level2">
+<h2 class="anchored" data-anchor-id="the-model-already-knows-how-to-write-it-does-not-know-your-documents">The model already knows how to write; it does not know your documents</h2>
+<p>Ask a chat model about a paper published after its training cut-off and it will either say so or make something up. Nothing is wrong with the model: the paper was never in its weights. Fine-tuning would put it there, at the cost of a training run every time the documents change. The cheaper move is to keep the documents outside the model and hand it the relevant ones at answer time, which is what RAG does. The model’s job shrinks to reading and writing, and the burden of knowing moves to a search.</p>
+<p>Three objects are enough to build it, and naming them keeps the diagram honest:</p>
+<ul>
+<li><strong><code>Embedding()</code></strong> maps a piece of text to a vector, so that texts about the same thing land near each other.</li>
+<li><strong><code>KNearestNeighbourSearch()</code></strong> holds the document vectors and, given a query vector, returns the <span class="math inline">\(k\)</span> closest.</li>
+<li><strong><code>LLM()</code></strong> takes a prompt and writes an answer.</li>
+</ul>
+<p>A vector database is <code>KNearestNeighbourSearch()</code> with persistence and an API. Everything else in a RAG system is glue: chunking documents before embedding them, formatting the retrieved passages into the prompt, and returning the sources with the answer.</p>
 </section>
-<section id="weaviate-open-source-vector-database" class="level2">
-<h2 class="anchored" data-anchor-id="weaviate-open-source-vector-database">Weaviate: Open-Source Vector Database</h2>
-<p><strong>Weaviate</strong> is an open-source vector database with built-in machine learning model support, so you can store and query vector embeddings without a separate embedding service. Weaviate supports <strong>hybrid search</strong>, meaning it can combine keyword-based searches with vector searches for more accurate results.</p>
-<section id="installing-weaviate" class="level3">
-<h3 class="anchored" data-anchor-id="installing-weaviate">Installing Weaviate</h3>
-<p>To use Weaviate, you need to install the official Python client:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pip</span> install weaviate-client</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<section id="retrieval-bounds-the-answer" class="level2">
+<h2 class="anchored" data-anchor-id="retrieval-bounds-the-answer">Retrieval bounds the answer</h2>
+<p>Write the pipeline as probabilities and the dependence is explicit. Given a query <span class="math inline">\(q\)</span>, the retriever scores every document <span class="math inline">\(d_i\)</span> by the similarity of their embeddings, usually the cosine</p>
+<p><span class="math display">\[
+S(q, d_i) = \frac{\mathbf{q} \cdot \mathbf{d}_i}{\|\mathbf{q}\|\,\|\mathbf{d}_i\|},
+\]</span></p>
+<p>and the softmax of those scores is a distribution over documents,</p>
+<p><span class="math display">\[
+P(d_i \mid q) = \frac{\exp S(q, d_i)}{\sum_j \exp S(q, d_j)}.
+\]</span></p>
+<p>The generator writes the answer <span class="math inline">\(y\)</span> token by token, conditioned on the query and a document. The answer distribution marginalises over which document was retrieved:</p>
+<p><span class="math display">\[
+P(y \mid q) = \sum_{d} P(y \mid q, d)\, P(d \mid q).
+\]</span></p>
+<p>In practice nobody sums over every document. The retriever keeps the top <span class="math inline">\(k\)</span> by score, concatenates them into the prompt, and the sum collapses to one term. That truncation is where RAG lives or dies: if the passage that holds the answer is not among the <span class="math inline">\(k\)</span> nearest neighbours of the query, no amount of model quality recovers it, because the model never sees it. Retrieval recall is a ceiling on answer quality, which is why the useful engineering in a RAG system is almost all on the search side: how documents are chunked, which embedding model is used, and how <span class="math inline">\(k\)</span> is chosen.</p>
 </section>
-<section id="storing-and-querying-vectors-in-weaviate" class="level3">
-<h3 class="anchored" data-anchor-id="storing-and-querying-vectors-in-weaviate">Storing and Querying Vectors in Weaviate</h3>
-<p>Here’s an example of how to store data and perform a vector search:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> weaviate</span>
+<section id="a-vector-store-is-an-array-and-a-dot-product" class="level2">
+<h2 class="anchored" data-anchor-id="a-vector-store-is-an-array-and-a-dot-product">A vector store is an array and a dot product</h2>
+<p>The search itself is small enough to write in full. The store keeps a matrix of document vectors; a query is one more vector; the scores are one matrix-vector product; the top <span class="math inline">\(k\)</span> are an <code>argsort</code>. The corpus here is three synthetic sentences, chosen so the nearest neighbour is obvious by eye; it stands in for a few thousand chunks of a real document set. These blocks are illustrative and do not execute in the build.</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> typing <span class="im">import</span> Optional</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> SimpleVectorDB:</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, dim: <span class="bu">int</span>):</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.dim <span class="op">=</span> dim</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.vectors: <span class="bu">list</span>[np.ndarray] <span class="op">=</span> []</span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.metadata: <span class="bu">list</span>[Optional[<span class="bu">dict</span>]] <span class="op">=</span> []</span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> add(<span class="va">self</span>, vector: np.ndarray, meta: Optional[<span class="bu">dict</span>] <span class="op">=</span> <span class="va">None</span>) <span class="op">-&gt;</span> <span class="bu">int</span>:</span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.vectors.append(vector)</span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.metadata.append(meta)</span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="bu">len</span>(<span class="va">self</span>.vectors) <span class="op">-</span> <span class="dv">1</span></span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> search(<span class="va">self</span>, query: np.ndarray, k: <span class="bu">int</span> <span class="op">=</span> <span class="dv">5</span>) <span class="op">-&gt;</span> <span class="bu">list</span>[<span class="bu">tuple</span>[<span class="bu">int</span>, <span class="bu">float</span>]]:</span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">not</span> <span class="va">self</span>.vectors:</span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> []</span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>        matrix <span class="op">=</span> np.array(<span class="va">self</span>.vectors)</span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>        scores <span class="op">=</span> matrix <span class="op">@</span> query <span class="op">/</span> (np.linalg.norm(matrix, axis<span class="op">=</span><span class="dv">1</span>) <span class="op">*</span> np.linalg.norm(query))</span>
+<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a>        top <span class="op">=</span> np.argsort(<span class="op">-</span>scores)[:k]</span>
+<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> [(<span class="bu">int</span>(i), <span class="bu">float</span>(scores[i])) <span class="cf">for</span> i <span class="kw">in</span> top]</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>That is exact search: every query touches every document, so the cost grows linearly with the corpus. For a few thousand chunks it is instant. For a few hundred million it is not, and the libraries that RAG systems lean on exist to make the search sublinear. FAISS is the common one; the same store, backed by an exact FAISS index, is a few lines:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> faiss</span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Connect to local Weaviate instance</span></span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>client <span class="op">=</span> weaviate.Client(<span class="st">"http://localhost:8080"</span>)</span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="co"># Define schema</span></span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>schema <span class="op">=</span> {</span>
-<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="st">"classes"</span>: [</span>
-<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>        {</span>
-<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>            <span class="st">"class"</span>: <span class="st">"Person"</span>,</span>
-<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>            <span class="st">"properties"</span>: [</span>
-<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>                {<span class="st">"name"</span>: <span class="st">"name"</span>, <span class="st">"dataType"</span>: [<span class="st">"text"</span>]},</span>
-<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>                {<span class="st">"name"</span>: <span class="st">"age"</span>, <span class="st">"dataType"</span>: [<span class="st">"int"</span>]},</span>
-<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>            ],</span>
-<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>        }</span>
-<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    ]</span>
-<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>}</span>
-<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a><span class="co"># Create schema in Weaviate</span></span>
-<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>client.schema.create(schema)</span>
-<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a><span class="co"># Add data</span></span>
-<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>data <span class="op">=</span> {<span class="st">"name"</span>: <span class="st">"Alice"</span>, <span class="st">"age"</span>: <span class="dv">30</span>}</span>
-<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>client.data_object.create(data, <span class="st">"Person"</span>)</span>
-<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a><span class="co"># Query data</span></span>
-<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> client.query.get(<span class="st">"Person"</span>, [<span class="st">"name"</span>, <span class="st">"age"</span>]).with_limit(<span class="dv">5</span>).do()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-</section>
-<section id="features-of-weaviate" class="level3">
-<h3 class="anchored" data-anchor-id="features-of-weaviate">Features of Weaviate</h3>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> FaissVectorDB:</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, dim: <span class="bu">int</span>):</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.index <span class="op">=</span> faiss.IndexFlatL2(dim)  <span class="co"># exact, L2 distance</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> add(<span class="va">self</span>, vector: np.ndarray) <span class="op">-&gt;</span> <span class="va">None</span>:</span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.index.add(vector.reshape(<span class="dv">1</span>, <span class="op">-</span><span class="dv">1</span>))</span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> search(<span class="va">self</span>, query: np.ndarray, k: <span class="bu">int</span> <span class="op">=</span> <span class="dv">5</span>):</span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>        distances, indices <span class="op">=</span> <span class="va">self</span>.index.search(query.reshape(<span class="dv">1</span>, <span class="op">-</span><span class="dv">1</span>), k)</span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="bu">list</span>(<span class="bu">zip</span>(indices[<span class="dv">0</span>], distances[<span class="dv">0</span>]))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>Swap <code>IndexFlatL2</code> for an approximate index and the store scales. The approximate methods trade a little recall for a lot of speed, and they differ in how:</p>
 <ul>
-<li>Open-source and customizable</li>
-<li>Built-in ML support for generating embeddings</li>
-<li>Hybrid search (vector + keyword)</li>
-<li>Scalable for large datasets</li>
+<li><strong>HNSW</strong> (hierarchical navigable small world) builds a layered graph over the vectors and answers a query by a greedy walk from the top layer down; query time is roughly logarithmic in the corpus size, and recall is high. It is the default in most vector databases, and the usual choice when queries arrive one at a time.</li>
+<li><strong>IVF with product quantisation</strong> clusters the vectors with <span class="math inline">\(k\)</span>-means, searches only the nearest clusters, and stores each vector compressed; query time is roughly <span class="math inline">\(\sqrt{N}\)</span> and memory drops by an order of magnitude, at some cost in recall.</li>
+<li><strong>Locality-sensitive hashing</strong> hashes vectors with random projections so that near vectors share buckets; constant-time lookups, lower recall, and rarely the first choice now.</li>
 </ul>
+<p>The trade is always the same: recall against time and memory. Because retrieval recall is the ceiling from the previous section, an approximate index that loses the right passage one query in twenty costs one answer in twenty, whatever the model.</p>
 </section>
-<section id="pinecone-fully-managed-vector-database" class="level3">
-<h3 class="anchored" data-anchor-id="pinecone-fully-managed-vector-database">Pinecone: Fully Managed Vector Database</h3>
-<p>Pinecone is a fully managed vector database, meaning you don’t have to worry about setting up or maintaining infrastructure. Pinecone is optimized for fast, scalable vector search and can handle high-volume applications with low-latency requirements.</p>
-<p>Installing Pinecone</p>
-<p>To install Pinecone, use the following command:</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pip</span> install pinecone-client</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<p>Storing and Querying Vectors in Pinecone</p>
-<p>Here’s an example to demonstrate how to store vectors and query the nearest neighbors:</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pinecone</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> os</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Initialize Pinecone (Replace with your API key)</span></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>pinecone.init(api_key<span class="op">=</span><span class="st">"your-api-key"</span>, environment<span class="op">=</span><span class="st">"us-west1-gcp"</span>)</span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="co"># Create an index (only once)</span></span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>index_name <span class="op">=</span> <span class="st">"example-index"</span></span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> index_name <span class="kw">not</span> <span class="kw">in</span> pinecone.list_indexes():</span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>    pinecone.create_index(name<span class="op">=</span>index_name, dimension<span class="op">=</span><span class="dv">4</span>)</span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="co"># Connect to the index</span></span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>index <span class="op">=</span> pinecone.Index(index_name)</span>
-<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a><span class="co"># Insert vectors</span></span>
-<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>index.upsert([</span>
-<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>    (<span class="st">"doc1"</span>, [<span class="fl">0.1</span>, <span class="fl">0.2</span>, <span class="fl">0.3</span>, <span class="fl">0.4</span>], {<span class="st">"text"</span>: <span class="st">"Machine learning is great!"</span>})</span>
-<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>])</span>
-<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a><span class="co"># Query the nearest neighbor</span></span>
-<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>query_result <span class="op">=</span> index.query([<span class="fl">0.1</span>, <span class="fl">0.2</span>, <span class="fl">0.3</span>, <span class="fl">0.4</span>], top_k<span class="op">=</span><span class="dv">1</span>, include_metadata<span class="op">=</span><span class="va">True</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<section id="features-of-pinecone" class="level4">
-<h4 class="anchored" data-anchor-id="features-of-pinecone">Features of Pinecone</h4>
+<section id="the-pipeline-end-to-end" class="level2">
+<h2 class="anchored" data-anchor-id="the-pipeline-end-to-end">The pipeline, end to end</h2>
+<p>With the three objects named, a working RAG loop is short. Indexing happens once per document set; querying happens per question. As of early 2025 the pieces named here are <code>sentence-transformers</code> for the embedding model and FAISS for the index; both are interchangeable with any other embedding model and any other vector store.</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sentence_transformers <span class="im">import</span> SentenceTransformer</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> faiss</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>embed <span class="op">=</span> SentenceTransformer(<span class="st">"all-MiniLM-L6-v2"</span>)</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>documents <span class="op">=</span> [</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="st">"RAG adds retrieved passages to a language model's prompt."</span>,</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    <span class="st">"A vector database stores embeddings and answers nearest-neighbour queries."</span>,</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    <span class="st">"An embedding is a dense vector that places similar texts near each other."</span>,</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>]</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>vectors <span class="op">=</span> embed.encode(documents)</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>index <span class="op">=</span> faiss.IndexFlatL2(vectors.shape[<span class="dv">1</span>])</span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>index.add(vectors)</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>query <span class="op">=</span> <span class="st">"How does RAG improve a language model?"</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>_, ids <span class="op">=</span> index.search(embed.encode([query]), k<span class="op">=</span><span class="dv">2</span>)</span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>context <span class="op">=</span> <span class="st">"</span><span class="ch">\n</span><span class="st">"</span>.join(documents[i] <span class="cf">for</span> i <span class="kw">in</span> ids[<span class="dv">0</span>])</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>prompt <span class="op">=</span> <span class="ss">f"Answer from these passages.</span><span class="ch">\n\n</span><span class="sc">{</span>context<span class="sc">}</span><span class="ch">\n\n</span><span class="ss">Question: </span><span class="sc">{</span>query<span class="sc">}</span><span class="ss">"</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a><span class="co"># answer = llm(prompt)</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>The three synthetic sentences make the retrieval visible: the first two come back for that query, the third does not. On a real corpus the same two lines decide whether the answer is grounded or invented, and the model at the end is the part least worth tuning first.</p>
+</section>
+<section id="where-it-stops-holding" class="level2">
+<h2 class="anchored" data-anchor-id="where-it-stops-holding">Where it stops holding</h2>
+<p>RAG grounds the model in the passages it retrieves, not in the truth. A corpus that is wrong, stale, or chunked so that a fact is split across two passages produces confident answers with citations to the wrong thing. And the marginal above assumes the model reads the retrieved text faithfully; long prompts with many passages are read unevenly, so <span class="math inline">\(k\)</span> is a knob with a sweet spot, not a dial to turn up. Which store to put behind <code>KNearestNeighbourSearch()</code> is a separate decision, compared for two managed and open-source options in <a href="../pinecone-vs-weaviate/">Weaviate vs Pinecone</a>.</p>
+<p>Embed. Search. Paste. Answer. Recall. Caps. Quality. Search. First. Model. Last.</p>
+</section>
+<section id="references" class="level2">
+<h2 class="anchored" data-anchor-id="references">References</h2>
 <ul>
-<li>Fully managed and scalable</li>
-<li>Fast vector search with low latency</li>
-<li>Real-time indexing and querying</li>
-<li>No infrastructure management required</li>
-</ul>
-</section>
-</section>
-</section>
-<section id="comparison-weaviate-vs-pinecone" class="level2">
-<h2 class="anchored" data-anchor-id="comparison-weaviate-vs-pinecone">Comparison: Weaviate vs Pinecone</h2>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 15%">
-<col style="width: 40%">
-<col style="width: 43%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>Feature</th>
-<th>Weaviate</th>
-<th>Pinecone</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><strong>Type</strong></td>
-<td>Open-source</td>
-<td>Managed (fully hosted)</td>
-</tr>
-<tr class="even">
-<td><strong>ML Integration</strong></td>
-<td>Yes (built-in models)</td>
-<td>No (bring your own embeddings)</td>
-</tr>
-<tr class="odd">
-<td><strong>Cloud Hosting</strong></td>
-<td>Self-hosted &amp; Cloud</td>
-<td>Fully managed</td>
-</tr>
-<tr class="even">
-<td><strong>Search Type</strong></td>
-<td>Hybrid (vector + keyword)</td>
-<td>Vector-only search</td>
-</tr>
-</tbody>
-</table>
-<section id="when-to-use-which" class="level3">
-<h3 class="anchored" data-anchor-id="when-to-use-which">When to Use Which?</h3>
-<ul>
-<li><strong>Weaviate</strong>: Choose Weaviate if you need an <strong>open-source solution</strong> with <strong>built-in ML models</strong> and <strong>hybrid search</strong> (vector + keyword).</li>
-<li><strong>Pinecone</strong>: Choose Pinecone for a <strong>managed solution</strong> with <strong>fast, low-latency vector search</strong> and <strong>scalability</strong> without worrying about infrastructure.</li>
-</ul>
-<hr>
-</section>
-</section>
-<section id="conclusion" class="level2">
-<h2 class="anchored" data-anchor-id="conclusion">Conclusion</h2>
-<p><strong>Weaviate</strong> is the open-source, customizable option with built-in machine learning support. <strong>Pinecone</strong> is a <strong>fully managed service</strong> that runs the infrastructure.</p>
-<p>By using either of these vector databases, you can harness the power of vector embeddings to improve search relevance and enhance the performance of AI models.</p>
-<hr>
-<section id="further-reading" class="level3">
-<h3 class="anchored" data-anchor-id="further-reading">Further Reading</h3>
-<ul>
-<li><a href="https://weaviate.io/developers/weaviate">Weaviate Docs</a></li>
-<li><a href="https://www.pinecone.io/docs">Pinecone Docs</a></li>
-<li><a href="../retrieval-augmented-generation/">Retrieval-augmented generation</a> on this blog: what the store is for, and why its recall bounds the answer.</li>
+<li>Lewis, P. et al.&nbsp;(2020). Retrieval-augmented generation for knowledge-intensive NLP tasks. <em>NeurIPS 33</em>. <a href="https://arxiv.org/abs/2005.11401">arXiv:2005.11401</a></li>
+<li>Malkov, Y. A. and Yashunin, D. A. (2018). Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs. <em>IEEE TPAMI</em> <strong>42</strong>(4). <a href="https://arxiv.org/abs/1603.09320">arXiv:1603.09320</a></li>
+<li>Johnson, J., Douze, M. and Jégou, H. (2019). Billion-scale similarity search with GPUs. <em>IEEE Transactions on Big Data</em>. <a href="https://github.com/facebookresearch/faiss">FAISS</a></li>
+<li>Reimers, N. and Gurevych, I. (2019). Sentence-BERT. <a href="https://www.sbert.net/">sentence-transformers</a></li>
+<li><a href="../pinecone-vs-weaviate/">Weaviate vs Pinecone</a> on this blog, for the store.</li>
 </ul>
 
 
-</section>
-</section>
 </section>
 
 </main> <!-- /main -->
@@ -989,7 +970,7 @@ window.document.addEventListener("DOMContentLoaded", function (event) {
 </div>   
     <div class="nav-footer-center">
       &nbsp;
-    <div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/pinecone-vs-weaviate/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></div>
+    <div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/retrieval-augmented-generation/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></div>
     <div class="nav-footer-right">
 <p>Built with <a href="https://quarto.org/">Quarto</a></p>
 </div>
