@@ -316,10 +316,13 @@ format:
 ```
 
 `.ipynb` posts embed the same YAML in a raw cell at the top. `posts/_metadata.yml`
-applies `freeze: auto` and `title-block-banner: true` to every post; `_quarto.yml` sets
-`output-dir: docs` and excludes `notes/`. The home-page listing is configured in the
-root `index.qmd`, not `_quarto.yml` — including `categories: false`, which is why post
-categories are not browsable on the site.
+applies `freeze: auto`, `title-block-banner: true`, `toc: true` and `toc-depth: 3` to
+every post; `_quarto.yml` sets `output-dir: docs`, `site-url` (which is what makes the
+feed, the sitemap and the social cards absolute), `open-graph`/`twitter-card` (which
+read each post's `image:` and `description:`), navbar search, and the site-wide link
+and scroll options. The home-page listing is configured in the root `index.qmd`, not
+`_quarto.yml` — including `categories: false`, which is why post categories are not
+browsable on the site, and `feed: true`, which writes `docs/index.xml`.
 
 ### Covers
 
