@@ -1,82 +1,118 @@
 ---
-title: "Apple Silicon, Docker, and ML Environments"
+title: "Apple Silicon Broke an Assumption the ML Toolchain Was Built On"
+description: "Why Docker, PyTorch and conda each rub on an ARM Mac, and the native route that avoids most of it. As of spring 2025."
 author: "Ravi Kalia"
 date: "2025-04-07"
-format: html
-categories: [devops, ml, docker]
+categories: [Docker, Tooling]
+tags: [apple-silicon, arm64, docker, pytorch, conda]
 image: "./cover.png"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
 ---
 
-![Apple Silicon, Docker, and ML Environments](./cover.png)
+![Apple Silicon and machine learning tooling](./cover.png)
 
-Apple Silicon is a fine laptop and an awkward machine learning machine. Docker, PyTorch and conda all hit friction on it, and native ARM tooling avoids more of that friction than an emulated x86 image will.
+A new Mac runs for a day on a charge and compiles faster than the Intel laptop it
+replaced, and then the first `docker pull` of a machine-learning image is slow, the
+container inside it is slower, and a `conda install` pulls packages that are not built
+for the chip. None of this is Apple's tooling being bad. It is that a decade of
+open-source machine learning was built with one assumption baked in, that the machine
+is an x86-64 box, usually with an NVIDIA GPU, and the M-series chips are neither. This
+post says where that assumption surfaces for Docker, PyTorch and conda, and what the
+native route looks like. It is written as of spring 2025; the friction has been
+shrinking every year and some of it will have gone by the time you read this.
 
-# Apple Silicon, Docker, and ML Environments
+## The architecture is the whole story
 
-Apple Silicon and its `arm64` architecture (M1/M2/M3) brings serious battery life and performance gains, but not without friction for machine learning workflows — especially with `Docker`, `PyTorch`, and `conda`.
+Apple Silicon is `arm64`. Most published container images, most compiled Python
+wheels, and all of CUDA are `x86_64`. Anything that arrives as a compiled binary
+either has an ARM build or has to be emulated, and emulation is where the time goes.
+Pure Python does not care, and the numerical stack that matters, NumPy, SciPy, pandas,
+PyTorch, has ARM builds now. The trouble is concentrated in the long tail: the package
+that wraps a Fortran library, the image someone built once for CUDA, the tool whose
+release script only ever ran on Linux.
 
-The main issues stem from:
+## Docker runs foreign images, slowly, and the image is usually foreign
 
-- **Docker**: Many images are built for x86_64 (Intel/AMD), not ARM64 (Apple Silicon).
-- **PyTorch**: Native support is limited to CPU; GPU support is experimental.
-- **Conda**: The default Anaconda distribution is not optimized for ARM64.
-- **Ecosystem**: Many libraries and tools are built with x86_64 in mind. Particularly those making use of FORTRAN, CUDA or C.
-
-## Docker: Architecture Mismatch on Many Images
-
-Apple Silicon uses an ARM64 architecture, while most Docker containers are built for x86_64 (Intel/AMD). This mismatch causes:
-
-- **Emulation Overhead**: Docker Desktop uses `qemu` to emulate x86_64, slowing down builds and inference.
-- **Image Compatibility Issues**: Many ML containers (e.g., with CUDA) are x86_64-only.
-- **CI/CD Drift**: Production and CI environments typically run on x86_64 Linux, leading to potential inconsistencies.
+Docker Desktop on a Mac runs Linux containers in a virtual machine. An `arm64` image
+runs natively in that VM; an `x86_64` image runs under QEMU emulation, which is often
+several times slower and occasionally simply crashes on an instruction it does not
+support. Whether you get the fast path depends on whether the image you pulled has an
+ARM variant:
 
 ```bash
-docker pull pytorch/pytorch:latest
+docker pull pytorch/pytorch:latest          # multi-arch: picks arm64 on a Mac
+docker image inspect pytorch/pytorch:latest --format '{{.Architecture}}'
 ```
 
-However, things are improving rapidly. Docker now supports multi-architecture for many images, and popular images are being updated to support ARM natively.
+The official base images (`python`, `ubuntu`, `pytorch/pytorch`) are multi-architecture
+and pick the native variant automatically. Images built by a team for their own CI are
+usually not, and neither is anything that includes CUDA, since CUDA has no ARM Mac
+target at all. The practical rule: build your own images on the Mac, or with
+`docker buildx` for both architectures, and treat a GPU image as something that runs on
+the Linux box it was built for. The subtler cost is drift: production and CI run
+`x86_64` Linux, so an image that works natively on the laptop has not been tested where
+it will be deployed.
 
-## PyTorch on Apple Silicon
+## PyTorch is native on the CPU, and the GPU is a different GPU
 
-PyTorch supports Apple Silicon natively via CPU wheels. Metal GPU support is experimental and incomplete.
-
-## Native CPU-only install
+PyTorch publishes `arm64` macOS wheels, so the plain install is the fast path:
 
 ```bash
 pip install torch torchvision torchaudio
 ```
 
-*    Works for many CPU-based workflows.
-*    No CUDA, slow for training large models.
+That gives CPU training and inference at native speed. The GPU in an M-series chip is
+not an NVIDIA GPU, so CUDA is not an option; PyTorch reaches it through the `mps`
+backend (Metal Performance Shaders), which as of spring 2025 covers most common
+operations but not all, and is noticeably slower than a discrete NVIDIA card for
+training anything large. The realistic use is developing and debugging on the Mac and
+training on a machine with the hardware. Compiled extensions beyond the core three
+(custom CUDA kernels, some `torchvision` ops) are where an ARM wheel may be missing and
+a build from source is needed.
 
-If you’re using `torchvision`, `torchaudio`, or other compiled extensions, you may need to install special ARM builds or compile from source.
+## conda works, once you use the ARM distribution
 
-## Conda, Miniforge & Environments
-
-Miniforge/Mambaforge is the best conda-style environment manager on ARM:
-
-*	Built for `arm64`, unlike the default Anaconda.
-*	Works well with `pytorch`, `numpy`, `scipy`, `pandas`, etc.
-*	Use pip for PyTorch, `conda`/`mamba` for everything else.
-
-## Example conda env
+The stock Anaconda installer targets `x86_64` and runs under Rosetta; it works, and
+every package it installs is emulated. Miniforge is the same conda with `arm64` builds
+from conda-forge, and it is the one to install:
 
 ```bash
 conda create -n ml python=3.10 numpy pandas scikit-learn
-pip install torch torchvision
+conda activate ml
+pip install torch torchvision      # PyTorch's own wheels, not conda's
 ```
 
-## Why Windows and Linux Handle This Better
+The split in that snippet is deliberate. conda-forge carries native builds of the
+numerical stack and the compiled libraries under it; PyTorch's own wheels are the most
+current ARM builds of PyTorch, so pip installs those into the conda environment. Mixing
+the two managers in general is a known way to break an environment, and this is the
+one place it is the standard advice.
 
-Intel/AMD (x86_64) is the default for most open-source ML/DL tooling. On Linux and Windows (Intel):
+## Why Linux does not have this problem
 
-*   Docker images run natively on linux containers (no emulation).
-*   CUDA is fully supported with NVIDIA GPUs.
-*   Ecosystem is battle-tested for x86_64.
+A Linux workstation with an NVIDIA card is the machine the ecosystem assumes. Images
+run without emulation, CUDA is first-class, and every wheel has been built and tested
+for it a thousand times. Apple Silicon is a good laptop for the parts of the job that
+are Python, and a machine that borrows Linux hardware for the parts that are not. The
+native tools remove most of the friction; what they cannot remove is the GPU.
 
-Apple Silicon breaks these assumptions.
+## Where it stops holding
 
-## Summary
-Apple Silicon is great for battery and local dev—but for ML, Docker, and PyTorch workflows, expect hiccups. Use native tools (`miniforge`, `pip`, ARM base images) and avoid relying on GPU-accelerated Docker images unless you’re on Intel/Linux. Even then deep dependencies like Fortran, CUDA, and C can be a pain.
+The date in the description matters. Multi-arch images, `mps` coverage and ARM wheels
+have each improved year on year, and any specific claim here about what is missing is
+the one most likely to be stale. What does not change is the shape: check the
+architecture of every binary artifact before assuming it is the slow one.
 
 Silicon. Changed. Assumptions. Images. Assume. Intel. Go. Native. Expect. Rough. Edges.
+
+## References
+
+- [Docker Desktop for Mac: multi-platform images](https://docs.docker.com/build/building/multi-platform/)
+- [PyTorch: MPS backend](https://pytorch.org/docs/stable/notes/mps.html)
+- [Miniforge](https://github.com/conda-forge/miniforge)
+- [Why use conda](../why-use-conda/) and
+  [Numerical computing reproducibility](../numerical-computing-reproducibility/) on this blog

@@ -1,218 +1,185 @@
 ---
-title: "Docker for Machine Learning: A Deep Dive into Layers and Deployment"
+title: "A Docker Image Is a Stack of Diffs, and the Order Decides the Build Time"
+description: "Why a machine-learning image rebuilds in seconds or in twenty minutes, and a model served from a container end to end."
 author: "Ravi Kalia"
 date: "2025-03-03"
-categories: [Docker, Machine Learning, Deployment]
+categories: [Docker, Machine Learning]
+tags: [docker, machine-learning, flask, deployment, layers]
 image: "./cover.png"
-tags: [docker, machine-learning, flask, deployment]
-format: html
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
 ---
 
-![Docker for Machine Learning: A Deep Dive into Layers and Deployment](./cover.png)
+![Docker layers](./cover.png)
 
-Docker's layered filesystem is what makes a machine learning image build in seconds or in twenty minutes. How those layers work comes first, then a model deployed behind Flask end to end.
+Change one line of application code and rebuild a machine-learning image, and one of
+two things happens: the build finishes in seconds, or it spends twenty minutes
+reinstalling PyTorch. The difference is not the change. It is where in the Dockerfile
+the change lands, because an image is not a snapshot but a stack of diffs, and Docker
+rebuilds every diff above the first one that changed. This post sets out how the stack
+works, then serves a small model from a container end to end with the Dockerfile
+ordered the right way round.
 
-# Docker for Machine Learning: A Deep Dive into Layers and Deployment
+## Every instruction adds a read-only layer, and a changed layer invalidates the ones above it
 
-## Introduction
+A Dockerfile is a list of instructions. Each `FROM`, `RUN`, `COPY` and `ADD` produces a
+layer: a read-only diff against the layers beneath it, holding only the files that
+instruction created or changed. The image is the stack; a running container adds one
+writable layer on top, which is thrown away when the container stops.
 
-Docker has revolutionized software deployment by making applications portable and reproducible. For machine learning practitioners, Docker provides an efficient way to package models, dependencies, and runtime environments into lightweight, consistent containers. This article explores how Docker works, with a special focus on its layered filesystem and an end-to-end example of deploying a machine learning model using Flask.
-
-## Understanding Docker Layers
-
-Docker uses a layered filesystem to optimize storage, speed up builds, and ensure efficient image management. Each instruction in a Dockerfile creates a new read-only layer, and the final container has a writable layer on top.
-
-### How Layers Work
-
-- Each `RUN`, `COPY`, or `ADD` command in a Dockerfile creates a new layer.
-- Layers are cached, meaning if a layer does not change, Docker reuses it to speed up builds.
-- The topmost layer in a running container is writable, while all underlying layers remain read-only.
-
-### Example: Dockerfile and Its Layers
+Layers are content-addressed and cached. When Docker rebuilds, it walks the
+instructions in order and reuses the cached layer for each one whose inputs are
+unchanged. The first instruction whose inputs differ breaks the chain, and every layer
+above it is rebuilt, whether or not its own inputs changed. Six instructions, six
+layers, and one rule:
 
 ```dockerfile
-# Base Image (Layer 1)
-FROM python:3.10
-
-# Create a working directory (Layer 2)
-WORKDIR /app
-
-# Copy files into the container (Layer 3)
-COPY requirements.txt .
-
-# Install dependencies (Layer 4)
-RUN pip install -r requirements.txt
-
-# Copy rest of the code (Layer 5)
-COPY . .
-
-# Run the application (Layer 6, but doesn’t persist in images)
-CMD ["python", "app.py"]
+FROM python:3.10              # layer 1: the base image
+WORKDIR /app                  # layer 2: metadata only
+COPY requirements.txt .       # layer 3: one file
+RUN pip install -r requirements.txt   # layer 4: the expensive one
+COPY . .                      # layer 5: the application
+CMD ["python", "app.py"]      # metadata, no new layer
 ```
 
-### How Docker Builds This
+| Step | Instruction | Reused when |
+|---|---|---|
+| 1 | `FROM python:3.10` | always, once pulled |
+| 2 | `WORKDIR /app` | always |
+| 3 | `COPY requirements.txt .` | `requirements.txt` unchanged |
+| 4 | `RUN pip install …` | layer 3 reused |
+| 5 | `COPY . .` | any file in the context unchanged |
+| 6 | `CMD` | always |
 
-Each instruction adds a layer to the final image:
+Read the table bottom-up and the build times explain themselves. An edit to `app.py`
+changes layer 5 only, so layers 1 to 4 come from cache and the rebuild is a file copy.
+An edit to `requirements.txt` changes layer 3, so layer 4 reinstalls everything. And a
+Dockerfile that copies the whole project *before* installing dependencies makes every
+edit to any file look like a dependency change, which is the twenty-minute rebuild.
+So the order is: things that change rarely first, things that change often last, and
+the dependency manifest copied on its own before the code. A `.dockerignore` keeps
+files the image does not need out of the build context, so that editing them does not
+invalidate layer 5 either.
 
-| Step | Instruction | Layer Type | Cached? |
-|------|------------|------------|---------|
-| 1 | `FROM python:3.10` | Base Image | Yes |
-| 2 | `WORKDIR /app` | Metadata | Yes |
-| 3 | `COPY requirements.txt .` | File System | Yes (if unchanged) |
-| 4 | `RUN pip install -r requirements.txt` | Execution | Yes (if no changes in `requirements.txt`) |
-| 5 | `COPY . .` | File System | Yes (if no changes in files) |
-| 6 | `CMD ["python", "app.py"]` | Metadata (no new layer) | Yes |
+## Serving a model from a container, ordered the right way round
 
-### Optimizing Docker Builds with Caching
+The example trains a classifier on Fisher's iris measurements, the 150 flowers from
+1936 that ship with scikit-learn, chosen because it fits in a pickle of a few hundred
+kilobytes and makes the request round-trip visible. Nothing about the container
+depends on the model being small. The blocks are illustrative and are not executed in
+this build.
 
-The order of Dockerfile instructions matters for caching. To make the most of layer reuse:
-
-- Place frequently changing instructions at the end of the Dockerfile.
-- Separate dependency installation from application code to reuse dependency layers.
-- Use `.dockerignore` to exclude unnecessary files from the build context.
-
-## Example: Deploying a Machine Learning Model with Docker
-
-This section trains a machine learning model, builds a Flask API to serve it, and packages the model and the API in a Docker container.
-
-### Project Structure
-
-```
-ml-docker-example/
-│── model.pkl                  # Pre-trained ML model
-│── app.py                      # Flask API for predictions
-│── requirements.txt            # Python dependencies
-│── Dockerfile                  # Instructions to build the image
-│── .dockerignore               # Files to ignore
-```
-
-### Train and Save the Machine Learning Model
+Train and save the model, once, outside the container:
 
 ```python
 import pickle
-import numpy as np
-from sklearn.ensemble import RandomForestClassifier
+
 from sklearn.datasets import load_iris
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
-# Load dataset
 iris = load_iris()
 X_train, X_test, y_train, y_test = train_test_split(iris.data, iris.target, test_size=0.2, random_state=42)
-
-# Train model
-model = RandomForestClassifier(n_estimators=100)
-model.fit(X_train, y_train)
-
-# Save model
+model = RandomForestClassifier(n_estimators=100, random_state=42).fit(X_train, y_train)
 with open("model.pkl", "wb") as f:
     pickle.dump(model, f)
-
-print("Model trained and saved as model.pkl")
 ```
 
-Run this script to generate `model.pkl`:
-
-```sh
-python train_model.py
-```
-
-### Create Flask API to Serve Predictions
+Serve it behind a small Flask endpoint, `app.py`:
 
 ```python
-from flask import Flask, request, jsonify
 import pickle
-import numpy as np
 
-# Load trained model
+import numpy as np
+from flask import Flask, jsonify, request
+
 with open("model.pkl", "rb") as f:
     model = pickle.load(f)
 
 app = Flask(__name__)
 
+
 @app.route("/predict", methods=["POST"])
 def predict():
-    data = request.get_json()
-    features = np.array(data["features"]).reshape(1, -1)
-    prediction = model.predict(features).tolist()
-    return jsonify({"prediction": prediction})
+    features = np.array(request.get_json()["features"]).reshape(1, -1)
+    return jsonify({"prediction": model.predict(features).tolist()})
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
 ```
 
-### Define Dependencies
-
-```txt
-flask
-numpy
-scikit-learn
-```
-
-### Dockerfile
+The dependencies are three lines in `requirements.txt`: `flask`, `numpy`,
+`scikit-learn`. The Dockerfile copies that file first, installs, and only then copies
+the code and the model, so a change to `app.py` never reinstalls scikit-learn:
 
 ```dockerfile
 FROM python:3.10
-
 WORKDIR /app
-
-COPY . .
-
-RUN pip install -r requirements.txt
-
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app.py model.pkl .
 EXPOSE 5000
-
 CMD ["python", "app.py"]
 ```
 
-### Create `.dockerignore`
+The `.dockerignore` excludes caches and the training script's leftovers, and it must
+not exclude `model.pkl`: the container loads it at start-up, and an image built
+without it starts and then dies on the first line of `app.py`. That mistake sat in the
+earlier version of this post.
 
 ```
 __pycache__/
 *.pyc
-*.pyo
-*.pkl
+.git/
 ```
 
-### Build and Run the Docker Container
+Build, run, and ask it a question:
 
 ```sh
-docker build -t ml-flask-app .
-docker run -p 5000:5000 ml-flask-app
+docker build -t iris-api .
+docker run -p 5000:5000 iris-api
+curl -X POST http://localhost:5000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"features": [5.1, 3.5, 1.4, 0.2]}'
 ```
 
-The Flask server is now running inside the container and listens for requests on `http://localhost:5000/predict`.
+The reply is `{"prediction": [0]}`: setosa, which is what those four measurements are.
+Change a line of `app.py` and rebuild, and the output shows `CACHED` against the
+install step and a build of a few seconds. Change `requirements.txt` and it does not.
 
-### Make a Prediction Request
+## Shipping the image is pushing the stack
 
-Using `curl`:
+An image on one machine is of limited use. `docker tag` and `docker push` send the
+stack to a registry, Docker Hub or a cloud provider's, and a server or a Kubernetes
+cluster pulls it and runs it; and because the push is by layer too, a new version that
+changed only the code uploads only the code layer.
 
 ```sh
-curl -X POST http://localhost:5000/predict -H "Content-Type: application/json" -d '{"features": [5.1, 3.5, 1.4, 0.2]}'
+docker tag iris-api registry.example.com/iris-api:1.0
+docker push registry.example.com/iris-api:1.0
 ```
 
-Using Python:
+## Where it stops holding
 
-```python
-import requests
-
-data = {"features": [5.1, 3.5, 1.4, 0.2]}
-response = requests.post("http://localhost:5000/predict", json=data)
-print(response.json())
-```
-
-## Deploying to the Cloud
-
-To deploy the model on a cloud service, push the image to Docker Hub or AWS ECR:
-
-```sh
-docker tag ml-flask-app mydockerhubusername/ml-flask-app:latest
-docker push mydockerhubusername/ml-flask-app:latest
-```
-
-Then, pull and run it on a cloud server or Kubernetes cluster.
-
-## Conclusion
-
-Docker provides an efficient way to package and deploy machine learning models, ensuring consistency across environments. By leveraging Docker’s layered filesystem, caching, and optimization strategies, machine learning practitioners can significantly improve build times and resource efficiency. Understanding how layers work allows for better container management and deployment strategies in production environments.
+The cache is keyed on the instruction and its inputs, not on what the instruction
+does, so `RUN pip install -r requirements.txt` is reused even when a package has been
+yanked or a floating version has moved upstream; pin the versions if the build has to
+be reproducible next year. A base image tagged `python:3.10` moves too. And the layer
+model rewards small, ordered steps but punishes one thing: a file deleted in a later
+layer is still in the image, hidden, so secrets and multi-gigabyte weights that were
+ever copied in stay in the stack. Multi-stage builds exist for that.
 
 Layers. Cache. Order. Matters. Rebuild. Less. Ship. The. Same. Environment. Twice.
+
+## References
+
+- [Docker: image layers and build cache](https://docs.docker.com/build/cache/)
+- [Dockerfile reference](https://docs.docker.com/reference/dockerfile/)
+- Fisher, R. A. (1936). The use of multiple measurements in taxonomic problems.
+  *Annals of Eugenics* **7**(2). The iris data as shipped in
+  [scikit-learn](https://scikit-learn.org/stable/datasets/toy_dataset.html#iris-dataset).
+- [Flask documentation](https://flask.palletsprojects.com/)

@@ -1,187 +1,141 @@
 ---
-title: "Streamlining Development with Make, CI/CD, and GitHub Actions"
-description: "A comprehensive guide to setting up automated workflows for Python projects using Make, CI/CD, and GitHub Actions"
+title: "Make Is for the Commands You Type, CI Is for the Ones You Forget"
+description: "A Makefile and a GitHub Actions workflow split a project's chores by who has to remember them, with this blog's own pipeline as the worked example."
+author: "Ravi Kalia"
 date: "2024-04-09"
-categories: [devops, python, automation]
+categories: [Development, Tooling]
+tags: [make, ci, github-actions, python, quarto]
 image: "./cover.png"
 format:
   html:
     toc: true
     toc-depth: 3
-    code-fold: true
-    code-tools: true
-    code-link: true
-    highlight-style: github
+    code-fold: false
 ---
 
-Wiring up a Python project so the boring parts run themselves takes two pieces: a Makefile for the commands you type by hand, and GitHub Actions for the ones that should run whether you remember them or not.
+![Make and GitHub Actions](./cover.png)
 
-# Streamlining Development with Make, CI/CD, and GitHub Actions
+Every project accumulates chores: install the dependencies, run the linter, run the
+tests, build the site, publish it. Each is a command or three, and each has a way of
+being run slightly differently by each person, or skipped when the deadline is close.
+Two small files take the remembering away. A Makefile names the commands so that they
+are typed the same way every time, and a GitHub Actions workflow runs the ones that
+must happen whether anyone remembers or not. This post uses the pipeline that builds
+this blog as the example, because it is real and its mistakes have been paid for.
 
-## Why Automate?
+## A Makefile is a menu, not a build system
 
-Before diving into the implementation, let's understand why automation is crucial:
-
-- **Consistency**: Automated processes ensure that every team member follows the same steps
-- **Quality**: Automated testing and linting catch issues early
-- **Speed**: Reduce manual work and speed up development cycles
-- **Reliability**: Minimize human error in deployment processes
-
-## The Makefile: Your Development Swiss Army Knife
-
-A Makefile serves as the central command hub for your project. Here's a basic structure for a Python project:
+Make was written to rebuild only the parts of a C program whose sources changed. Almost
+nobody uses it for that in a Python project. What survives is the other half: a
+Makefile is a list of named commands, and `make lint` is shorter, and harder to get
+wrong, than the three lines behind it. The menu for this blog looks like this,
+trimmed to the targets a contributor uses in a day:
 
 ```makefile
-.PHONY: install test lint format clean
+install:                       # the toolchain, from the lockfile
+	uv sync
 
-# Install dependencies
-install:
-    pip install -r requirements.txt
-    pip install -r requirements-dev.txt
+lint:                          # read-only; `make fmt` applies the fixes
+	.venv/bin/ruff check .
+	.venv/bin/ruff format --check .
 
-# Run tests
+spell:
+	.venv/bin/codespell
+
 test:
-    pytest tests/
+	.venv/bin/python -m pytest
 
-# Run linting
-lint:
-    black --check .
-    isort --check-only .
-    ruff check .
+check-posts:                   # the repo's own invariants
+	python3 scripts/check_posts.py
 
-# Format code
-format:
-    black .
-    isort .
-    ruff check --fix .
+check: lint spell test check-posts
 
-# Clean up
-clean:
-    find . -type d -name "__pycache__" -exec rm -r {} +
-    find . -type f -name "*.pyc" -delete
-    rm -rf .pytest_cache/
-    rm -rf .ruff_cache/
+render: check-quarto
+	python3 scripts/check_posts.py --no-listing
+	QUARTO_PYTHON="$(CURDIR)/.venv/bin/python" quarto render . > render.log 2>&1
+	@$(MAKE) docs-deleted
+
+.PHONY: install lint spell test check-posts check render
 ```
 
-## Setting Up GitHub Actions for CI/CD
+Three habits make a Makefile like this earn its keep. Every target names its
+interpreter (`.venv/bin/ruff`, not `ruff`), so the command runs the project's tool and
+not whatever is first on the path. The read-only check and the fixing command are
+separate targets, so `make lint` in CI cannot rewrite files. And a target that wraps
+something dangerous carries its guards: `render` refuses on the wrong Quarto version,
+runs the cheap checks before the expensive step, sends the noisy log to a file, and
+ends with a check for files the render should not have deleted. Each guard was added
+after the mistake it prevents had happened once.
 
-GitHub Actions automates workflows. Let's create a workflow that handles:
+## CI runs the menu on every change, on a machine you did not set up
 
-1. Code formatting and linting
-2. Testing
-3. Documentation building
-4. Deployment
+A Makefile does nothing until someone types it. The workflow makes the typing
+unnecessary: on every pull request, a fresh machine checks out the branch, installs
+the toolchain, and runs the same targets. If they fail, the merge button goes red.
+That is the whole idea of continuous integration, and the important word is *fresh*:
+the machine has none of the tools you installed by hand and forgot about, so the
+pipeline proves the project can be built from what is in the repository.
 
-Here's a sample workflow file:
+The blog's workflow is two jobs. The first is the quick one:
 
 ```yaml
-name: CI/CD Pipeline
-
+name: ci
 on:
-  push:
-    branches: [ main ]
   pull_request:
-    branches: [ main ]
+  push:
+    branches: [main]
 
 jobs:
-  quality:
+  checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
         with:
-          python-version: '3.10'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
-
-      - name: Run linting
-        run: make lint
-
-      - name: Run tests
-        run: make test
-
-      - name: Build documentation
-        run: |
-          pip install quarto
-          quarto render
-
-      - name: Deploy to GitHub Pages
-        if: github.ref == 'refs/heads/main'
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./docs
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: make check
 ```
 
-## Key Components of the CI/CD Pipeline
+The second renders the whole site with a pinned Quarto version, restores the one asset
+a render is known to drop, and fails if the shared runtime files changed, because that
+is the fingerprint of a Quarto upgrade that has broken older posts before. It took two
+attempts to get right. The first ran on Linux, and the CSS Quarto compiles from the
+site theme differs between Linux and the Mac the site is built on, so every page showed
+as changed. The job now runs on a macOS runner, which is the kind of thing a workflow
+has to say in a comment, because nobody will guess it.
 
-### 1. Code Quality Checks
+Two more lines are worth stealing. `concurrency` with `cancel-in-progress: true`
+stops a stale run when a new commit arrives on the same branch. And `UV_FROZEN=1` in
+the job's environment makes every install use the lockfile, so CI tests the versions
+that are committed and never re-resolves them on the runner.
 
-- **Black**: Python code formatter
-- **isort**: Import sorter
-- **Ruff**: Fast Python linter
-- **mypy**: Static type checker
+## The split is by who has to remember
 
-### 2. Testing
+The question of what goes in the Makefile and what goes in the workflow has a simple
+answer. Anything a person runs while working, often and with variations, is a Make
+target: `make lint` on the two files you changed, `make render-post SLUG=x` on the one
+post you are writing. Anything that has to happen on every change, the same way, with
+no one deciding, is a workflow job. The two overlap on purpose: the workflow calls the
+same targets, so when a check passes on a laptop it passes in CI, and when CI fails the
+command to reproduce it is the one in the log.
 
-- **pytest**: Test framework
-- **coverage**: Test coverage reporting
-- **tox**: Test automation
+## Where it stops holding
 
-### 3. Documentation
+Make's own rules are a trap for Python projects. A target with the same name as a file
+in the directory will not run (that is what `.PHONY` is for), recipe lines must start
+with a tab, and a variable is `$(NAME)`, not `$NAME`. And a workflow that only lints and
+tests is not yet deployment: publishing this site is still a local render committed to
+the repository, and the workflow checks that commit rather than making it. Continuous
+deployment is the step after this one, and it is worth taking only once the checks are
+trusted.
 
-- **Quarto**: Documentation generator
-- **GitHub Pages**: Documentation hosting
+Name. The. Chores. Type. Them. Once. Machines. Repeat. Them. Every. Time.
 
-## Best Practices
+## References
 
-1. **Keep Makefiles Simple**: Each target should do one thing well
-2. **Use Matrix Testing**: Test across multiple Python versions
-3. **Cache Dependencies**: Speed up CI/CD runs
-4. **Fail Fast**: Run quick checks first
-5. **Security First**: Never expose secrets in logs
-
-## Example Project Structure
-
-```
-project/
-├── .github/
-│   └── workflows/
-│       └── ci-cd.yml
-├── Makefile
-├── requirements.txt
-├── requirements-dev.txt
-├── src/
-│   └── project/
-│       └── __init__.py
-├── tests/
-│   └── test_project.py
-└── docs/
-    └── index.qmd
-```
-
-## Conclusion
-
-A CI/CD pipeline with Make and GitHub Actions cuts repetitive work: format, test, and deploy run the same way each time.
-
-Remember to:
-- Start small and iterate
-- Document your processes
-- Monitor pipeline performance
-- Keep security in mind
-- Regularly update dependencies
-
-Automate. Early. Machines. Don't. Forget. Steps. Humans. Do. Type. Once.
-
-## Further Reading
-
-- [GitHub Actions Documentation](https://docs.github.com/en/actions)
-- [Makefile Tutorial](https://makefiletutorial.com/)
-- [Python Packaging User Guide](https://packaging.python.org/)
-- [Quarto Documentation](https://quarto.org/docs/guide/)
+- [GitHub Actions documentation](https://docs.github.com/en/actions)
+- [GNU Make manual](https://www.gnu.org/software/make/manual/)
+- [uv documentation](https://docs.astral.sh/uv/)
+- This blog's [`Makefile`](https://github.com/project-delphi/ml-blog/blob/main/Makefile)
+  and [`ci.yml`](https://github.com/project-delphi/ml-blog/blob/main/.github/workflows/ci.yml)
