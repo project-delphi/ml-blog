@@ -425,9 +425,36 @@ document.addEventListener("DOMContentLoaded", function () {
   // Python cell. At 220 kB that matters twice over: the browser caches it
   // instead of re-downloading it inside every page load, and it is
   // republished by any render instead of sitting outside the freeze hash.
+  // The payload is unfingerprinted, so a reader can hold a cached data.js
+  // while the page serves a newer widgets.js. SCHEMA is what makes that
+  // visible: src/export_widget_data.py stamps it, this refuses anything else,
+  // and the mismatch shows in the page instead of the widget drawing from
+  // fields that have moved.
+  const SCHEMA = 1;
   const data = window.TI_DATA;
-  if (!data) {
-    console.error("tensor-inverse widget payload missing: widget-data/data.js did not load");
+  const problem = !data
+    ? "could not load its data (widget-data/data.js)"
+    : data.schema !== SCHEMA
+      ? "loaded a cached copy of its data that no longer matches this page"
+      : null;
+
+  if (problem) {
+    // Say so in the page, not only in the console. Mounting an empty widget
+    // would leave the reader staring at a blank box under a note that tells
+    // them to drag a slider that is not there.
+    console.error("tensor-inverse widget: " + problem);
+    const host = document.getElementById("ti-widget");
+    if (host) {
+      const p = document.createElement("p");
+      p.className = "widget-note";
+      p.textContent =
+        "This widget " +
+        problem +
+        ". Reload the page to fetch it again; the same numbers are printed by " +
+        "the code cell below.";
+      host.appendChild(p);
+    }
+    return;
   }
-  TIW.init("ti-widget", data || {});
+  TIW.init("ti-widget", data);
 });
