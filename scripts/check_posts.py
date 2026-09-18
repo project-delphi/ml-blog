@@ -24,6 +24,9 @@ single-document render and was missing from the listing for as long as
 nobody scrolled looking for it.
 
 Stdlib only, so it runs against any interpreter without installing anything.
+
+`--categories` adds a fifth, opt-in check: every post's `categories:` must use
+strings from scripts/categories.txt, spelled as that file spells them.
 """
 
 from __future__ import annotations
@@ -46,6 +49,7 @@ STUB_LIST_RE = re.compile(r"for k in\s+(.*?);\s*do", re.S)
 CELL_RE = re.compile(r"^```\{(\w+)\}\n(.*?)^```", re.S | re.M)
 EVAL_FALSE_RE = re.compile(r"#\|\s*eval:\s*false")
 KERNEL_RE = re.compile(r"^jupyter:\s*(\S+)", re.M)
+DRAFT_RE = re.compile(r"^draft:\s*true\s*$", re.M)
 
 # Languages that need a kernel and therefore an environment. Diagram blocks
 # (mermaid, dot) are handled by Quarto's own filters -- langgraph-vs-llamaindex
@@ -135,8 +139,53 @@ def check_freeze(slug: str, source: Path, executes: bool) -> list[str]:
     return [
         f"frozen output is stale ({stored[:8]} != {actual[:8]}): the source changed "
         "without a re-render, so a project render will try to re-execute this post. "
-        "Re-render it, or realign the hash if only prose changed.",
+        f"If only prose changed, `make freeze-realign SLUG={slug}` splices the new "
+        "prose into the record; otherwise re-render with the post's venv.",
     ]
+
+
+CATEGORIES = ROOT / "scripts" / "categories.txt"
+FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---", re.S)
+CATS_INLINE_RE = re.compile(r"^categories:[ \t]*\[(.*?)\][ \t]*$", re.M)
+CATS_BLOCK_RE = re.compile(r"^categories:[ \t]*\n((?:[ \t]+-[ \t]+.*\n?)+)", re.M)
+
+
+def categories(text: str) -> list[str]:
+    """Read the post's `categories:` list from its frontmatter, unquoted."""
+    fm = FRONTMATTER_RE.match(text)
+    if not fm:
+        return []
+    head = fm.group(1) + "\n"
+    if m := CATS_INLINE_RE.search(head):
+        raw = m.group(1).split(",")
+    elif m := CATS_BLOCK_RE.search(head):
+        raw = [line.split("-", 1)[1] for line in m.group(1).splitlines() if "-" in line]
+    else:
+        return []
+    return [c.strip().strip("\"'") for c in raw if c.strip().strip("\"'")]
+
+
+def canonical_categories() -> set[str]:
+    """The allowed category strings, from scripts/categories.txt."""
+    lines = CATEGORIES.read_text().splitlines()
+    return {ln.strip() for ln in lines if ln.strip() and not ln.startswith("#")}
+
+
+def check_categories(cats: list[str], canon: set[str]) -> list[str]:
+    """Flag categories that are missing or not spelled as categories.txt spells them."""
+    if not cats:
+        return ["has no categories."]
+    by_fold = {c.casefold(): c for c in canon}
+    problems = []
+    for c in cats:
+        if c in canon:
+            continue
+        hint = by_fold.get(c.casefold())
+        problems.append(
+            f"category `{c}` is not in scripts/categories.txt"
+            + (f"; use `{hint}`." if hint else ".")
+        )
+    return problems
 
 
 def listed_slugs() -> set[str] | None:
@@ -196,17 +245,25 @@ def check_kernel_stubs(pinned: dict[str, str]) -> list[str]:
     ]
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    # `--categories` is opt-in while the taxonomy is being normalised; it
+    # becomes part of the default run once every post passes.
+    with_categories = "--categories" in (sys.argv[1:] if argv is None else argv)
+    canon = canonical_categories() if with_categories else set()
     failures: dict[str, list[str]] = {}
     pinned: dict[str, str] = {}
     slugs: list[str] = []
     for post_dir in sorted(p for p in POSTS.iterdir() if p.is_dir()):
         source = post_dir / "index.qmd"
-        if source.exists() or (post_dir / "index.ipynb").exists():
-            slugs.append(post_dir.name)
         if not source.exists():
+            if (post_dir / "index.ipynb").exists():
+                slugs.append(post_dir.name)
             continue  # .ipynb posts carry their own stored outputs
         text = source.read_text(errors="ignore")
+        # `draft-mode: unlinked` (_quarto.yml) renders a draft but keeps it
+        # out of the listing on purpose, so a draft is not a missing post.
+        if not DRAFT_RE.search(text):
+            slugs.append(post_dir.name)
         executes = executes_code(text)
         kernel = KERNEL_RE.search(text)
         if kernel:
@@ -214,6 +271,8 @@ def main() -> int:
         problems = check_freeze(post_dir.name, source, executes)
         if executes:
             problems += check_environment(post_dir.name, text, post_dir)
+        if with_categories:
+            problems += check_categories(categories(text), canon)
         if problems:
             failures[f"posts/{post_dir.name}/index.qmd"] = problems
 

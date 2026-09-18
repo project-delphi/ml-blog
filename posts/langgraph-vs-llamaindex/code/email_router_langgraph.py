@@ -1,5 +1,4 @@
-"""
-Email router + RAG response drafter — LangGraph version.
+"""Email router + RAG response drafter — LangGraph version.
 
 Flow (graph traversal over shared state):
 
@@ -89,8 +88,7 @@ class RouteDecision(BaseModel):
 # ---------------------------------------------------------------------------
 def classify(state: State) -> dict:
     decision = llm.with_structured_output(RouteDecision).invoke(
-        "Classify this customer email into one department.\n\n"
-        f"EMAIL:\n{state['email']}"
+        f"Classify this customer email into one department.\n\nEMAIL:\n{state['email']}"
     )
     return {"department": decision.department}
 

@@ -182,8 +182,12 @@ def fig_latency() -> None:
     )
 
     for i, (f, d) in enumerate(zip(first, done)):
-        ax.text(f + 0.12, i - h / 2 - 0.02, f"{f:.2f}", va="center", fontsize=8.5, color=INK)
-        ax.text(d + 0.12, i + h / 2 + 0.02, f"{d:.2f}", va="center", fontsize=8.5, color=INK)
+        ax.text(
+            f + 0.12, i - h / 2 - 0.02, f"{f:.2f}", va="center", fontsize=8.5, color=INK
+        )
+        ax.text(
+            d + 0.12, i + h / 2 + 0.02, f"{d:.2f}", va="center", fontsize=8.5, color=INK
+        )
 
     ax.set_yticks(list(y))
     ax.set_yticklabels(labels, fontsize=9.5, color=INK)
@@ -226,7 +230,9 @@ def fig_wer() -> None:
     ax.set_yticklabels([r[0] for r in rows], fontsize=9.5, color=INK)
     ax.invert_yaxis()
     ax.set_xlim(0, 7.6)
-    ax.set_xlabel("average word error rate, % (lower is better)", fontsize=9.5, color=MUTED)
+    ax.set_xlabel(
+        "average word error rate, % (lower is better)", fontsize=9.5, color=MUTED
+    )
     ax.set_title(
         "Speech-to-text accuracy, open weights vs commercial APIs",
         fontsize=12.5,
@@ -280,7 +286,9 @@ def fig_tts() -> None:
     ax.set_yticklabels([r[0] for r in rows], fontsize=9.5, color=INK)
     ax.invert_yaxis()
     ax.set_xlim(880, 1290)
-    ax.set_xlabel("Arena Elo, blind listening votes (higher is better)", fontsize=9.5, color=MUTED)
+    ax.set_xlabel(
+        "Arena Elo, blind listening votes (higher is better)", fontsize=9.5, color=MUTED
+    )
     ax.set_title(
         "Text-to-speech listening preference, 95% confidence intervals",
         fontsize=12.5,

@@ -60,7 +60,9 @@ def make_basis(x: np.ndarray, n_basis: int = 8, degree: int = 3) -> Basis:
     interior = interior[(interior > lo) & (interior < hi)]
     if interior.size < n_interior:
         interior = np.linspace(lo, hi, n_interior + 2)[1:-1]
-    knots = np.concatenate([np.repeat(lo, degree + 1), interior, np.repeat(hi, degree + 1)])
+    knots = np.concatenate(
+        [np.repeat(lo, degree + 1), interior, np.repeat(hi, degree + 1)]
+    )
     raw = BSpline.design_matrix(np.clip(x, lo, hi), knots, degree).toarray()
     return Basis(knots=knots, degree=degree, centre=raw.mean(axis=0))
 
@@ -113,8 +115,12 @@ def _shared(model: pm.Model, d: Design) -> tuple:
     intercept = pm.Normal("intercept", -2.0, 2.0)
     sd_donor = pm.HalfNormal("sd_donor", 0.5)
     sd_well = pm.HalfNormal("sd_well", 0.3)
-    u_donor = pm.Deterministic("u_donor", sd_donor * pm.Normal("z_donor", 0, 1, shape=d.n_donors))
-    u_well = pm.Deterministic("u_well", sd_well * pm.Normal("z_well", 0, 1, shape=d.n_wells))
+    u_donor = pm.Deterministic(
+        "u_donor", sd_donor * pm.Normal("z_donor", 0, 1, shape=d.n_donors)
+    )
+    u_well = pm.Deterministic(
+        "u_well", sd_well * pm.Normal("z_well", 0, 1, shape=d.n_wells)
+    )
     # Parameterised so that inv_alpha -> 0 is the Poisson limit, which is where
     # this data actually sits. A prior directly on alpha fights that boundary.
     inv_alpha = pm.HalfNormal("inv_alpha", 1.0)
@@ -122,7 +128,9 @@ def _shared(model: pm.Model, d: Design) -> tuple:
     return intercept, u_donor, u_well, alpha
 
 
-def _finish(model: pm.Model, d: Design, eta: pt.TensorVariable, alpha, weights: np.ndarray) -> None:
+def _finish(
+    model: pm.Model, d: Design, eta: pt.TensorVariable, alpha, weights: np.ndarray
+) -> None:
     w = pm.Data("w", weights.astype(float))
     mu = pt.exp(eta + d.log_offset)
     dist = pm.NegativeBinomial.dist(mu=mu, alpha=alpha)
@@ -177,7 +185,8 @@ def _fit_glm(y, X, family, offset):
     penalty = np.full(X.shape[1], RIDGE)
     penalty[0] = 0.0
     return sm.GLM(y, X, family=family, offset=offset).fit_regularized(
-        alpha=penalty, L1_wt=0.0,
+        alpha=penalty,
+        L1_wt=0.0,
     )
 
 
@@ -232,7 +241,10 @@ def estimate_alpha(panel: pd.DataFrame, d: Design) -> float:
 
     X, _ = glm_designs(panel, d)
     fitted = sm.GLM(
-        d.y, X, family=sm.families.Poisson(), offset=d.log_offset,
+        d.y,
+        X,
+        family=sm.families.Poisson(),
+        offset=d.log_offset,
     ).fit()
     mu = np.asarray(fitted.fittedvalues)
     excess = float((((d.y - mu) ** 2) - mu).sum())
@@ -275,9 +287,7 @@ def score_summary(folds: pd.DataFrame) -> dict[str, float]:
     taken across the six per-donor totals.
     """
     diff = folds["gam"].to_numpy() - folds["linear"].to_numpy()
-    by_donor = (
-        folds.assign(diff=diff).groupby("donor")["diff"].sum().to_numpy()
-    )
+    by_donor = folds.assign(diff=diff).groupby("donor")["diff"].sum().to_numpy()
     return {
         "gam": float(folds["gam"].sum()),
         "linear": float(folds["linear"].sum()),
@@ -289,8 +299,9 @@ def score_summary(folds: pd.DataFrame) -> dict[str, float]:
     }
 
 
-def calibration_table(panel: pd.DataFrame, d: Design, alpha: float,
-                      n_bins: int = 8) -> pd.DataFrame:
+def calibration_table(
+    panel: pd.DataFrame, d: Design, alpha: float, n_bins: int = 8
+) -> pd.DataFrame:
     """Observed against predicted counts on held-out donors, by bin of
     predicted rate.
     """
@@ -310,13 +321,16 @@ def calibration_table(panel: pd.DataFrame, d: Design, alpha: float,
             if m.sum() < 2:
                 continue
             obs = d.y[m]
-            out.append({
-                "model": name, "bin": b,
-                "predicted": float(pred[m].mean()),
-                "observed": float(obs.mean()),
-                "se": float(obs.std(ddof=1) / np.sqrt(m.sum())),
-                "n": int(m.sum()),
-            })
+            out.append(
+                {
+                    "model": name,
+                    "bin": b,
+                    "predicted": float(pred[m].mean()),
+                    "observed": float(obs.mean()),
+                    "se": float(obs.std(ddof=1) / np.sqrt(m.sum())),
+                    "n": int(m.sum()),
+                }
+            )
     return pd.DataFrame(out)
 
 
@@ -334,11 +348,14 @@ def naive_share(cells: pd.DataFrame) -> pd.DataFrame:
     c = cells.copy()
     c["naive"] = c["wave1_uptake"] == 0
     return c.groupby(["donor", "arm"], as_index=False).apply(
-        lambda s: pd.Series({
-            "share": s.loc[s["naive"], "wave2_uptake"].sum() / max(s["wave2_uptake"].sum(), 1),
-            "naive_frac": float(s["naive"].mean()),
-            "total": float(s["wave2_uptake"].sum()),
-        }),
+        lambda s: pd.Series(
+            {
+                "share": s.loc[s["naive"], "wave2_uptake"].sum()
+                / max(s["wave2_uptake"].sum(), 1),
+                "naive_frac": float(s["naive"].mean()),
+                "total": float(s["wave2_uptake"].sum()),
+            }
+        ),
         include_groups=False,
     )
 
@@ -356,8 +373,9 @@ def arm_contrast(cells: pd.DataFrame) -> float:
     return float(np.mean(_logit(g["focal"].to_numpy()) - _logit(g["broad"].to_numpy())))
 
 
-def power_curve(donor_counts, n_rep: int = 200,
-                base_seed: int = 90000, **kw) -> pd.DataFrame:
+def power_curve(
+    donor_counts, n_rep: int = 200, base_seed: int = 90000, **kw
+) -> pd.DataFrame:
     """Probability of detecting the assigned broad-versus-focal contrast.
 
     The test is a donor-paired t-test on the logit naive share, which is
@@ -384,5 +402,8 @@ def _power_draw(n_donors, seed, **kw):
     import sim as _sim
 
     return _sim.simulate_experiment(
-        seed=seed, n_donors=n_donors, arms=("broad", "focal"), **kw,
+        seed=seed,
+        n_donors=n_donors,
+        arms=("broad", "focal"),
+        **kw,
     ).cells

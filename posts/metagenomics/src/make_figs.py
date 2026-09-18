@@ -147,10 +147,26 @@ def fig_culturability() -> None:
 # Shotgun fragments, hand-placed so the panel reads as random-but-even coverage
 # rather than a repeating pattern. (genome index, start, length), axis units.
 SHOTGUN = [
-    (0, 0.04, 0.13), (0, 0.22, 0.10), (0, 0.38, 0.15), (0, 0.60, 0.11), (0, 0.78, 0.14),
-    (1, 0.02, 0.11), (1, 0.19, 0.16), (1, 0.41, 0.09), (1, 0.56, 0.13), (1, 0.75, 0.17),
-    (2, 0.07, 0.15), (2, 0.27, 0.12), (2, 0.45, 0.14), (2, 0.66, 0.10), (2, 0.82, 0.12),
-    (3, 0.03, 0.12), (3, 0.20, 0.14), (3, 0.40, 0.11), (3, 0.58, 0.16), (3, 0.80, 0.13),
+    (0, 0.04, 0.13),
+    (0, 0.22, 0.10),
+    (0, 0.38, 0.15),
+    (0, 0.60, 0.11),
+    (0, 0.78, 0.14),
+    (1, 0.02, 0.11),
+    (1, 0.19, 0.16),
+    (1, 0.41, 0.09),
+    (1, 0.56, 0.13),
+    (1, 0.75, 0.17),
+    (2, 0.07, 0.15),
+    (2, 0.27, 0.12),
+    (2, 0.45, 0.14),
+    (2, 0.66, 0.10),
+    (2, 0.82, 0.12),
+    (3, 0.03, 0.12),
+    (3, 0.20, 0.14),
+    (3, 0.40, 0.11),
+    (3, 0.58, 0.16),
+    (3, 0.80, 0.13),
 ]
 # What binning gets back: two near-complete genomes, two partial ones. The
 # gaps are the point -- a MAG is rarely the whole chromosome.
@@ -177,7 +193,11 @@ def fig_three_reads() -> None:
     titles = [
         ("Amplicon (16S)", "one marker gene, amplified", "who is here"),
         ("Shotgun", "fragments of everything", "who is here, and what they can do"),
-        ("Genome-resolved", "assembled, then binned", "draft genomes of the uncultured"),
+        (
+            "Genome-resolved",
+            "assembled, then binned",
+            "draft genomes of the uncultured",
+        ),
     ]
 
     for ax, (head, sub, gets) in zip(axes, titles):
@@ -260,7 +280,13 @@ def _box(ax, x, y, w, h, text, sub=None, face=PALE, edge=PURPLE_LIGHT, color=INK
     )
     ty = y + h / 2 + (1.9 if sub else 0)
     ax.text(
-        x + w / 2, ty, text, ha="center", va="center", fontsize=9.6, color=color,
+        x + w / 2,
+        ty,
+        text,
+        ha="center",
+        va="center",
+        fontsize=9.6,
+        color=color,
     )
     if sub:
         ax.text(
@@ -327,7 +353,10 @@ def fig_pipeline() -> None:
     right = [
         ("Assemble reads into long contigs", "MEGAHIT  ·  metaSPAdes"),
         ("Bin contigs by coverage and composition", None),
-        ("Draft genomes (MAGs) — including of\norganisms nobody has ever cultured", None),
+        (
+            "Draft genomes (MAGs) — including of\norganisms nobody has ever cultured",
+            None,
+        ),
     ]
     ys = [48, 32, 15]
     for lane_x, lane in ((2, left), (54, right)):

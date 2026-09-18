@@ -17,6 +17,7 @@ import pandas as pd
 
 # ---------------------------------------------------------------- true smooths
 
+
 #: Uptake first raises the intensity, then depresses it as undigested cargo
 #: accumulates. The peak is the priming arm, the decline the satiety arm.
 def f1_true(load: np.ndarray) -> np.ndarray:
@@ -69,7 +70,9 @@ def toy_mechanisms(
     """
     rng = np.random.default_rng(seed)
     experienced = np.zeros(n_cells, dtype=bool)
-    experienced[rng.choice(n_cells, size=int(experienced_frac * n_cells), replace=False)] = True
+    experienced[
+        rng.choice(n_cells, size=int(experienced_frac * n_cells), replace=False)
+    ] = True
 
     runs = []
     for sign in (+1.0, -1.0):  # priming, then satiety
@@ -88,7 +91,9 @@ def toy_mechanisms(
                 counts += taken
                 left -= demand
             cumulative[step + 1] = counts.sum()
-        runs.append(ToyRun(cumulative=cumulative, per_cell=counts, experienced=experienced))
+        runs.append(
+            ToyRun(cumulative=cumulative, per_cell=counts, experienced=experienced)
+        )
     return runs[0], runs[1]
 
 
@@ -150,7 +155,9 @@ def _well(
             pos1 = rng.random((n_targets, 2))
         else:  # focal: the same targets, packed around a pre-defined subset
             hosts = rng.choice(np.flatnonzero(designated), size=n_targets)
-            pos1 = np.clip(pos[hosts] + rng.normal(0.0, 0.045, size=(n_targets, 2)), 0, 1)
+            pos1 = np.clip(
+                pos[hosts] + rng.normal(0.0, 0.045, size=(n_targets, 2)), 0, 1
+            )
 
     # Wave 2 is common to every arm.
     pos2 = rng.random((n_targets, 2))
@@ -173,7 +180,17 @@ def _well(
 
     rec: dict[str, list[np.ndarray]] = {
         k: []
-        for k in ("bin", "cell", "y", "load", "gap", "nbr", "opportunity", "at_risk", "wave")
+        for k in (
+            "bin",
+            "cell",
+            "y",
+            "load",
+            "gap",
+            "nbr",
+            "opportunity",
+            "at_risk",
+            "wave",
+        )
     }
     uptake_by_wave = np.zeros((n_cells, 2), dtype=int)
 
@@ -194,7 +211,9 @@ def _well(
         available = alive & (arrive <= b)
         opportunity = reach_f @ available.astype(float)
         gap = np.where(
-            np.isneginf(last_event), GAP_CAP, np.minimum((b - last_event) * DT, GAP_CAP),
+            np.isneginf(last_event),
+            GAP_CAP,
+            np.minimum((b - last_event) * DT, GAP_CAP),
         )
         nbr = adjacency @ load
         at_risk = (b < lost_at).astype(float)
@@ -232,7 +251,9 @@ def _well(
         rec["nbr"].append(nbr)
         rec["opportunity"].append(opportunity)
         rec["at_risk"].append(at_risk)
-        rec["wave"].append(np.full(n_cells, 1 if b < WAVE1[1] else (2 if b >= WAVE2[0] else 0)))
+        rec["wave"].append(
+            np.full(n_cells, 1 if b < WAVE1[1] else (2 if b >= WAVE2[0] else 0))
+        )
 
         queue[:, slot] = y_done
         load = load + y_done

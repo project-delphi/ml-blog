@@ -1,7 +1,7 @@
-"""Write the JSON the efficiency plots and the browser widget share.
+r"""Write the JSON the efficiency plots and the browser widget share.
 
 Usage:
-    .venv-tensor-factorizations/bin/python \\
+    .venv-tensor-factorizations/bin/python \
         posts/uses-of-tensor-factorizations/src/export_widget_data.py
 """
 

@@ -1,5 +1,4 @@
-"""
-Email router + RAG response drafter — LlamaIndex Workflows version.
+"""Email router + RAG response drafter — LlamaIndex Workflows version.
 
 Flow (event-driven):
     StartEvent(email)

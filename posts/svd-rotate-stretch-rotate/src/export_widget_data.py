@@ -21,11 +21,10 @@ import json
 from pathlib import Path
 from typing import Any, Final
 
-import numpy as np
-from PIL import Image
-
 import imagery as im
 import movielens as ml
+import numpy as np
+from PIL import Image
 
 OUT: Final[Path] = Path(__file__).resolve().parent.parent / "widget-data"
 
@@ -122,7 +121,9 @@ def main() -> int:
         total += size
         print(f"  {name:12s} {size / 1024:8.1f} KB")
 
-    print(f"  {'total':12s} {total / 1024:8.1f} KB  (budget {BUDGET_BYTES / 1024:.0f} KB)")
+    print(
+        f"  {'total':12s} {total / 1024:8.1f} KB  (budget {BUDGET_BYTES / 1024:.0f} KB)"
+    )
     if total > BUDGET_BYTES:
         raise ValueError(f"widget data is {total / 1024:.0f} KB, over budget")
     return 0

@@ -64,7 +64,9 @@ def flatten_svd_complete(
     month_mask = mask.any(axis=2)
     num = np.where(mask, X, 0.0).sum(axis=2)
     den = mask.sum(axis=2)
-    mean = np.divide(num, den, out=np.full((n_u, n_m), np.nanmean(X[mask])), where=den > 0)
+    mean = np.divide(
+        num, den, out=np.full((n_u, n_m), np.nanmean(X[mask])), where=den > 0
+    )
     fill = float(np.nanmean(mean[month_mask]))
     M = np.where(month_mask, mean, fill)
     U, s, Vt = np.linalg.svd(M, full_matrices=False)

@@ -110,13 +110,28 @@ def main() -> int:
         # MPEG-1 Layer III you get at 44.1kHz. Same size at this bitrate.
         subprocess.run(
             [
-                "ffmpeg", "-y", "-loglevel", "error", "-i", wav,
-                "-codec:a", "libmp3lame", "-b:a", "64k", "-ac", "1", "-ar", "44100", mp3,
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                wav,
+                "-codec:a",
+                "libmp3lame",
+                "-b:a",
+                "64k",
+                "-ac",
+                "1",
+                "-ar",
+                "44100",
+                mp3,
             ],
             check=True,
         )
         wav.unlink()
-        print(f"wrote {mp3.relative_to(OUT.parent)} ({mp3.stat().st_size // 1024}KB, {voice})")
+        print(
+            f"wrote {mp3.relative_to(OUT.parent)} ({mp3.stat().st_size // 1024}KB, {voice})"
+        )
 
     return 0
 

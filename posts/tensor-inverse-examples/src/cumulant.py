@@ -89,7 +89,9 @@ def jade(X: np.ndarray, sweeps: int = 20) -> tuple[np.ndarray, np.ndarray, np.nd
     return S, unmix, C
 
 
-def align(recovered: np.ndarray, truth: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def align(
+    recovered: np.ndarray, truth: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Match recovered rows to truth by absolute correlation. Return perm, signs, scales."""
     n = truth.shape[0]
     corr = np.corrcoef(recovered, truth)[:n, n:]
@@ -141,7 +143,9 @@ def signed_perm(Ainv: np.ndarray, perm: np.ndarray, signs: np.ndarray) -> np.nda
     return signs[:, None] * Ainv[perm]
 
 
-def fastica(X: np.ndarray, n_iter: int = 200, seed: int = SEED) -> tuple[np.ndarray, np.ndarray]:
+def fastica(
+    X: np.ndarray, n_iter: int = 200, seed: int = SEED
+) -> tuple[np.ndarray, np.ndarray]:
     """Symmetric kurtosis FastICA on channels x time. Picks one leftover rotation."""
     Z, Ww = whiten(X)
     n, T = Z.shape

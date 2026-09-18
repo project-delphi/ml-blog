@@ -30,9 +30,7 @@ RAW: Final[Path] = POST / "data" / "raw"
 FILIP_URL: Final[str] = (
     "https://www.itl.nist.gov/div898/strd/lls/data/LINKS/DATA/Filip.dat"
 )
-MOVIELENS_URL: Final[str] = (
-    "https://files.grouplens.org/datasets/movielens/ml-100k.zip"
-)
+MOVIELENS_URL: Final[str] = "https://files.grouplens.org/datasets/movielens/ml-100k.zip"
 
 # The certified file states its own layout in its header: data on lines 61-142,
 # certified parameter estimates on lines 31-41. Both are 1-indexed.
@@ -88,10 +86,7 @@ def load_filip() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
     # "B8  -0.670191154593408E-01  0.142363763154724E-01" -- estimate is field 2.
     beta = np.array(
-        [
-            float(lines[i - 1].split()[1])
-            for i in range(_PARAM_FIRST, _PARAM_LAST + 1)
-        ]
+        [float(lines[i - 1].split()[1]) for i in range(_PARAM_FIRST, _PARAM_LAST + 1)]
     )
     return x, y, beta
 
@@ -133,7 +128,9 @@ def main() -> int:
     """Report what is cached, fetching anything missing."""
     x, y, beta = load_filip()
     a = filip_design(x)
-    print(f"Filip      {a.shape[0]} obs, design {a.shape}, cond {np.linalg.cond(a):.3e}")
+    print(
+        f"Filip      {a.shape[0]} obs, design {a.shape}, cond {np.linalg.cond(a):.3e}"
+    )
     print(f"           certified B0 = {beta[0]:.11f}")
     ratings = movielens_ratings()
     print(

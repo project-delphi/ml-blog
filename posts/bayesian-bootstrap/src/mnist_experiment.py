@@ -72,7 +72,9 @@ def _make_net() -> nn.Module:
 def _load_tensors() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Download MNIST if needed and return train/test images and labels."""
     RAW.mkdir(parents=True, exist_ok=True)
-    tf = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
+    tf = transforms.Compose(
+        [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
+    )
     train = datasets.MNIST(RAW / "mnist", train=True, download=True, transform=tf)
     test = datasets.MNIST(RAW / "mnist", train=False, download=True, transform=tf)
 
@@ -180,7 +182,9 @@ def _train_one(
 
 
 @torch.no_grad()
-def _predict(net: nn.Module, xte: torch.Tensor, device: torch.device) -> NDArray[np.float32]:
+def _predict(
+    net: nn.Module, xte: torch.Tensor, device: torch.device
+) -> NDArray[np.float32]:
     """Return ``(n_test, 10)`` predicted probabilities."""
     out = []
     for start in range(0, xte.shape[0], 1024):
@@ -235,7 +239,9 @@ def train_and_cache(refresh: bool = False) -> EvalCache:
     return EvalCache(correct, probs, y_true, y_pred, elapsed, backend)
 
 
-def weighted_likelihood_bootstrap(B: int = 20, refresh: bool = False) -> dict[str, object]:
+def weighted_likelihood_bootstrap(
+    B: int = 20, refresh: bool = False
+) -> dict[str, object]:
     """Refit the model ``B`` times under Dirichlet weights over the training set.
 
     This is the expensive path.  Each replicate is a full training run, so the
@@ -292,5 +298,7 @@ if __name__ == "__main__":
     print(f"single fit     {cache.train_seconds:.1f}s")
     print(f"test accuracy  {cache.accuracy:.4f}  (k={cache.k}, n={cache.n})")
     wlb = weighted_likelihood_bootstrap()
-    print(f"WLB B={wlb['B']}  {wlb['seconds_per_fit']:.1f}s/fit  "
-          f"total {wlb['total_seconds']:.0f}s")
+    print(
+        f"WLB B={wlb['B']}  {wlb['seconds_per_fit']:.1f}s/fit  "
+        f"total {wlb['total_seconds']:.0f}s"
+    )

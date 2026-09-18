@@ -61,14 +61,18 @@ def mnist_gates(t: M.Trained, idx: dict[str, int]) -> list[str]:
         )
         rel = A.completeness_gap(t.model, x, target, ig) / abs(delta)
         assert rel < IG_TOLERANCE, (key, rel)
-        lines.append(f"[{key}] integrated gradients sum to f(x) - f(0) within {rel:.1e} relative")
+        lines.append(
+            f"[{key}] integrated gradients sum to f(x) - f(0) within {rel:.1e} relative"
+        )
 
         # Grad-CAM two ways: through the features/head split, and through a
         # forward hook on the ReLU. Bit-identical or the implementation is wrong.
         direct = A.grad_cam(t.model, x, target)
         hooked = A.grad_cam_hooked(t.model, x, target)
         assert np.array_equal(direct, hooked), key
-        lines.append(f"[{key}] Grad-CAM via hooks is bit-identical to Grad-CAM via the head split")
+        lines.append(
+            f"[{key}] Grad-CAM via hooks is bit-identical to Grad-CAM via the head split"
+        )
 
         # On a GAP head, Grad-CAM reduces exactly to Zhou et al.'s CAM, scaled
         # by the 1/49 from averaging over the 7x7 grid.
@@ -80,7 +84,9 @@ def mnist_gates(t: M.Trained, idx: dict[str, int]) -> list[str]:
         # the black baseline. This is definitional, and the post says so.
         black = t.xte[i, 0].numpy() == 0
         assert np.all(ig[black] == 0.0), key
-        lines.append(f"[{key}] all {black.sum()} baseline-valued pixels receive exactly zero from IG")
+        lines.append(
+            f"[{key}] all {black.sum()} baseline-valued pixels receive exactly zero from IG"
+        )
 
     # The prose says the single largest gradient in the whole saliency map lands
     # on a pixel the image leaves empty. Unlike the checks above that is a fact
@@ -90,7 +96,9 @@ def mnist_gates(t: M.Trained, idx: dict[str, int]) -> list[str]:
     i = idx["wrong"]
     sal = np.abs(A.saliency(t.model, t.xte[i], int(t.pred[i])))
     black = t.xte[i, 0].numpy() == 0
-    assert black.ravel()[sal.argmax()], "saliency maximum is no longer on a baseline-valued pixel"
+    assert black.ravel()[sal.argmax()], (
+        "saliency maximum is no longer on a baseline-valued pixel"
+    )
     lines.append(
         f"[wrong] the largest saliency value in the map ({sal.max():.2f}) is on a "
         "baseline-valued pixel"
@@ -117,7 +125,10 @@ def background_contrast(t: M.Trained, i: int) -> dict[str, float]:
     # changes nothing at all, so occlusion is structurally blind to them.
     padded = np.pad(img, 3)
     fully_black = np.array(
-        [[bool((padded[r : r + 7, c : c + 7] == 0).all()) for c in range(28)] for r in range(28)]
+        [
+            [bool((padded[r : r + 7, c : c + 7] == 0).all()) for c in range(28)]
+            for r in range(28)
+        ]
     )
 
     sal = A.saliency(t.model, x, target)
@@ -159,28 +170,44 @@ def main() -> int:
     H.save(F.fig_examples(t, idx), OUT / "01-examples.png")
     H.save(
         F.fig_method(
-            t, idx, lambda m, x, c: np.abs(A.saliency(m, x, c)), "saliency", False,
+            t,
+            idx,
+            lambda m, x, c: np.abs(A.saliency(m, x, c)),
+            "saliency",
+            False,
             "gradient magnitude of the predicted logit with respect to each pixel",
         ),
         OUT / "02-saliency.png",
     )
     H.save(
         F.fig_method(
-            t, idx, A.occlusion, "occlusion", True,
+            t,
+            idx,
+            A.occlusion,
+            "occlusion",
+            True,
             "drop in the predicted logit when a 7x7 patch is blacked out",
         ),
         OUT / "03-occlusion.png",
     )
     H.save(
         F.fig_method(
-            t, idx, A.grad_cam, "Grad-CAM", False,
+            t,
+            idx,
+            A.grad_cam,
+            "Grad-CAM",
+            False,
             "channel-weighted activations of the last convolution, upsampled from 7x7",
         ),
         OUT / "04-gradcam.png",
     )
     H.save(
         F.fig_method(
-            t, idx, A.integrated_gradients, "integrated gradients", True,
+            t,
+            idx,
+            A.integrated_gradients,
+            "integrated gradients",
+            True,
             "path-integrated attribution from a black baseline; red supports, blue opposes",
         ),
         OUT / "05-integrated-gradients.png",
@@ -196,7 +223,9 @@ def main() -> int:
     X = df[I.FEATURES].to_numpy()
 
     mask = target > 0
-    fit = I.fit_logistic(I.standardise(X[mask]), (target[mask] == 2).astype(float), I.FEATURES)
+    fit = I.fit_logistic(
+        I.standardise(X[mask]), (target[mask] == 2).astype(float), I.FEATURES
+    )
     H.save(F.fig_coefficients(fit), OUT / "08-coefficients.png")
 
     path = I.separation_path(
@@ -210,10 +239,16 @@ def main() -> int:
 
     split = I.fit_multinomial(seed=H.SEED % 2**31)
     perm = I.permutation_importance(
-        split.model.predict, split.Xte, split.yte, repeats=200, rng=H.rng_for("permutation")
+        split.model.predict,
+        split.Xte,
+        split.yte,
+        repeats=200,
+        rng=H.rng_for("permutation"),
     )
     print(f"  multinomial held-out accuracy {split.test_accuracy:.4f}")
-    H.save(F.fig_permutation(perm, anova, fit.table().iloc[1:]), OUT / "12-permutation.png")
+    H.save(
+        F.fig_permutation(perm, anova, fit.table().iloc[1:]), OUT / "12-permutation.png"
+    )
 
     written = sorted(p.name for p in OUT.glob("*.png"))
     print(f"\nwrote {len(written)} figures to {OUT} in {time.time() - start:.1f}s")

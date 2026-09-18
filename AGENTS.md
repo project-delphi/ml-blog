@@ -102,9 +102,11 @@ source md5 changed.
 - `QUARTO_PYTHON` is not optional. A bare `quarto render .` resolves a Python that
   cannot see `--user`-registered kernelspecs and dies on the first post pinning a named
   kernel — *after* deleting `docs/`. Recover with `git checkout -- docs`.
-- **Both Makefile shortcuts are traps.** `make quatro` is the bare `quarto render .`
-  above, without `QUARTO_PYTHON`; `make preview` previews the whole project, which
-  indexes every post. Type the full command for the one post instead.
+- **`make render` is that command** with the guards around it: it refuses on any
+  Quarto but 1.6.40, runs `make check-posts` first (a stale freeze fails there with a
+  message, not after `docs/` is gone), sends the log to `render.log`, echoes the tail
+  and any error lines, and ends with the deletion check. `make render-post SLUG=<slug>`
+  is the single-document render. `make serve` is the static server for `docs/`.
 - Kernelspecs resolve while Quarto *indexes* the project, before it consults `_freeze/`.
   A missing kernel fails the whole render, frozen output or not. On a fresh clone run
   `make kernels-stub` first.
@@ -112,8 +114,8 @@ source md5 changed.
   Quarto rewrites the shared `docs/site_libs/` runtime, which broke older posts'
   JavaScript once already (`452f1fe` restored it by hand). Churn under `site_libs/` in
   your diff is a stop sign, not noise.
-- **After any full render**, run `git status --short -- docs | grep '^ D'` and restore
-  what it lists — see the third `.gitignore` trap below.
+- **After any full render**, run `make docs-deleted` and restore what it lists — see
+  the third `.gitignore` trap below. `make render` runs it for you.
 
 **Preview** — `quarto preview posts/<slug>/index.qmd`, or serve the built output with
 `.venv/bin/python -m http.server 8000 --directory docs`. Hand back the preview URL as a
@@ -137,29 +139,40 @@ instead, noting it 404s for a minute or two while Pages rebuilds.
 
 ## Checks and lint
 
-There is no test suite. `make check-posts` runs `scripts/check_posts.py`, which verifies
-that a code post pins a dedicated kernel (not the shared `python3`) and a
-`requirements.txt`, that every pinned kernel appears in `make kernels-stub`, that no
-post's frozen output has drifted from its source, and that every post appears in
-`docs/listings.json`. Run it before any full render, and run it **through `make`** —
-the recipe's bare `python3` is the only one in the repo, kept deliberately because the
-checker is stdlib-only and must work on a clone with no `.venv`. Typing
+`make check` runs everything that does not need Quarto, and each piece has its own
+target:
+
+| Target | Runs | Notes |
+|---|---|---|
+| `make lint` | `ruff check` + `ruff format --check` | read-only; `make fmt` applies both |
+| `make spell` | `codespell` over `.qmd`/`.md` | allow-list in `.codespell-ignore`, one word per line |
+| `make test` | `pytest` over `tests/` | the two scripts under `scripts/` are the only tested code |
+| `make check-posts` | `scripts/check_posts.py` | see below |
+
+`check-posts` verifies that a code post pins a dedicated kernel (not the shared
+`python3`) and a `requirements.txt`, that every pinned kernel appears in
+`make kernels-stub`, that no post's frozen output has drifted from its source, and that
+every non-draft post appears in `docs/listings.json`. `--categories` adds an opt-in
+check against `scripts/categories.txt`. Run it **through `make`** — the recipe's bare
+`python3` (shared with `make freeze-realign`) is kept deliberately because both scripts
+are stdlib-only and must work on a clone with no `.venv`. Typing
 `python3 scripts/check_posts.py` yourself is denied by the hook, which never sees the
 interpreter inside a `make` recipe.
 
-Lint is manual — the pre-commit hooks are **not** installed into `.git/hooks/`, so a
-plain commit is never pre-vetted:
+**A stale freeze after a prose-only edit** does not need the post's venv:
+`make freeze-realign SLUG=<slug>` splices the new prose into the frozen record and
+updates its hash, then the next `make render` reuses the stored cell outputs. It refuses
+whenever an executable cell changed, when Quarto rewrote the stored prose, or for a
+`LEGACY_NO_ENV` post, and says why. Rewriting the hash by hand is **not** an
+alternative: the record stores the whole document as markdown, so a hash-only realign
+republishes the old prose under a valid-looking record.
 
-```bash
-.venv/bin/pre-commit run --files <paths>   # not on PATH; scope to files you touched
-uvx codespell <file>                       # spelling: NOT a pre-commit hook
-.venv/bin/ruff check <file>                # read-only baseline; pre-commit fixes in place
-```
-
-`codespell` looks wired up — there is a `[tool.codespell]` section in `pyproject.toml` —
-but no hook invokes it, so `pre-commit` never spell-checks. And `no-commit-to-branch` is
-a real hook, so any `pre-commit run` while HEAD is on `main` reports a failure that has
-nothing to do with your files.
+The pre-commit hooks are installed into `.git/hooks/` (`.venv/bin/pre-commit install`
+and `--hook-type commit-msg` on a fresh clone), so a commit runs ruff, codespell,
+shellcheck on `.claude/hooks/`, and the whitespace fixers over the **staged** files only.
+That is the only safe scope: never `pre-commit run --all-files`. `no-commit-to-branch`
+is one of those hooks, so a `pre-commit run` while HEAD is on `main` reports a failure
+that has nothing to do with your files.
 
 ## Token discipline
 

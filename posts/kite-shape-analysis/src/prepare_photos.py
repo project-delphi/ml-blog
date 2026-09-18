@@ -34,7 +34,7 @@ SCALE = 2
 def main() -> int:
     """Write ``photos/kite-01.jpg`` .. ``kite-05.jpg``.
 
-    Returns
+    Returns:
     -------
         Process exit code.
     """

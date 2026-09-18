@@ -127,9 +127,7 @@ def tt_matrix_to_dense(cores: list[NDArray[np.floating]]) -> NDArray[np.floating
     for core in cores[1:]:
         acc = np.tensordot(acc, core, axes=([-1], [0]))
         rows, cols, m_k, n_k, r_next = acc.shape
-        acc = np.transpose(acc, (0, 2, 1, 3, 4)).reshape(
-            rows * m_k, cols * n_k, r_next
-        )
+        acc = np.transpose(acc, (0, 2, 1, 3, 4)).reshape(rows * m_k, cols * n_k, r_next)
     return np.asarray(acc[..., 0])
 
 
@@ -175,9 +173,7 @@ def tt_matrix_svd(
     return cores
 
 
-def truncated_svd(
-    matrix: NDArray[np.floating], rank: int
-) -> NDArray[np.floating]:
+def truncated_svd(matrix: NDArray[np.floating], rank: int) -> NDArray[np.floating]:
     """Eckart–Young rank-``rank`` approximation."""
     u, s, vt = np.linalg.svd(matrix, full_matrices=False)
     keep = min(rank, s.size)
@@ -282,7 +278,9 @@ def sweep_cp(kernel: NDArray[np.floating]) -> dict[str, Any]:
     }
 
 
-def sweep_tt(matrix: NDArray[np.floating], ms: list[int], ns: list[int]) -> dict[str, Any]:
+def sweep_tt(
+    matrix: NDArray[np.floating], ms: list[int], ns: list[int]
+) -> dict[str, Any]:
     """TT-matrix rank sweep plus truncated-SVD baseline."""
     rows, cols = matrix.shape
     dense = rows * cols
