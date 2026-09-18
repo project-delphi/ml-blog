@@ -15,7 +15,8 @@ numbers intact; it is not the point of the repo.
 
 Three files carry the detail:
 
-- **`STYLE.md`** — the prose rules. Read it in full before writing or editing a post.
+- **`STYLE.md`** — the prose rules. Read it as the reading index at its top directs:
+  the whole file for a new or restructured post, register-scoped for an ordinary edit.
 - **`ENVIRONMENTS.md`** — how to build a post's venv and kernel, and why each step.
 - **`README.md`** — the reader-facing tour.
 
@@ -160,6 +161,53 @@ but no hook invokes it, so `pre-commit` never spell-checks. And `no-commit-to-br
 a real hook, so any `pre-commit run` while HEAD is on `main` reports a failure that has
 nothing to do with your files.
 
+## Token discipline
+
+Context is the scarce resource here, and this repo's shape works against it: `docs/` is
+109 MB across 524 files, `docs/search.json` is 1.9 MB, the largest `_freeze` records are
+half a megabyte of JSON, and the posts most worth editing run to 15,000 words. Almost all
+of that is machine-written, and none of it needs to be read to be checked.
+
+- **Never `git diff` bare after a render.** `git diff --stat` first, then
+  `git diff -- . ':(exclude)docs' ':(exclude)_freeze'` for the substance. On commit
+  `010ee29` that is 175 KB against 13.7 KB — the same change, 92% less to read. Use the
+  `:(exclude)` long form: the short `:!_freeze` spelling fails with
+  `Unimplemented pathspec magic '_'` on the leading underscore.
+- **Never open a file under `docs/`, `_freeze/`, or `index_files/`.** `.claude/settings.json`
+  denies the Read tool on all three. Every question actually asked of them — did the widget
+  bundle land, is the post in `search.json`, did the media survive the render — is a
+  `grep -c` question. Ask `docs-inspect` when it needs more than one.
+- **Send render output to a log**, then read `tail -40` and
+  `grep -inE 'error|not found|traceback'` of it. A 120-post project render emits thousands
+  of lines and the useful part is the last screenful. `render-verify` does this and returns
+  a verdict.
+- **Slice posts for targeted edits.** `grep -n` for the phrase, then read from that offset.
+  Read a post whole when writing it, restructuring it, or running the checks in
+  [Before you ship a post](#before-you-ship-a-post) — those genuinely need all of it in one
+  head — and not otherwise.
+- **Match review effort to the diff.** `/code-review` with no level silently reuses the last
+  level typed, so name one. A prose-only change gets `low`: the review recipe hunts
+  correctness bugs and a `.qmd` prose diff has none to find. Reserve `high` and `ultra` for
+  `posts/**/src/*.py`, `scripts/`, `widgets.js`, and `.claude/hooks/`. Don't run `/simplify`
+  and `/code-review` over the same diff — the recipes overlap and you pay twice.
+
+### When to delegate
+
+Three subagents live in `.claude/agents/`. Each exists to absorb a large volume of output
+and hand back a verdict, because a subagent's tool output never enters the calling session:
+
+| Agent | Use it for |
+|---|---|
+| `render-verify` | the whole project render, the `docs/` deletion check, `make check-posts` |
+| `docs-inspect` | any yes/no question about rendered output under `docs/` |
+| `post-locate` | finding where something is said or configured across the 120 posts |
+
+**Do not delegate the prose.** A fresh agent re-reads this file, `STYLE.md`, and the post
+before it can write a sentence, then hands back a diff that has to be read and re-verified
+anyway — strictly more expensive than editing in place. The three defects in
+[Before you ship a post](#before-you-ship-a-post) live *between* artifacts and need the whole
+post in one head, which is exactly what delegation gives away.
+
 ## Before you ship a post
 
 Three defects live *between* artifacts, so every per-artifact check passes and only a
@@ -191,10 +239,13 @@ automatically if code cells appear.
 
 ### Widget sidecars are outside the freeze hash
 
-Six posts render an interactive widget by reading a sibling `widgets.js` (and usually
+Eight posts render an interactive widget by reading a sibling `widgets.js` (and usually
 `widget-data/*.json`) and printing it into an inline `<script>` block:
-`bayesian-bootstrap`, `statistical-jackknife`, `svd-rotate-stretch-rotate`,
-`tensor-inverses-in-practice`, `uses-of-tensor-factorizations`, `volcano-plots`.
+`aav-immune-response`, `bayesian-bootstrap`, `statistical-jackknife`,
+`svd-rotate-stretch-rotate`, `tensor-inverses-in-practice`,
+`uses-of-tensor-factorizations`, `volcano-plots`, `why-so-many-matrix-factorizations`.
+Re-derive the list with `ls posts/*/widgets.js` rather than trusting this sentence —
+it has been stale before.
 
 Quarto hashes `index.qmd` **alone**. Editing a sidecar therefore leaves `_freeze/`
 valid, and a project render keeps serving the old bundle with no warning. After changing

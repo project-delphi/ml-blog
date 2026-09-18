@@ -1,5 +1,22 @@
 # Blog Writing Style
 
+## How much of this to read
+
+This file is ~3,300 words and most edits do not need all of it. Read to the job:
+
+| Job | Read |
+|---|---|
+| Writing a new post, or restructuring one | the whole file |
+| Editing prose in an existing post | *Which register*, *Shared rules*, and that post's register section |
+| A typo, a broken link, a single-sentence fix | none of it |
+| Running the checks in *Before you ship a post* | *Shared rules* and that post's register section |
+
+Read a register section whole when you read it at all. The calibration examples at the end
+of each are what make the register concrete; the rules above them under-determine it.
+
+Nothing here is relaxed by this index — a substantive edit still answers to every rule in
+the sections it names.
+
 ## Which register
 
 Pick one before writing or editing a post.
