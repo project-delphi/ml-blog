@@ -29,15 +29,14 @@ For `docs/search.json`, test membership — never read it:
 
 ## What gets asked, and what it means
 
-**Did a widget sidecar land?** Six posts render an interactive widget by reading a
-sibling `widgets.js` and printing it into an inline `<script>` block:
-`bayesian-bootstrap`, `statistical-jackknife`, `svd-rotate-stretch-rotate`,
-`tensor-inverses-in-practice`, `uses-of-tensor-factorizations`, `volcano-plots`
-(`why-so-many-matrix-factorizations` has one too). Quarto hashes `index.qmd` alone, so
-editing the sidecar leaves `_freeze/` valid and a project render keeps serving the *old*
-bundle with no warning. To check, pick a distinctive string from the current
-`posts/<slug>/widgets.js` and confirm it appears in `docs/posts/<slug>/index.html`.
-Compare against the source — a stale bundle is the whole failure mode.
+**Did a widget sidecar land?** Eight posts render an interactive widget by reading a
+sibling `widgets.js` and printing it into an inline `<script>` block. Do not trust a
+hard-coded list — derive it with `ls posts/*/widgets.js`, because the list in
+`AGENTS.md` was stale once already. Quarto hashes `index.qmd` alone, so editing the
+sidecar leaves `_freeze/` valid and a project render keeps serving the *old* bundle with
+no warning. To check, pick a distinctive string from the current `posts/<slug>/widgets.js`
+and confirm it appears in `docs/posts/<slug>/index.html`. Compare against the source — a
+stale bundle is the whole failure mode.
 
 **Is a new post live everywhere?** A single-document render writes only
 `docs/posts/<slug>/`, leaving the post invisible on the home page and in search. Check

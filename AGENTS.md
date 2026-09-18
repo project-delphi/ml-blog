@@ -239,10 +239,13 @@ automatically if code cells appear.
 
 ### Widget sidecars are outside the freeze hash
 
-Six posts render an interactive widget by reading a sibling `widgets.js` (and usually
+Eight posts render an interactive widget by reading a sibling `widgets.js` (and usually
 `widget-data/*.json`) and printing it into an inline `<script>` block:
-`bayesian-bootstrap`, `statistical-jackknife`, `svd-rotate-stretch-rotate`,
-`tensor-inverses-in-practice`, `uses-of-tensor-factorizations`, `volcano-plots`.
+`aav-immune-response`, `bayesian-bootstrap`, `statistical-jackknife`,
+`svd-rotate-stretch-rotate`, `tensor-inverses-in-practice`,
+`uses-of-tensor-factorizations`, `volcano-plots`, `why-so-many-matrix-factorizations`.
+Re-derive the list with `ls posts/*/widgets.js` rather than trusting this sentence —
+it has been stale before.
 
 Quarto hashes `index.qmd` **alone**. Editing a sidecar therefore leaves `_freeze/`
 valid, and a project render keeps serving the old bundle with no warning. After changing

@@ -23,7 +23,14 @@ not render.
 
 ## 2. Render
 
-    QUARTO_PYTHON="$(pwd)/.venv/bin/python" quarto render . > /tmp/render-verify.log 2>&1
+Send the log somewhere unique to this run, so two renders cannot read each other's
+outcome:
+
+    log=$(mktemp -t render-verify)
+    QUARTO_PYTHON="$(pwd)/.venv/bin/python" quarto render . > "$log" 2>&1
+
+Prefer the session scratchpad when the caller names one. Report the log path so the
+caller can look further without you pasting it.
 
 `QUARTO_PYTHON` is not optional: a bare `quarto render .` resolves an interpreter that
 cannot see `--user`-registered kernelspecs and dies on the first post pinning a named
