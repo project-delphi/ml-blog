@@ -255,23 +255,29 @@ A second exemption, `STALE_FREEZE_OK`, covers posts whose frozen output is knowi
 stale but inert because they have no code cells; the checker cancels the exemption
 automatically if code cells appear.
 
-### Widget sidecars are outside the freeze hash
+### Widgets: the kit, and the seven sidecars still inside the freeze hash
 
-Eight posts render an interactive widget by reading a sibling `widgets.js` (and usually
-`widget-data/*.json`) and printing it into an inline `<script>` block:
-`aav-immune-response`, `bayesian-bootstrap`, `statistical-jackknife`,
-`svd-rotate-stretch-rotate`, `tensor-inverses-in-practice`,
-`uses-of-tensor-factorizations`, `volcano-plots`, `why-so-many-matrix-factorizations`.
-Re-derive the list with `ls posts/*/widgets.js` rather than trusting this sentence —
-it has been stale before.
+New widgets are built on `widget-kit/kit.js` (one global, `WK`; contract and a worked
+example in `widget-kit/README.md`). Every post loads the kit through
+`posts/_metadata.yml`; the post lists its `widgets.js` under `resources:` and loads it
+with a `<script src>` in a `{=html}` block next to the mount div. That needs no Python
+cell, so a prose-only post can carry a widget, and a change to `widgets.js` or the kit
+is republished by any project render without re-executing anything. Colour is a token
+name, never a hex value. `attention` is the first post on the kit.
 
-Quarto hashes `index.qmd` **alone**. Editing a sidecar therefore leaves `_freeze/`
-valid, and a project render keeps serving the old bundle with no warning. After changing
-either file, **re-render that post explicitly** before committing. Do not reach for
-deleting `_freeze/posts/<slug>/` instead: `check_freeze` returns clean when a
-non-legacy record is simply absent, so `make check-posts` stays green while `docs/`
-still serves the old bundle, and the next project render has to execute the post for
-real — media pipeline and all.
+Seven older posts still print their `widgets.js` (and usually `widget-data/*.json`)
+into an inline `<script>` from a Python cell: `bayesian-bootstrap`,
+`statistical-jackknife`, `svd-rotate-stretch-rotate`, `tensor-inverses-in-practice`,
+`uses-of-tensor-factorizations`, `volcano-plots`, `why-so-many-matrix-factorizations`
+(`aav-immune-response` loads its bundle as a resource but predates the kit). Re-derive
+the list with `grep -l 'widgets.js").read_text()' posts/*/index.qmd` rather than
+trusting this sentence. For those, Quarto hashes `index.qmd` **alone**, so editing the sidecar leaves
+`_freeze/` valid and a project render keeps serving the old bundle with no warning:
+**re-render that post explicitly** (its real venv) before committing. Do not delete
+`_freeze/posts/<slug>/` instead: `check_freeze` returns clean when a non-legacy record
+is simply absent, so `make check-posts` stays green while `docs/` still serves the old
+bundle. Each of the seven moves to the kit in its own PR, which is also when it gets
+its one re-execution.
 
 A different mechanism handles browser-run Python exercises: the vendored
 `_extensions/r-wasm/live/`, used only by `numpy-to-jax`, via `engine: jupyter`,
