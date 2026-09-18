@@ -156,8 +156,11 @@ target:
 every non-draft post appears in `docs/listings.json`, and that every post's
 `categories:` comes from `scripts/categories.txt`, spelled as that file spells it.
 The home page's facets are built from those strings, so the list is a closed
-vocabulary: add the name to that file in the same commit that first uses it, or pass
-`--no-categories` while you are mid-edit. Run it **through `make`** — the recipe's bare
+vocabulary: add the name to that file in the same commit that first uses it.
+`make check-posts ARGS=--no-categories` skips that one check while you are mid-edit,
+but `make render` does not take the flag, so the name has to be in the file before the
+render — which is the point, since the render is what publishes the facet. Run it
+**through `make`** — the recipe's bare
 `python3` (shared with `make freeze-realign`) is kept deliberately because both scripts
 are stdlib-only and must work on a clone with no `.venv`. Typing
 `python3 scripts/check_posts.py` yourself is denied by the hook, which never sees the
@@ -353,8 +356,9 @@ every post; `_quarto.yml` sets `output-dir: docs`, `site-url` (which is what mak
 feed, the sitemap and the social cards absolute), `open-graph`/`twitter-card` (which
 read each post's `image:` and `description:`), navbar search, and the site-wide link
 and scroll options. The home-page listing is configured in the root `index.qmd`, not
-`_quarto.yml` — including `categories: false`, which is why post categories are not
-browsable on the site, and `feed: true`, which writes `docs/index.xml`.
+`_quarto.yml` — including `categories: true`, which builds the facet sidebar out of
+every post's `categories:` and is why that vocabulary is a closed list, and
+`feed: true`, which writes `docs/index.xml`.
 
 ### Covers
 
