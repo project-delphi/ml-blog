@@ -22,20 +22,20 @@ or nothing (`include: false`, or a setup cell that printed nothing, accepted
 only when the prose that follows sits right there); raw `output: asis` cells
 are bridged to the next prose or the next cell's div. Newline runs may be
 longer in the record than in the source, because Quarto pads fences and divs
-with blank lines, and inline `{python}` expressions are matched as wildcards
-whose stored values are put back into the new prose. An identity realign
-reproduces 60 of the 61 valid records byte for byte; the odd one out is a
-knitr post with inline `r` code, which is also LEGACY_NO_ENV.
+with blank lines, and inline `{python}` expressions (knitr `r` ones in a knitr
+post) are matched as wildcards whose stored values are put back into the new
+prose. An identity realign reproduces every valid record byte for byte.
 
 It refuses, and says why, when:
 
-- any executable cell body or inline `{python}` expression differs (that is
-  a real re-execution);
+- any executable cell body or inline code expression differs (that is a real
+  re-execution);
 - an old prose segment is not found in the stored markdown where the
   previous cell's rendering ends (Quarto rewrote it, so the splice would be
   a guess);
-- the post is in LEGACY_NO_ENV (its record is the only copy of what it
-  computes; do not touch it by machine).
+- the post is in LEGACY_NO_ENV and --legacy was not given (its record is the
+  only copy of what it computes, so a splice is the only safe edit and it
+  should be a deliberate one).
 
 After a successful realign the docs/ page is still the old one -- run the
 project render, which now reuses the frozen outputs and re-renders the
@@ -62,8 +62,23 @@ MAX_HISTORY = 200
 CELL_DIV_RE = re.compile(r"::: \{[^}\n]*\.cell[\s}]")
 CELL_OPT_RE = re.compile(r"^#\|\s*([\w.-]+):\s*(.*?)\s*$")
 # Inline code the engine evaluates in prose: `{python} expr` under the jupyter
-# engine, `r expr` under knitr.
-INLINE_RE = re.compile(r"`(?:\{python\}|r )[^`\n]*`")
+# engine, and also `r expr` under knitr. The knitr form is only recognised in a
+# knitr document (a `{r}` cell or `engine: knitr`), because under jupyter a
+# span such as `r × k` is plain code and must stay verbatim.
+INLINE_PY_RE = re.compile(r"`\{python\}[^`\n]*`")
+INLINE_KNITR_RE = re.compile(r"`(?:\{python\}|r )[^`\n]*`")
+KNITR_RE = re.compile(r"^engine:\s*knitr\s*$", re.M)
+
+
+def inline_pattern(src: str, cells: list[str]) -> re.Pattern:
+    """The inline-code pattern for this document's engine."""
+    fm = cp.FRONTMATTER_RE.match(src)
+    knitr = bool(fm and KNITR_RE.search(fm.group(1))) or any(
+        c.startswith("```{r}") for c in cells
+    )
+    return INLINE_KNITR_RE if knitr else INLINE_PY_RE
+
+
 DIV_ID_RE = re.compile(r"::: \{#([^\s}]+)")
 EXEC_COUNT_RE = re.compile(r"execution_count=(\d+)")
 
@@ -105,7 +120,9 @@ def mismatch_context(expected: str, found: str, width: int = 60) -> str:
     )
 
 
-def tolerant(text: str, after_cell: bool = False) -> re.Pattern:
+def tolerant(
+    text: str, after_cell: bool = False, inline: re.Pattern = INLINE_PY_RE
+) -> re.Pattern:
     """Match `text` exactly, up to Quarto's blank-line padding and inline code.
 
     Quarto's engine pads every fenced block and div with a blank line when it
@@ -123,25 +140,27 @@ def tolerant(text: str, after_cell: bool = False) -> re.Pattern:
             pat = r"\n*" + pat[len(r"\n+") :]
         return pat
 
-    pieces = INLINE_RE.split(text)
+    pieces = inline.split(text)
     pattern = literal(pieces[0], after_cell)
     for chunk in pieces[1:]:
         pattern += r"(.*?)" + literal(chunk, False)
     return re.compile(pattern, re.S)
 
 
-def with_inline_values(new_p: str, old_p: str, values: tuple[str, ...]) -> str:
+def with_inline_values(
+    new_p: str, old_p: str, values: tuple[str, ...], inline: re.Pattern = INLINE_PY_RE
+) -> str:
     """Put the values Quarto stored for `old_p`'s inline code into `new_p`."""
-    old_inline = INLINE_RE.findall(old_p)
-    new_inline = INLINE_RE.findall(new_p)
+    old_inline = inline.findall(old_p)
+    new_inline = inline.findall(new_p)
     if old_inline != new_inline:
         raise RealignError(
-            "an inline `{python}` expression changed, which needs a re-execution."
+            "an inline code expression changed, which needs a re-execution."
         )
     if not values:
         return new_p
     it = iter(values)
-    return INLINE_RE.sub(lambda _m: next(it), new_p)
+    return inline.sub(lambda _m: next(it), new_p)
 
 
 def pad_blocks(text: str) -> str:
@@ -196,6 +215,7 @@ def cell_end(
     is_last: bool,
     next_cell: str | None = None,
     expected_count: int | None = None,
+    inline: re.Pattern = INLINE_PY_RE,
 ) -> int:
     """Return the index just past cell `k`'s rendering in the stored markdown.
 
@@ -242,7 +262,7 @@ def cell_end(
     # A cell whose options hide the code and whose run printed nothing (a
     # setup cell) leaves no trace: accept that only when the prose that
     # follows it sits right here, which is unambiguous.
-    if anchor.strip() and tolerant(anchor, after_cell=True).match(markdown, pos):
+    if anchor.strip() and tolerant(anchor, True, inline).match(markdown, pos):
         return pos
     hidden = opts.get("include") == "false" or (
         opts.get("echo") == "false" and opts.get("output") == "false"
@@ -251,7 +271,7 @@ def cell_end(
         return pos
     if opts.get("output") == "asis":
         if anchor.strip():
-            if m := tolerant(anchor, after_cell=True).search(markdown, pos):
+            if m := tolerant(anchor, True, inline).search(markdown, pos):
                 return m.start()
         elif is_last:
             return len(markdown.rstrip("\n"))
@@ -324,6 +344,7 @@ def realign(old_src: str, new_src: str, record: dict) -> dict:
     # sit exactly where the previous cell's rendering ends, allowing only for
     # the blank lines Quarto pads fences and divs with.
     markdown = record["result"]["markdown"]
+    inline = inline_pattern(old_src, old_cells)
     out = []
     pos = 0
     n = len(old_cells)
@@ -348,12 +369,13 @@ def realign(old_src: str, new_src: str, record: dict) -> dict:
                 i == n,
                 old_cells[i] if i < n else None,
                 index[i - 1],
+                inline,
             )
             out.append(markdown[pos:end])
             pos = end
         # The record may end without the source's final newline.
         anchor = old_p.rstrip("\n") if i == n else old_p
-        m = tolerant(anchor, after_cell=i > 0).match(markdown, pos)
+        m = tolerant(anchor, i > 0, inline).match(markdown, pos)
         if not m:
             raise RealignError(
                 f"prose segment {i + 1} is not in the frozen markdown where cell "
@@ -366,7 +388,7 @@ def realign(old_src: str, new_src: str, record: dict) -> dict:
         if old_p == new_p:
             out.append(m.group(0))
         else:
-            text = pad_blocks(with_inline_values(new_p, anchor, m.groups()))
+            text = pad_blocks(with_inline_values(new_p, anchor, m.groups(), inline))
             # The match swallowed the blank line Quarto pads before the next
             # div; without it pandoc reads the div opener as paragraph text.
             if i < n and CELL_DIV_RE.match(markdown, m.end()):

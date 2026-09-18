@@ -62,8 +62,8 @@ check-posts:
 # re-executing the post. Refuses if any code cell changed. See
 # scripts/freeze_realign.py.
 freeze-realign:
-	@test -n "$(SLUG)" || { echo "usage: make freeze-realign SLUG=<slug>"; exit 2; }
-	python3 scripts/freeze_realign.py $(SLUG)
+	@test -n "$(SLUG)" || { echo "usage: make freeze-realign SLUG=<slug> [ARGS='--check' | ARGS='--legacy']"; exit 2; }
+	python3 scripts/freeze_realign.py $(SLUG) $(ARGS)
 # ruff: lint + import order + formatting, read-only. `make fmt` applies fixes.
 lint:
 	.venv/bin/ruff check .
@@ -127,7 +127,7 @@ help:
 	@echo "kernel - register the blog-base Jupyter kernel"
 	@echo "kernels-stub - register every kernel the posts pin (no ML deps; lets a fresh clone render from _freeze/)"
 	@echo "check-posts - verify posts pin a kernel + requirements.txt and their frozen output is current"
-	@echo "freeze-realign SLUG=<slug> - accept a prose-only edit to a freeze-backed post without re-executing it"
+	@echo "freeze-realign SLUG=<slug> [ARGS=--check|--legacy] - accept a prose-only edit to a freeze-backed post without re-executing it"
 	@echo "lint / fmt - ruff check + format (read-only / apply)"
 	@echo "spell - codespell over prose"
 	@echo "test - pytest over scripts/"

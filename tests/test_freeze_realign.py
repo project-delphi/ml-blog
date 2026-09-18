@@ -283,11 +283,23 @@ def test_inline_code_values_are_carried_into_edited_prose():
 
 def test_knitr_inline_code_is_treated_like_python_inline():
     parts = ("one\n", "\nThe ratio is `r fmt(x, 4)` here.\n", "\nthree\n")
-    old = source(*parts)
+    knitr = ("jupyter: eigen-blog", "engine: knitr")
+    old = source(*parts).replace(*knitr)
     new = old.replace("here.", "here, edited.")
-    markdown = stored("one\n", "\nThe ratio is 1.0667 here.\n", "\nthree\n")
+    markdown = stored("one\n", "\nThe ratio is 1.0667 here.\n", "\nthree\n").replace(
+        *knitr
+    )
     rec = fr.realign(old, new, frozen(old, markdown))
     assert "The ratio is 1.0667 here, edited.\n" in rec["result"]["markdown"]
+
+
+def test_r_code_span_under_jupyter_is_plain_text():
+    # `r × k` is ordinary code in a Python post, not an evaluated expression.
+    parts = ("one\n", "\nA rank `r × k` factor here.\n", "\nthree\n")
+    old = source(*parts)
+    new = old.replace("here.", "here, edited.")
+    rec = realign_ok(old, new, parts)
+    assert "A rank `r × k` factor here, edited.\n" in rec["result"]["markdown"]
 
 
 def test_changed_inline_code_is_refused():

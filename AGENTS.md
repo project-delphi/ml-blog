@@ -164,10 +164,11 @@ interpreter inside a `make` recipe.
 `make freeze-realign SLUG=<slug>` splices the new prose into the frozen record and
 updates its hash, then the next `make render` reuses the stored cell outputs. It refuses
 whenever an executable cell or an inline `{python}` / knitr `r` expression changed, or
-when it cannot place the new prose exactly, and says why; `--check` reports the verdict
-without writing. A `LEGACY_NO_ENV` post needs `--legacy` as well: the splice is the only
-safe way to touch one of those (a re-render is impossible), so run `--check` first and
-keep the change to prose or frontmatter. Rewriting the hash by hand is **not** an
+when it cannot place the new prose exactly, and says why. Flags go through `ARGS`:
+`make freeze-realign SLUG=<slug> ARGS=--check` reports the verdict without writing, and a
+`LEGACY_NO_ENV` post needs `ARGS=--legacy` as well, because the splice is the only safe
+way to touch one of those (a re-render is impossible), so run `--check` first and keep
+the change to prose or frontmatter. Rewriting the hash by hand is **not** an
 alternative: the record stores the whole document as markdown, so a hash-only realign
 republishes the old prose under a valid-looking record.
 
