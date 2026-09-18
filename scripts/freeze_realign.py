@@ -15,11 +15,24 @@ realign publishes the *old* prose under a valid-looking record.
 This script therefore does both. It finds the revision of index.qmd the
 record was built from, splits old and new source into prose segments around
 the executable cells, and splices each new prose segment into the stored
-markdown where the old one sits. It refuses, and says why, when:
+markdown where the old one sits. The walk is positional, never a free text
+search: each cell's rendering is stepped over by parsing its `::: {.cell}`
+div (matched by label when the cell has one), its kept fence (`eval: false`),
+or nothing (`include: false`, or a setup cell that printed nothing, accepted
+only when the prose that follows sits right there); raw `output: asis` cells
+are bridged to the next prose or the next cell's div. Newline runs may be
+longer in the record than in the source, because Quarto pads fences and divs
+with blank lines, and inline `{python}` expressions are matched as wildcards
+whose stored values are put back into the new prose. An identity realign
+reproduces 60 of the 61 valid records byte for byte; the odd one out is a
+knitr post with inline `r` code, which is also LEGACY_NO_ENV.
 
-- any executable cell body differs (that is a real re-execution);
-- an old prose segment is not found verbatim in the stored markdown where
-  the previous cell's output ends (Quarto rewrote it, so the splice would be
+It refuses, and says why, when:
+
+- any executable cell body or inline `{python}` expression differs (that is
+  a real re-execution);
+- an old prose segment is not found in the stored markdown where the
+  previous cell's rendering ends (Quarto rewrote it, so the splice would be
   a guess);
 - the post is in LEGACY_NO_ENV (its record is the only copy of what it
   computes; do not touch it by machine).
@@ -47,6 +60,10 @@ MAX_HISTORY = 200
 # The div Quarto wraps each executed cell in: `::: {.cell ...}` or, when the
 # cell has a label, `::: {#label .cell ...}`.
 CELL_DIV_RE = re.compile(r"::: \{[^}\n]*\.cell[\s}]")
+CELL_OPT_RE = re.compile(r"^#\|\s*([\w.-]+):\s*(.*?)\s*$")
+# Inline code the engine evaluates in prose: `{python} expr`.
+INLINE_RE = re.compile(r"`\{python\}[^`\n]*`")
+DIV_ID_RE = re.compile(r"::: \{#([^\s}]+)")
 
 
 class RealignError(Exception):
@@ -83,6 +100,151 @@ def mismatch_context(expected: str, found: str, width: int = 60) -> str:
         f"  first difference at offset {n}:\n"
         f"  source : {expected[lo : n + width]!r}\n"
         f"  record : {found[lo : n + width]!r}"
+    )
+
+
+def tolerant(text: str, after_cell: bool = False) -> re.Pattern:
+    """Match `text` exactly, up to Quarto's blank-line padding and inline code.
+
+    Quarto's engine pads every fenced block and div with a blank line when it
+    stores the markdown, so a newline run in the record may be longer than the
+    source's. After a cell that rendered nothing the run may also have been
+    absorbed by the previous segment, so a leading run is optional there.
+    Inline `{python}` expressions are stored as their values, so each one
+    becomes a capture group; `realign` puts the captured values back.
+    """
+
+    def literal(chunk: str, lead_optional: bool) -> str:
+        parts = re.split(r"\n+", chunk)
+        pat = r"\n+".join(map(re.escape, parts))
+        if lead_optional and parts and parts[0] == "" and len(parts) > 1:
+            pat = r"\n*" + pat[len(r"\n+") :]
+        return pat
+
+    pieces = INLINE_RE.split(text)
+    pattern = literal(pieces[0], after_cell)
+    for chunk in pieces[1:]:
+        pattern += r"(.*?)" + literal(chunk, False)
+    return re.compile(pattern, re.S)
+
+
+def with_inline_values(new_p: str, old_p: str, values: tuple[str, ...]) -> str:
+    """Put the values Quarto stored for `old_p`'s inline code into `new_p`."""
+    old_inline = INLINE_RE.findall(old_p)
+    new_inline = INLINE_RE.findall(new_p)
+    if old_inline != new_inline:
+        raise RealignError(
+            "an inline `{python}` expression changed, which needs a re-execution."
+        )
+    if not values:
+        return new_p
+    it = iter(values)
+    return INLINE_RE.sub(lambda _m: next(it), new_p)
+
+
+def pad_blocks(text: str) -> str:
+    """Put a blank line before an opening fence or div and after a closing one.
+
+    Pandoc needs fenced blocks separated from surrounding text; this is the
+    padding Quarto adds when it stores the markdown, applied to new prose.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    in_fence = False
+    pad_next = False
+    for line in lines:
+        s = line.strip()
+        is_fence = s.startswith("```")
+        opening = (is_fence and not in_fence) or (
+            not in_fence and (s.startswith("::: {") or s.startswith(":::{"))
+        )
+        closing_div = not in_fence and s == ":::"
+        if (opening or pad_next) and s and out and out[-1].strip():
+            out.append("")
+        pad_next = False
+        out.append(line)
+        if is_fence:
+            if in_fence:
+                pad_next = True
+            in_fence = not in_fence
+        elif closing_div:
+            pad_next = True
+    return "\n".join(out)
+
+
+def cell_options(cell: str) -> dict[str, str]:
+    """Read the leading `#| key: value` options of a cell."""
+    opts = {}
+    for line in cell.split("\n")[1:]:
+        m = CELL_OPT_RE.match(line)
+        if not m:
+            break
+        opts[m.group(1)] = m.group(2).strip("\"'").lower()
+    return opts
+
+
+def cell_end(
+    markdown: str,
+    pos: int,
+    cell: str,
+    k: int,
+    next_prose: str,
+    is_last: bool,
+    next_cell: str | None = None,
+) -> int:
+    """Return the index just past cell `k`'s rendering in the stored markdown.
+
+    An executed cell becomes a `::: {.cell}` div. A cell that keeps its fence
+    (`eval: false`) is stored as that fence. A cell that shows nothing
+    (`include: false`, or `echo: false` with `output: false`) leaves no trace.
+    Raw output (`output: asis`) has no wrapper, so its extent is found from
+    the prose that follows it.
+    """
+    opts = cell_options(cell)
+    label = opts.get("label")
+    # Quarto pads a div with a blank line; step over it before looking.
+    while pos < len(markdown) and markdown[pos] == "\n":
+        pos += 1
+    if CELL_DIV_RE.match(markdown, pos):
+        div_id = DIV_ID_RE.match(markdown, pos)
+        # A labelled cell renders as `::: {#cell-label .cell}`; a div carrying
+        # another id belongs to a later cell, so this one rendered nothing.
+        if label and div_id and div_id.group(1) not in (label, f"cell-{label}"):
+            return pos
+        return cell_output_end(markdown, pos, k)
+    if m := tolerant(cell).match(markdown, pos):
+        return m.end()
+    anchor = next_prose.rstrip("\n") if is_last else next_prose
+    # A cell whose options hide the code and whose run printed nothing (a
+    # setup cell) leaves no trace: accept that only when the prose that
+    # follows it sits right here, which is unambiguous.
+    if anchor.strip() and tolerant(anchor, after_cell=True).match(markdown, pos):
+        return pos
+    hidden = opts.get("include") == "false" or (
+        opts.get("echo") == "false" and opts.get("output") == "false"
+    )
+    if hidden:
+        return pos
+    if opts.get("output") == "asis":
+        if anchor.strip():
+            if m := tolerant(anchor, after_cell=True).search(markdown, pos):
+                return m.start()
+        elif is_last:
+            return len(markdown.rstrip("\n"))
+        elif next_cell is not None:
+            # Adjacent cells: the raw output runs up to the next cell's div.
+            next_label = cell_options(next_cell).get("label")
+            div_re = (
+                re.compile(r"::: \{#(?:cell-)?" + re.escape(next_label) + r"[\s}]")
+                if next_label
+                else CELL_DIV_RE
+            )
+            if m := div_re.search(markdown, pos):
+                return m.start()
+    raise RealignError(
+        f"cannot tell where cell {k} (options {opts or 'none'}) rendered: at "
+        f"offset {pos} the frozen markdown has {markdown[pos : pos + 80]!r}; "
+        "re-render instead."
     )
 
 
@@ -132,56 +294,53 @@ def realign(old_src: str, new_src: str, record: dict) -> dict:
             raise RealignError(
                 f"executable cell {i + 1} changed; re-render with the post's venv."
             )
-    # Walk the stored markdown positionally, never by search: a short prose
-    # segment such as a lone newline would match inside a cell's output. The
-    # stored markdown is P0 O0 P1 O1 ... Pn, each Oi a `::: {.cell}` div, so
-    # each old prose segment must sit exactly where the previous output ends.
+    # Walk the stored markdown positionally, never by free search: a short
+    # prose segment such as a lone newline would match inside a cell's output.
+    # The stored markdown is P0 O0 P1 O1 ... Pn; each old prose segment must
+    # sit exactly where the previous cell's rendering ends, allowing only for
+    # the blank lines Quarto pads fences and divs with.
     markdown = record["result"]["markdown"]
     out = []
     pos = 0
+    n = len(old_cells)
     for i, (old_p, new_p) in enumerate(zip(old_prose, new_prose)):
         if i > 0:
-            end = cell_output_end(markdown, pos, i)
+            end = cell_end(
+                markdown,
+                pos,
+                old_cells[i - 1],
+                i,
+                old_p,
+                i == n,
+                old_cells[i] if i < n else None,
+            )
             out.append(markdown[pos:end])
             pos = end
-        elif (fm := cp.FRONTMATTER_RE.match(old_p)) and cp.FRONTMATTER_RE.match(new_p):
-            # Quarto re-emits the frontmatter verbatim but follows it with one
-            # more blank line than the source has. Anchor on the frontmatter,
-            # keep the record's own newline run, then match the body.
-            old_front, old_body = old_p[: fm.end()], old_p[fm.end() :].lstrip("\n")
-            new_fm = cp.FRONTMATTER_RE.match(new_p)
-            new_front, new_body = (
-                new_p[: new_fm.end()],
-                new_p[new_fm.end() :].lstrip("\n"),
-            )
-            if not markdown.startswith(old_front, pos):
-                raise RealignError(
-                    "the frontmatter is not in the frozen markdown verbatim; "
-                    "re-render instead.\n"
-                    + mismatch_context(old_front, markdown[pos : pos + len(old_front)])
-                )
-            pos += len(old_front)
-            gap_end = pos
-            while gap_end < len(markdown) and markdown[gap_end] == "\n":
-                gap_end += 1
-            out.append(new_front)
-            out.append(markdown[pos:gap_end])
-            pos = gap_end
-            old_p, new_p = old_body, new_body
-        if not markdown.startswith(old_p, pos):
+        # The record may end without the source's final newline.
+        anchor = old_p.rstrip("\n") if i == n else old_p
+        m = tolerant(anchor, after_cell=i > 0).match(markdown, pos)
+        if not m:
             raise RealignError(
-                f"prose segment {i + 1} is not in the frozen markdown verbatim; "
-                "Quarto rewrote it, so re-render instead.\n"
+                f"prose segment {i + 1} is not in the frozen markdown where cell "
+                f"{i}'s output ends; Quarto rewrote it, so re-render instead.\n"
                 + mismatch_context(old_p, markdown[pos : pos + len(old_p)])
             )
-        out.append(new_p)
-        pos += len(old_p)
+        # An unchanged segment keeps the record's bytes; a changed one gets the
+        # values of its inline code and the blank-line padding Quarto would
+        # have given it.
+        if old_p == new_p:
+            out.append(m.group(0))
+        else:
+            out.append(pad_blocks(with_inline_values(new_p, anchor, m.groups())))
+        pos = m.end()
     if markdown[pos:].strip():
         raise RealignError(
             "the frozen markdown has content after the last prose segment; "
             "re-render instead."
         )
-    out.append(markdown[pos:])
+    # A changed final segment carries its own trailing newlines.
+    if old_prose[-1] == new_prose[-1]:
+        out.append(markdown[pos:])
     new_record = json.loads(json.dumps(record))
     new_record["result"]["markdown"] = "".join(out)
     new_record["hash"] = hashlib.md5(new_src.encode("utf-8")).hexdigest()

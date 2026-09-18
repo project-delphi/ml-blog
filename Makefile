@@ -88,12 +88,14 @@ check-quarto:
 # 120-post render emits thousands of lines; the tail and any error lines are
 # echoed. QUARTO_PYTHON is not optional: a bare `quarto render .` resolves a
 # Python that cannot see --user kernelspecs and dies after deleting docs/.
-render: check-quarto check-posts
+render: check-quarto
+	python3 scripts/check_posts.py --no-listing
 	@QUARTO_PYTHON="$(CURDIR)/.venv/bin/python" quarto render . > render.log 2>&1; \
 	  status=$$?; tail -40 render.log; \
 	  grep -inE 'error|not found|traceback' render.log || true; \
 	  test $$status -eq 0 || { echo "render failed (see render.log); restore with: git checkout -- docs"; exit $$status; }
 	@$(MAKE) --no-print-directory docs-deleted
+	@$(MAKE) --no-print-directory check-posts
 # One post, always executed (freeze is honoured only on a project render), so
 # it needs that post's real kernel registered. Iterate with this; ship with
 # `make render`, which is what refreshes search.json and listings.json.

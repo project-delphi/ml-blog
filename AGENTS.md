@@ -162,8 +162,9 @@ interpreter inside a `make` recipe.
 **A stale freeze after a prose-only edit** does not need the post's venv:
 `make freeze-realign SLUG=<slug>` splices the new prose into the frozen record and
 updates its hash, then the next `make render` reuses the stored cell outputs. It refuses
-whenever an executable cell changed, when Quarto rewrote the stored prose, or for a
-`LEGACY_NO_ENV` post, and says why. Rewriting the hash by hand is **not** an
+whenever an executable cell or an inline `{python}` expression changed, when it cannot
+place the new prose exactly, or for a `LEGACY_NO_ENV` post, and says why; `--check`
+reports the verdict without writing. Rewriting the hash by hand is **not** an
 alternative: the record stores the whole document as markdown, so a hash-only realign
 republishes the old prose under a valid-looking record.
 

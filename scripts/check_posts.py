@@ -150,6 +150,23 @@ CATS_INLINE_RE = re.compile(r"^categories:[ \t]*\[(.*?)\][ \t]*$", re.M)
 CATS_BLOCK_RE = re.compile(r"^categories:[ \t]*\n((?:[ \t]+-[ \t]+.*\n?)+)", re.M)
 
 
+def is_draft(text: str) -> bool:
+    """Report whether the *frontmatter* (not a YAML example in the body) says draft."""
+    fm = FRONTMATTER_RE.match(text)
+    return bool(fm and DRAFT_RE.search(fm.group(1)))
+
+
+def notebook_frontmatter(path: Path) -> str:
+    """Return a notebook's leading raw cell, which is where its YAML lives."""
+    try:
+        cells = json.loads(path.read_text(errors="ignore")).get("cells", [])
+    except json.JSONDecodeError:
+        return ""
+    if cells and cells[0].get("cell_type") == "raw":
+        return "".join(cells[0].get("source", []))
+    return ""
+
+
 def categories(text: str) -> list[str]:
     """Read the post's `categories:` list from its frontmatter, unquoted."""
     fm = FRONTMATTER_RE.match(text)
@@ -248,21 +265,26 @@ def check_kernel_stubs(pinned: dict[str, str]) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     # `--categories` is opt-in while the taxonomy is being normalised; it
     # becomes part of the default run once every post passes.
-    with_categories = "--categories" in (sys.argv[1:] if argv is None else argv)
+    args = sys.argv[1:] if argv is None else argv
+    with_categories = "--categories" in args
+    # `--no-listing` is for the step *before* a project render: a new post is
+    # legitimately absent from docs/listings.json until that render writes it.
+    with_listing = "--no-listing" not in args
     canon = canonical_categories() if with_categories else set()
     failures: dict[str, list[str]] = {}
     pinned: dict[str, str] = {}
     slugs: list[str] = []
     for post_dir in sorted(p for p in POSTS.iterdir() if p.is_dir()):
         source = post_dir / "index.qmd"
+        notebook = post_dir / "index.ipynb"
         if not source.exists():
-            if (post_dir / "index.ipynb").exists():
+            if notebook.exists() and not is_draft(notebook_frontmatter(notebook)):
                 slugs.append(post_dir.name)
             continue  # .ipynb posts carry their own stored outputs
         text = source.read_text(errors="ignore")
         # `draft-mode: unlinked` (_quarto.yml) renders a draft but keeps it
         # out of the listing on purpose, so a draft is not a missing post.
-        if not DRAFT_RE.search(text):
+        if not is_draft(text):
             slugs.append(post_dir.name)
         executes = executes_code(text)
         kernel = KERNEL_RE.search(text)
@@ -276,7 +298,8 @@ def main(argv: list[str] | None = None) -> int:
         if problems:
             failures[f"posts/{post_dir.name}/index.qmd"] = problems
 
-    failures.update(check_listed(slugs))
+    if with_listing:
+        failures.update(check_listed(slugs))
 
     stub_problems = check_kernel_stubs(pinned)
     if stub_problems:
