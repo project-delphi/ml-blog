@@ -34,8 +34,11 @@ POSTS = ROOT / "posts"
 
 MAX_LINES = 60
 MAX_EXCERPT = 100
-# Read in chunks so a 1.9 MB search.json never lands in memory whole.
+# Read in chunks so a 1.9 MB search.json never lands in memory whole. A match
+# longer than OVERLAP could still be split across two reads; nothing this is
+# asked about comes close.
 CHUNK = 1 << 20
+OVERLAP = 256
 
 
 def emit(lines: list[str]) -> None:
@@ -55,7 +58,14 @@ def resolve(path: str) -> Path:
 
 
 def count_in(path: Path, pattern: re.Pattern[str]) -> int:
-    """Count matches without holding the file in memory."""
+    """Count matches without holding the file in memory.
+
+    Each read is prefixed with the previous window's last OVERLAP characters so
+    a match straddling a chunk edge is still seen. Anything ending inside that
+    prefix was already counted last time round, so only matches reaching past
+    it are added -- counting the whole buffer would double every match that
+    happened to land in the overlap.
+    """
     total, tail = 0, ""
     with path.open("r", encoding="utf-8", errors="replace") as fh:
         while True:
@@ -63,10 +73,31 @@ def count_in(path: Path, pattern: re.Pattern[str]) -> int:
             if not chunk:
                 break
             buf = tail + chunk
-            total += len(pattern.findall(buf))
-            # keep an overlap so a match spanning a chunk edge is not lost
-            tail = buf[-256:]
+            seen = len(tail)
+            total += sum(1 for m in pattern.finditer(buf) if m.end() > seen)
+            tail = buf[-OVERLAP:]
     return total
+
+
+def iter_matches(path: Path, pattern: re.Pattern[str], limit: int) -> list[str]:
+    """Up to `limit` matched strings, truncated, without reading the whole file."""
+    found: list[str] = []
+    tail = ""
+    with path.open("r", encoding="utf-8", errors="replace") as fh:
+        while len(found) < limit:
+            chunk = fh.read(CHUNK)
+            if not chunk:
+                break
+            buf = tail + chunk
+            seen = len(tail)
+            for m in pattern.finditer(buf):
+                if m.end() <= seen:
+                    continue
+                found.append(m.group(0)[:MAX_EXCERPT])
+                if len(found) == limit:
+                    break
+            tail = buf[-OVERLAP:]
+    return found
 
 
 def cmd_count(args) -> int:
@@ -81,11 +112,12 @@ def cmd_count(args) -> int:
 
 def cmd_files(args) -> int:
     pat = re.compile(re.escape(args.pattern) if args.fixed else args.pattern)
-    hits = [
-        raw
-        for raw in sorted(globlib.glob(args.glob, root_dir=ROOT, recursive=True))
-        if (ROOT / raw).is_file() and count_in(ROOT / raw, pat)
-    ]
+    hits = []
+    for raw in sorted(globlib.glob(args.glob, root_dir=ROOT, recursive=True)):
+        # a glob can escape the repo with ..; resolve() refuses those
+        path = resolve(raw)
+        if path.is_file() and count_in(path, pat):
+            hits.append(raw)
     emit(hits or ["(no file matches)"])
     print(f"{len(hits)} file(s) match")
     return 0
@@ -111,8 +143,7 @@ def cmd_excerpt(args) -> int:
     if not p.is_file():
         print(f"missing {args.path}")
         return 1
-    text = p.read_text(encoding="utf-8", errors="replace")
-    found = [m.group(0)[:MAX_EXCERPT] for m in pat.finditer(text)][: args.n]
+    found = iter_matches(p, pat, args.n)
     emit(found or ["(no match)"])
     return 0
 
@@ -130,13 +161,28 @@ def cmd_post(args) -> int:
     return 0 if all("NO" not in r for r in rows) else 1
 
 
+def source_markers(text: str, want: int = 3) -> list[str]:
+    """Distinctive lines of a bundle, spread through it, to search a page for."""
+    lines = [ln.strip() for ln in text.splitlines()]
+    usable = [ln for ln in lines if len(ln) >= 40]
+    if not usable:
+        return []
+    step = max(1, len(usable) // (want + 1))
+    return [usable[min(len(usable) - 1, step * (i + 1))][:80] for i in range(want)]
+
+
 def cmd_widget(args) -> int:
     """Is the bundle the page serves the one in the source sidecar?
 
     Quarto hashes index.qmd alone, so editing widgets.js leaves _freeze/ valid
-    and a project render can keep serving the old bundle with no warning. The
-    check is whether a marker taken from the current source appears in the
-    rendered page.
+    and a project render can keep serving the old bundle with no warning. Two
+    shapes exist and the evidence differs. A kit post publishes the sidecar as
+    a resource, so the published file can be compared byte for byte and the
+    page only has to reference it. An older post prints the bundle into an
+    inline <script> from a Python cell, so there is no file to compare and the
+    only evidence is whether the current source's own lines are in the page.
+    Counting a mount id would prove nothing either way: the mount div lives in
+    index.qmd and is there whatever the bundle's age.
     """
     slug = args.slug
     src = POSTS / slug / "widgets.js"
@@ -148,43 +194,57 @@ def cmd_widget(args) -> int:
         print(f"no rendered page: docs/posts/{slug}/index.html")
         return 1
 
+    text = src.read_text(encoding="utf-8", errors="replace")
     served = DOCS / "posts" / slug / "widgets.js"
-    rows = []
+    rows: list[str] = []
+    stale = False
+
     if served.is_file():
         same = served.read_bytes() == src.read_bytes()
         rows.append(
             f"published sidecar: {'identical' if same else 'DIFFERS'} from source"
         )
+        stale = stale or not same
+        linked = count_in(page, re.compile(r'src="[^"]*widgets\.js"'))
+        rows.append(f"page loads it: {'yes' if linked else 'NO'}")
+        stale = stale or not linked
     else:
-        rows.append("published sidecar: absent (inlined bundle, or not a resource)")
+        rows.append("inline bundle: no published sidecar, checking the page text")
+        markers = source_markers(text)
+        if not markers:
+            rows.append("no usable marker in the source; CANNOT VERIFY")
+            emit(rows)
+            return 1
+        hits = 0
+        for m in markers:
+            # Some print cells rewrite `</` to `<\/` on the way into the page
+            # and some do not, so a marker counts as present in either form.
+            forms = {m, m.replace("</", "<\\/")}
+            found = any(count_in(page, re.compile(re.escape(f))) for f in forms)
+            hits += 1 if found else 0
+            rows.append(f"marker {'found' if found else 'MISSING'}: {m[:48]}")
+        stale = stale or hits < len(markers)
+        rows.append(f"{hits}/{len(markers)} markers present")
 
-    # A marker the source defines and the page must therefore contain.
-    text = src.read_text(encoding="utf-8", errors="replace")
-    markers = re.findall(r'WK\.mount\("([^"]+)"', text) or re.findall(
-        r'id="([a-z0-9-]*widget[a-z0-9-]*)"', text
-    )
-    for m in markers[:3]:
-        n = count_in(page, re.compile(re.escape(m)))
-        rows.append(f"mount {m}: {n} occurrence(s) in the page")
-    if not markers:
-        rows.append("no mount id found in the source; cannot verify freshness")
+    rows.append(f"verdict: {'STALE' if stale else 'current'}")
     emit(rows)
-    return 0
+    return 1 if stale else 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument(
+    fixed = argparse.ArgumentParser(add_help=False)
+    fixed.add_argument(
         "-F", "--fixed", action="store_true", help="literal pattern, not regex"
     )
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0], parents=[fixed])
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    c = sub.add_parser("count")
+    c = sub.add_parser("count", parents=[fixed])
     c.add_argument("pattern")
     c.add_argument("paths", nargs="+")
     c.set_defaults(fn=cmd_count)
 
-    f = sub.add_parser("files")
+    f = sub.add_parser("files", parents=[fixed])
     f.add_argument("pattern")
     f.add_argument("glob")
     f.set_defaults(fn=cmd_files)
@@ -193,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("paths", nargs="+")
     e.set_defaults(fn=cmd_exists)
 
-    x = sub.add_parser("excerpt")
+    x = sub.add_parser("excerpt", parents=[fixed])
     x.add_argument("pattern")
     x.add_argument("path")
     x.add_argument("-n", type=int, default=3)
