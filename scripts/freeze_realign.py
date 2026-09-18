@@ -368,7 +368,7 @@ def realign(old_src: str, new_src: str, record: dict) -> dict:
             text = pad_blocks(with_inline_values(new_p, anchor, m.groups()))
             # The match swallowed the blank line Quarto pads before the next
             # div; without it pandoc reads the div opener as paragraph text.
-            if i < n:
+            if i < n and CELL_DIV_RE.match(markdown, m.end()):
                 text = text.rstrip("\n") + "\n\n"
             out.append(text)
         pos = m.end()
