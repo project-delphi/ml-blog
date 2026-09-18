@@ -1,134 +1,108 @@
 ---
-title: "Why Use Conda for Scientific Computing?"
+title: "Conda Exists Because Scientific Python Is Not Python"
+description: "Why pip alone cannot install the numerical stack reliably, what conda does about it, what it costs, and where uv and pixi have moved the line since. As of early 2025."
 author: "Ravi Kalia"
 date: "2025-02-02"
 categories: [Python, Tooling]
+tags: [conda, pip, environments, reproducibility, conda-forge]
+image: "./cover.png"
 format:
   html:
     toc: true
     toc-depth: 3
-    number-sections: true
     code-fold: false
-image: "./cover.png"
 ---
-![Conda](./conda.png)
-<p style="text-align: center;">
-  <em>Made with <span style="color: red;">❤️</span> and <a href="https://github.com/features/copilot" target="_blank">GitHub Copilot</a></em>
-  <br>
-  <img src="https://github.githubassets.com/images/icons/emoji/octocat.png" alt="GitHub Copilot Logo" width="50">
-</p>
 
+![Conda](./cover.png)
 
-Conda attracts a lot of complaints. In scientific computing it still earns its place: it solves things pip alone does not, and it costs you something in return.
+Conda attracts complaints: it is slow, it is heavy, it fights with pip. Most of the
+complaints are true. It still earns its place in scientific computing, and the reason
+is one fact about the software: the libraries that make Python fast are not written in
+Python. NumPy, SciPy, PyTorch and their relatives are thin Python skins over C, C++,
+Fortran and CUDA, and a package manager that only understands Python packages cannot
+install them reliably. This post says what pip cannot do, what conda does instead,
+what it costs, and, in a closing note added later, where the newer tools have moved
+the line. I gave a [talk](https://docs.google.com/presentation/d/1F2Rx1w-AqUHuQnEuPblAniMzFnl04hcdYkKQ0GjuT1A/edit?usp=sharing)
+on this, and the post is the argument from it.
 
-I recently gave a [talk](https://docs.google.com/presentation/d/1F2Rx1w-AqUHuQnEuPblAniMzFnl04hcdYkKQ0GjuT1A/edit?usp=sharing) on conda and programming practices.
+## pip installs Python packages, and the hard part is not a Python package
 
-## Overview {.unnumbered}
-Conda is a package and environment manager used in scientific computing. It solves what pip, system Python, OS R, and `pyenv` do not when collaboration and reproducibility are the priority.
+A pip wheel can carry compiled code, and for the common platforms the numerical
+libraries publish wheels that work. What a wheel cannot express is a dependency on
+something outside Python: a specific BLAS, a compiler runtime, CUDA and cuDNN, a
+system library like HDF5 or GDAL, or R next to Python in the same environment. When
+two wheels each bundle their own copy of such a library, they can disagree, and the
+failure is a segmentation fault at import time rather than a version error at install
+time. pip also manages one Python at a time: switching interpreter versions is someone
+else's job (`pyenv`, the system), and a system Python is shared with the operating
+system, so an upgrade for one project can break a tool the OS relies on.
 
-## Key Concepts
+Languages such as Node and Ruby get by with their own package managers because their
+ecosystems rarely reach below the language runtime. Scientific Python reaches all the
+way to the chip.
 
-### What Sets Conda Apart?
+## conda manages environments of binaries, in any language
 
-Conda differs from traditional package managers by managing environments, not only packages. Unlike `pip` or system package managers, Conda handles:
+Conda treats the interpreter, the compiled libraries and the Python packages as the
+same kind of thing: packages, built once for each platform and installed as binaries
+into an isolated environment. That is what lets one environment pin Python 3.9, R
+4.2, a particular BLAS and CUDA 11 together and reproduce the same set on a colleague's
+machine. Three parts of the design carry the weight:
 
-1. Complete environment isolation
-2. Cross-language dependency management
-3. Binary package distribution
-4. OS-level dependency resolution
+- **Binary packages** with their non-Python dependencies declared, so that the BLAS
+  NumPy links against is an explicit, versioned package rather than whatever is on the
+  machine.
+- **Channels**: repositories of those packages. conda-forge is the community-built one
+  and covers most of scientific computing; bioconda adds bioinformatics; vendors run
+  their own for PyTorch, NVIDIA and Intel builds. Channel priority decides which wins.
+- **A solver** that finds a set of package versions satisfying every constraint at
+  once, across languages, and refuses when none exists, rather than installing the last
+  one requested and leaving the conflict to surface at runtime.
 
-### Environment Management
-
-Conda environments provide isolated spaces where you can:
-
-- Specify exact versions of multiple programming languages
-- Manage conflicting dependencies between projects
-- Share reproducible environments across different operating systems
-
-This is particularly valuable when working with data science tools that might require specific versions of Python, R, and their associated libraries.
-
-## Why Not Alternative Approaches?
-
-### Node, Ruby, or Java don't need Conda?
-
-Languages like Node.js, Ruby, and Java have built-in package managers that handle dependencies effectively. Since they don't need ultra high performance low level dependencies, they can rely on their language-specific package managers.
-
-They just don't need to go down to the level of C, C++, Fortran, and OS, Platform and Chip specific dependencies which is where Conda shines.
-
-### System Python/R/Language Limitations
-
-System-installed Python or R (or any other language) can lead to several issues:
-
-- Version conflicts between different projects
-- Lack of reproducibility across systems
-- Potential system stability issues
-- Limited control over package versions
-
-
-### Pip's Shortcomings
-
-While `pip` is excellent for Python-specific packages, it falls short for scientific computing because it:
-
-- Cannot manage non-Python dependencies
-- Doesn't handle system-level libraries
-- Lacks environment management capabilities
-- Can't easily switch between Python versions
-
-## Conda's Advantage for Scientific Computing
-
-### Package Distribution Model
-
-Conda uses a sophisticated approach to package management:
-
-- Pre-built binary packages
-- Multiple repository channels:
-  - conda-forge (community-maintained)
-  - bioconda (bioinformatics)
-  - Domain-specific channels (PyTorch, NVIDIA, Intel)
-
-### Dependency Resolution
-
-Conda employs a SAT solver to:
-
-- Ensure all dependencies are compatible
-- Resolve version conflicts automatically
-- Handle cross-language dependencies
-- Maintain environment consistency
-
-## Best Practices
-
-### Channel Priority
-
-1. Use conda-forge as the primary channel
-2. Avoid conda defaults due to potential licensing issues
-3. Add specialized channels only when needed
-
-### Environment Management
+The daily commands are short:
 
 ```bash
-# Create a new environment
 conda create -n myenv python=3.9
-
-# Install packages
+conda activate myenv
 conda install -c conda-forge numpy pandas scipy
-
-# Export environment
-conda env export > environment.yml
+conda env export > environment.yml     # the reproducible record
 ```
 
-### Common Pitfalls to Avoid
+Four habits keep it out of trouble. Use conda-forge as the primary channel and add
+specialised channels only when a package needs them; the Anaconda `defaults` channel
+carries licence terms that matter for commercial use. Install with conda first and
+pip only for packages conda-forge lacks, because pip does not tell conda's solver what
+it did. Expect the solve to take a while on a large environment, and reach for `mamba`,
+a drop-in reimplementation of the solver, when it takes too long. And commit the
+`environment.yml`, since the environment on disk is not the record.
 
-- Don't mix pip and conda installations when possible
-- Use $HOME instead of ~ in conda commands
-- Be patient with dependency resolution
-- Consider mamba for faster installations
+## The cost is real and worth paying for one kind of work
 
-## Conclusion
+Conda environments are large, installs are slower than pip, the solver can take
+minutes, and the pip-inside-conda seam is a recurring source of breakage. For a web
+service written in pure Python none of that buys anything, and pip with a lockfile is
+the better tool. For a project whose dependencies reach compiled libraries, GPUs or a
+second language, and which has to run on a collaborator's machine next year, the cost
+buys the one thing pip cannot offer: a reproducible environment down to the binaries.
 
-While Conda isn't perfect, it provides the most comprehensive solution for scientific computing environment management. Its ability to handle complex dependencies, ensure reproducibility, and support multiple programming languages makes it invaluable for collaborative scientific work.
+## Where it stops holding, and what has moved since
 
-The initial learning curve and occasional slower installations are small prices to pay for the reliability and reproducibility it offers. For scientific computing projects where reproducibility is crucial, Conda remains the tool of choice.
-
-That was the position as of early 2025. Since then the tooling has moved: [uv](https://docs.astral.sh/uv/) covers the pure-Python case faster, and [pixi](https://pixi.sh/) puts a lockfile over the same conda packages. [Numerical computing reproducibility](../numerical-computing-reproducibility/) sets out where each of them reaches on the ladder from code to chipset, and is the current view.
+Two things have shifted the line since this was written in early 2025.
+[uv](https://docs.astral.sh/uv/) made the pure-Python case fast and locked, so the
+"pip with a lockfile" option above is now the default for anything that does not need
+compiled dependencies beyond what wheels carry. And [pixi](https://pixi.sh/) put a
+proper lockfile and a fast solver over the same conda-forge packages, which removes
+most of conda's own friction while keeping its reach.
+[Numerical computing reproducibility](../numerical-computing-reproducibility/) sets
+out where each tool stops on the ladder from source code down to the chip, and is the
+current view; this post is the case for why that ladder has more rungs than pip can
+see.
 
 Dependencies. Fight. Conda. Referees. Slower. Installs. Buy. Reproducible. Science. Worth. It.
+
+## References
+
+- [conda documentation](https://docs.conda.io/)
+- [conda-forge](https://conda-forge.org/) and [Miniforge](https://github.com/conda-forge/miniforge)
+- [mamba](https://mamba.readthedocs.io/), [pixi](https://pixi.sh/), [uv](https://docs.astral.sh/uv/)
+- [Numerical computing reproducibility](../numerical-computing-reproducibility/) on this blog
