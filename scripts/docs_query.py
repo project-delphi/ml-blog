@@ -49,6 +49,17 @@ def emit(lines: list[str]) -> None:
         print(f"... {len(lines) - MAX_LINES} more line(s) suppressed")
 
 
+def compile_pattern(args) -> re.Pattern[str]:
+    """The pattern, literal under -F. A bad regex is a message, not a traceback."""
+    raw = re.escape(args.pattern) if getattr(args, "fixed", False) else args.pattern
+    try:
+        return re.compile(raw)
+    except re.error as exc:
+        raise SystemExit(
+            f"bad pattern {args.pattern!r}: {exc}. Pass -F to match it literally."
+        )
+
+
 def resolve(path: str) -> Path:
     """Accept a repo-relative or docs-relative path; refuse to leave the repo."""
     p = (ROOT / path).resolve()
@@ -101,7 +112,7 @@ def iter_matches(path: Path, pattern: re.Pattern[str], limit: int) -> list[str]:
 
 
 def cmd_count(args) -> int:
-    pat = re.compile(re.escape(args.pattern) if args.fixed else args.pattern)
+    pat = compile_pattern(args)
     out = []
     for raw in args.paths:
         p = resolve(raw)
@@ -111,7 +122,7 @@ def cmd_count(args) -> int:
 
 
 def cmd_files(args) -> int:
-    pat = re.compile(re.escape(args.pattern) if args.fixed else args.pattern)
+    pat = compile_pattern(args)
     hits = []
     for raw in sorted(globlib.glob(args.glob, root_dir=ROOT, recursive=True)):
         # a glob can escape the repo with ..; resolve() refuses those
@@ -138,7 +149,7 @@ def cmd_exists(args) -> int:
 
 
 def cmd_excerpt(args) -> int:
-    pat = re.compile(re.escape(args.pattern) if args.fixed else args.pattern)
+    pat = compile_pattern(args)
     p = resolve(args.path)
     if not p.is_file():
         print(f"missing {args.path}")
@@ -234,7 +245,11 @@ def cmd_widget(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     fixed = argparse.ArgumentParser(add_help=False)
     fixed.add_argument(
-        "-F", "--fixed", action="store_true", help="literal pattern, not regex"
+        "-F",
+        "--fixed",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="literal pattern, not regex",
     )
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0], parents=[fixed])
     sub = ap.add_subparsers(dest="cmd", required=True)
