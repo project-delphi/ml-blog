@@ -183,6 +183,75 @@ def test_widget_flags_a_kit_post_the_page_never_loads(tmp_path, monkeypatch, cap
     assert "identical" in out and "page loads it: NO" in out and "STALE" in out
 
 
+def _kit_post(docs, posts, *, payload="window.D = 1;\n"):
+    """A kit-shaped post whose bundle reads its numbers from a payload sidecar."""
+    (posts / "slug" / "widget-data").mkdir(parents=True, exist_ok=True)
+    (posts / "slug" / "widgets.js").write_text(BUNDLE)
+    (posts / "slug" / "widget-data" / "data.js").write_text(payload)
+    (docs / "posts" / "slug" / "widgets.js").write_text(BUNDLE)
+    (docs / "posts" / "slug" / "index.html").write_text(
+        '<script src="widget-data/data.js"></script><script src="widgets.js"></script>',
+    )
+
+
+def test_widget_flags_a_payload_that_never_published(tmp_path, monkeypatch, capsys):
+    """widgets.js can be current while the data it reads is absent: an empty widget."""
+    docs, posts = _repo(tmp_path, monkeypatch)
+    _kit_post(docs, posts)
+    assert dq.main(["widget", "slug"]) == 1
+    out = capsys.readouterr().out
+    assert "payload widget-data/data.js: NOT PUBLISHED" in out and "STALE" in out
+
+
+def test_widget_flags_a_stale_published_payload(tmp_path, monkeypatch, capsys):
+    docs, posts = _repo(tmp_path, monkeypatch)
+    _kit_post(docs, posts)
+    out_dir = docs / "posts" / "slug" / "widget-data"
+    out_dir.mkdir(parents=True)
+    (out_dir / "data.js").write_text("window.D = 0;\n")
+    assert dq.main(["widget", "slug"]) == 1
+    out = capsys.readouterr().out
+    assert "payload widget-data/data.js: DIFFERS" in out and "STALE" in out
+
+
+def test_widget_flags_a_payload_the_page_never_loads(tmp_path, monkeypatch, capsys):
+    docs, posts = _repo(tmp_path, monkeypatch)
+    _kit_post(docs, posts)
+    out_dir = docs / "posts" / "slug" / "widget-data"
+    out_dir.mkdir(parents=True)
+    (out_dir / "data.js").write_text("window.D = 1;\n")
+    (docs / "posts" / "slug" / "index.html").write_text(
+        '<script src="widgets.js"></script>',
+    )
+    assert dq.main(["widget", "slug"]) == 1
+    out = capsys.readouterr().out
+    assert "page loads widget-data/data.js: NO" in out and "STALE" in out
+
+
+def test_widget_passes_a_kit_post_with_a_current_payload(tmp_path, monkeypatch, capsys):
+    docs, posts = _repo(tmp_path, monkeypatch)
+    _kit_post(docs, posts)
+    out_dir = docs / "posts" / "slug" / "widget-data"
+    out_dir.mkdir(parents=True)
+    (out_dir / "data.js").write_text("window.D = 1;\n")
+    assert dq.main(["widget", "slug"]) == 0
+    out = capsys.readouterr().out
+    assert "payload widget-data/data.js: identical" in out and "current" in out
+
+
+def test_widget_passes_a_kit_post_with_no_payload_at_all(tmp_path, monkeypatch, capsys):
+    """Most kit posts compute in the browser; absent widget-data/ is not a defect."""
+    docs, posts = _repo(tmp_path, monkeypatch)
+    (posts / "slug" / "widgets.js").write_text(BUNDLE)
+    (docs / "posts" / "slug" / "widgets.js").write_text(BUNDLE)
+    (docs / "posts" / "slug" / "index.html").write_text(
+        '<script src="widgets.js"></script>',
+    )
+    assert dq.main(["widget", "slug"]) == 0
+    out = capsys.readouterr().out
+    assert "payload" not in out and "current" in out
+
+
 def test_fixed_flag_before_the_subcommand(tmp_path, monkeypatch, capsys):
     """A subparser default must not clobber -F given ahead of the subcommand."""
     docs, _ = _repo(tmp_path, monkeypatch)

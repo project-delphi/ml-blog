@@ -189,7 +189,10 @@ def cmd_widget(args) -> int:
     and a project render can keep serving the old bundle with no warning. Two
     shapes exist and the evidence differs. A kit post publishes the sidecar as
     a resource, so the published file can be compared byte for byte and the
-    page only has to reference it. An older post prints the bundle into an
+    page only has to reference it -- along with any widget-data/*.js payload,
+    since a bundle that loads its numbers from one is only as current as that
+    file, and a payload that never published renders an empty widget with no
+    error. An older post prints the bundle into an
     inline <script> from a Python cell, so there is no file to compare and the
     only evidence is whether the current source's own lines are in the page.
     Counting a mount id would prove nothing either way: the mount div lives in
@@ -219,6 +222,24 @@ def cmd_widget(args) -> int:
         linked = count_in(page, re.compile(r'src="[^"]*widgets\.js"'))
         rows.append(f"page loads it: {'yes' if linked else 'NO'}")
         stale = stale or not linked
+        # A bundle that reads its numbers from a payload sidecar is only as
+        # current as that sidecar. Checking widgets.js alone would pass a post
+        # whose data file was never published, which renders an empty widget.
+        for data_src in sorted((POSTS / slug / "widget-data").glob("*.js")):
+            rel = f"widget-data/{data_src.name}"
+            data_out = DOCS / "posts" / slug / rel
+            if not data_out.is_file():
+                rows.append(f"payload {rel}: NOT PUBLISHED")
+                stale = True
+                continue
+            same_data = data_out.read_bytes() == data_src.read_bytes()
+            rows.append(
+                f"payload {rel}: {'identical' if same_data else 'DIFFERS'} from source"
+            )
+            stale = stale or not same_data
+            ref = count_in(page, re.compile(rf'src="[^"]*{re.escape(rel)}"'))
+            rows.append(f"page loads {rel}: {'yes' if ref else 'NO'}")
+            stale = stale or not ref
     else:
         rows.append("inline bundle: no published sidecar, checking the page text")
         markers = source_markers(text)
