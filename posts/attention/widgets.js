@@ -1,17 +1,22 @@
 /* Widget for "Understanding Attention": why the scores are divided by sqrt(d).
  *
- * Six tokens get independent random query and key vectors of dimension d.
- * Their dot products have variance d, so without the divisor the softmax
- * saturates onto one key as d grows; with it the weights stay soft at every d.
- * Built on widget-kit (WK), colours by token so it follows the light/dark toggle.
+ * Six tokens get independent random query and key vectors. One 256-wide pair
+ * is drawn once from fixed seeds and the widget uses its first d columns, so
+ * stepping d adds coordinates to the same vectors rather than swapping in new
+ * ones. Dot products of unit-variance vectors have variance d, so without the
+ * divisor the softmax saturates onto one key as d grows; with it the weights
+ * stay soft at every d. Because any single row can be close by chance, the
+ * stats are averages over the six rows, and the prose quotes those. Built on
+ * widget-kit (WK); colours are theme tokens.
  */
 "use strict";
 
 WK.mount("widget-attention", function (root, WK) {
   var TOKENS = ["The", "cat", "sat", "on", "the", "mat"];
   var DIMS = [4, 16, 64, 256];
+  var D_MAX = 256;
 
-  // Deterministic embeddings: the same picture every visit, at every d.
+  // Deterministic draws: the same picture every visit.
   function mulberry32(a) {
     return function () {
       a |= 0; a = (a + 0x6D2B79F5) | 0;
@@ -24,22 +29,21 @@ WK.mount("widget-attention", function (root, WK) {
     var u = 1 - rng(), v = rng();
     return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
   }
-  function matrix(d, seed) {
-    var rng = mulberry32(seed + d), X = [];
+  function matrix(seed) {
+    var rng = mulberry32(seed), X = [];
     for (var i = 0; i < TOKENS.length; i++) {
       var x = [];
-      for (var j = 0; j < d; j++) x.push(gaussian(rng));
+      for (var j = 0; j < D_MAX; j++) x.push(gaussian(rng));
       X.push(x);
     }
     return X;
   }
+  var Q = matrix(6), K = matrix(1006);
 
-  // The model: Q and K are independent Gaussian matrices, as two different
-  // projections of the same input would be; S = Q K^T, optionally divided by
+  // The model: S = Q K^T over the first d columns, optionally divided by
   // sqrt(d), then softmax row by row.
   function model(d, scale) {
-    var Q = matrix(d, 20250131), K = matrix(d, 31012025), n = TOKENS.length, S = [], A = [];
-    var div = scale ? Math.sqrt(d) : 1;
+    var n = TOKENS.length, S = [], A = [], div = scale ? Math.sqrt(d) : 1;
     for (var i = 0; i < n; i++) {
       S.push([]);
       for (var j = 0; j < n; j++) {
@@ -58,6 +62,7 @@ WK.mount("widget-attention", function (root, WK) {
   function entropyBits(p) {
     return -p.reduce(function (h, x) { return x > 0 ? h + x * Math.log2(x) : h; }, 0);
   }
+  function mean(xs) { return xs.reduce(function (a, b) { return a + b; }, 0) / xs.length; }
 
   // ------------------------------------------------------------------ view
   var state = { d: 4, scale: true, q: 1 };
@@ -65,7 +70,8 @@ WK.mount("widget-attention", function (root, WK) {
     title: "Softmax attention and the divisor",
     note: "Six tokens with independent random query and key vectors of dimension d, " +
       "so the picture is about scale, not meaning. Each row of the grid is one query's " +
-      "weights over the six keys."
+      "weights over the six keys; the stats average over the six rows, because any one " +
+      "row can be close by chance."
   });
   var dim = WK.toggle({ label: "Embedding dimension d",
     options: DIMS.map(function (d) { return { value: d, label: String(d) }; }),
@@ -73,7 +79,7 @@ WK.mount("widget-attention", function (root, WK) {
   var sc = WK.toggle({ label: "Divide scores by",
     options: [{ value: true, label: "√d" }, { value: false, label: "nothing" }],
     value: state.scale, onchange: function (v) { state.scale = v; draw(); } });
-  var qt = WK.toggle({ label: "Query token",
+  var qt = WK.toggle({ label: "Query token (for the bars)",
     options: TOKENS.map(function (t, i) { return { value: i, label: t }; }),
     value: state.q, onchange: function (v) { state.q = v; draw(); } });
   f.controls.appendChild(dim.root);
@@ -83,9 +89,9 @@ WK.mount("widget-attention", function (root, WK) {
   var W = 640, H = 300, CELL = 40, GX = 90, GY = 40;
   var svg = WK.svg(W, H, { "aria-label": "Attention weight grid and one query row" });
   f.body.appendChild(svg);
-  var maxStat = WK.stat({ label: "largest weight in the row", value: "" });
-  var entStat = WK.stat({ label: "entropy of the row (bits, max 2.58)", value: "" });
-  var rawStat = WK.stat({ label: "largest raw score", value: "" });
+  var maxStat = WK.stat({ label: "largest weight per row, averaged", value: "" });
+  var entStat = WK.stat({ label: "entropy per row, averaged (bits, max 2.58)", value: "" });
+  var rawStat = WK.stat({ label: "largest raw score (before the divisor)", value: "" });
   f.stats.appendChild(maxStat.root);
   f.stats.appendChild(entStat.root);
   f.stats.appendChild(rawStat.root);
@@ -94,7 +100,6 @@ WK.mount("widget-attention", function (root, WK) {
   function draw() {
     var r = model(state.d, state.scale), n = TOKENS.length, i, j;
     WK.clear(svg);
-    // Column labels (keys) and row labels (queries).
     for (j = 0; j < n; j++) {
       svg.appendChild(WK.h("text", { x: GX + j * CELL + CELL / 2, y: GY - 10,
         "text-anchor": "middle", "font-size": 12, fill: "muted" }, TOKENS[j]));
@@ -128,11 +133,13 @@ WK.mount("widget-attention", function (root, WK) {
     }
     svg.appendChild(WK.h("line", { x1: bx, x2: bx + n * (bw + 6) - 6, y1: by + bh, y2: by + bh,
       stroke: "rule" }));
-    var row = r.A[state.q];
-    maxStat.set(Math.max.apply(null, row).toFixed(2));
-    entStat.set(entropyBits(row).toFixed(2));
-    var raw = r.S[state.q].map(function (s) { return state.scale ? s * Math.sqrt(state.d) : s; });
-    rawStat.set(Math.max.apply(null, raw).toFixed(1));
+    maxStat.set(mean(r.A.map(function (row) { return Math.max.apply(null, row); })).toFixed(2));
+    entStat.set(mean(r.A.map(entropyBits)).toFixed(2));
+    var raw = 0;
+    for (i = 0; i < n; i++) for (j = 0; j < n; j++) {
+      raw = Math.max(raw, Math.abs(r.S[i][j]) * (state.scale ? Math.sqrt(state.d) : 1));
+    }
+    rawStat.set(raw.toFixed(1));
   }
   draw();
 });

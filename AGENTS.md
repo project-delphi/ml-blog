@@ -270,8 +270,8 @@ into an inline `<script>` from a Python cell: `bayesian-bootstrap`,
 `statistical-jackknife`, `svd-rotate-stretch-rotate`, `tensor-inverses-in-practice`,
 `uses-of-tensor-factorizations`, `volcano-plots`, `why-so-many-matrix-factorizations`
 (`aav-immune-response` loads its bundle as a resource but predates the kit). Re-derive
-the list with `grep -l 'read_text()' posts/*/index.qmd` rather than trusting this
-sentence. For those, Quarto hashes `index.qmd` **alone**, so editing the sidecar leaves
+the list with `grep -l 'widgets.js").read_text()' posts/*/index.qmd` rather than
+trusting this sentence. For those, Quarto hashes `index.qmd` **alone**, so editing the sidecar leaves
 `_freeze/` valid and a project render keeps serving the old bundle with no warning:
 **re-render that post explicitly** (its real venv) before committing. Do not delete
 `_freeze/posts/<slug>/` instead: `check_freeze` returns clean when a non-legacy record

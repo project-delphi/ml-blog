@@ -23,7 +23,7 @@ Every post loads `kit.js` through `posts/_metadata.yml`, so a widget file assume
      - widget-data/data.js   # only if the widget ships precomputed data
    ```
 
-   ```markdown
+   ````markdown
    ::: {#widget-attention}
    :::
 
@@ -31,7 +31,7 @@ Every post loads `kit.js` through `posts/_metadata.yml`, so a widget file assume
    <script src="widget-data/data.js"></script>
    <script src="widgets.js"></script>
    ```
-   ```
+   ````
 
 2. In `widgets.js`, build inside `WK.mount`:
 
