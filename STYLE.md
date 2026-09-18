@@ -21,8 +21,8 @@ the sections it names.
 
 Pick one before writing or editing a post.
 
-- **Register A — personal / old.** Claim headings, narrative spine, plain-English warm-up. Use it for personal essays, memoirs, and any post dated before 2026-08-28.
-- **Register B — recent technical.** Dry, numbered, list-first documentation. Use it for technical posts dated 2026-08-28 or later, and for new technical posts.
+- **Register A — personal / old.** Claim headings, narrative spine, plain-English warm-up. Use it for personal essays, memoirs, and any post dated before 2025-08-28.
+- **Register B — recent technical.** Dry, numbered, list-first documentation. Use it for technical posts dated 2025-08-28 or later, and for new technical posts.
 
 Personal posts currently in Register A regardless of date: `cheapest-ladder-is-shortest`, `brian-ripley-rousseeuw-prize`, `nvidia-buys-the-pyg-team`, `first-industry-job`, `consciousness-recursive-prediction`. Do not convert those to Register B.
 

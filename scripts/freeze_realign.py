@@ -64,6 +64,7 @@ CELL_OPT_RE = re.compile(r"^#\|\s*([\w.-]+):\s*(.*?)\s*$")
 # Inline code the engine evaluates in prose: `{python} expr`.
 INLINE_RE = re.compile(r"`\{python\}[^`\n]*`")
 DIV_ID_RE = re.compile(r"::: \{#([^\s}]+)")
+EXEC_COUNT_RE = re.compile(r"execution_count=(\d+)")
 
 
 class RealignError(Exception):
@@ -179,7 +180,9 @@ def cell_options(cell: str) -> dict[str, str]:
         m = CELL_OPT_RE.match(line)
         if not m:
             break
-        opts[m.group(1)] = m.group(2).strip("\"'").lower()
+        value = m.group(2).strip("\"'")
+        # Labels are case-sensitive ids; the switches are compared lowercase.
+        opts[m.group(1)] = value if m.group(1) == "label" else value.lower()
     return opts
 
 
@@ -191,6 +194,7 @@ def cell_end(
     next_prose: str,
     is_last: bool,
     next_cell: str | None = None,
+    expected_count: int | None = None,
 ) -> int:
     """Return the index just past cell `k`'s rendering in the stored markdown.
 
@@ -206,10 +210,27 @@ def cell_end(
     while pos < len(markdown) and markdown[pos] == "\n":
         pos += 1
     if CELL_DIV_RE.match(markdown, pos):
+        # The div at hand may belong to a *later* cell when this one rendered
+        # nothing. A labelled cell renders as `::: {#cell-label .cell}`, so an
+        # id that is not this cell's label gives it away; so does an
+        # `execution_count` other than the one this cell would have received.
         div_id = DIV_ID_RE.match(markdown, pos)
-        # A labelled cell renders as `::: {#cell-label .cell}`; a div carrying
-        # another id belongs to a later cell, so this one rendered nothing.
-        if label and div_id and div_id.group(1) not in (label, f"cell-{label}"):
+        line_end = markdown.find("\n", pos)
+        count = EXEC_COUNT_RE.search(markdown, pos, line_end if line_end > 0 else None)
+        # An unlabelled cell gets a random hex id, so only a `cell-` id (the
+        # form a label produces) proves the div is someone else's.
+        ours = True
+        if div_id and label and div_id.group(1) not in (label, f"cell-{label}"):
+            ours = False
+        if div_id and not label and div_id.group(1).startswith("cell-"):
+            ours = False
+        if (
+            count
+            and expected_count is not None
+            and int(count.group(1)) != expected_count
+        ):
+            ours = False
+        if not ours:
             return pos
         return cell_output_end(markdown, pos, k)
     if m := tolerant(cell).match(markdown, pos):
@@ -303,6 +324,16 @@ def realign(old_src: str, new_src: str, record: dict) -> dict:
     out = []
     pos = 0
     n = len(old_cells)
+    # The `execution_count` on a cell's div line is the cell's index among the
+    # source's cells in the same language, `eval: false` ones included (the
+    # kernel's own counter sits on the inner output div); a `{r}` block in a
+    # Python post is kept as a fence and does not count.
+    seen: dict[str, int] = {}
+    index = []
+    for cell in old_cells:
+        lang = cell[3:].split("}", 1)[0].strip("{")
+        seen[lang] = seen.get(lang, 0) + 1
+        index.append(seen[lang])
     for i, (old_p, new_p) in enumerate(zip(old_prose, new_prose)):
         if i > 0:
             end = cell_end(
@@ -313,6 +344,7 @@ def realign(old_src: str, new_src: str, record: dict) -> dict:
                 old_p,
                 i == n,
                 old_cells[i] if i < n else None,
+                index[i - 1],
             )
             out.append(markdown[pos:end])
             pos = end
@@ -349,13 +381,14 @@ def realign(old_src: str, new_src: str, record: dict) -> dict:
 
 def git_show(rev: str, path: Path) -> str | None:
     """Return the file at `rev`, or None if it did not exist there."""
+    # Bytes, not text: the hash Quarto and check_posts compare is over the raw
+    # file, so newline translation here would make a realigned hash never match.
     proc = subprocess.run(
         ["git", "show", f"{rev}:{path.as_posix()}"],
         cwd=cp.ROOT,
         capture_output=True,
-        text=True,
     )
-    return proc.stdout if proc.returncode == 0 else None
+    return proc.stdout.decode("utf-8") if proc.returncode == 0 else None
 
 
 def source_for_hash(path: Path, wanted: str) -> str | None:
@@ -403,7 +436,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{slug}: has no _freeze/ record, so there is nothing to realign.")
         return 1
     record = json.loads(record_path.read_text())
-    new_src = source.read_text()
+    new_src = source.read_bytes().decode("utf-8")
     new_hash = hashlib.md5(new_src.encode("utf-8")).hexdigest()
     if record["hash"] == new_hash:
         print(f"{slug}: frozen record already matches the source.")

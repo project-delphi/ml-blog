@@ -166,6 +166,7 @@ def test_quiet_setup_cell_leaves_no_trace_when_next_prose_is_right_there():
 def test_no_eval_cell_is_stored_as_its_fence():
     old = source(*DEFAULT, cells=(CELL_NOEVAL, CELL_B))
     new = old.replace("three", "three, edited")
+    # The div-line count is the cell's index, so an unrun cell still counts.
     markdown = (
         FRONT
         + "\n"
@@ -179,6 +180,42 @@ def test_no_eval_cell_is_stored_as_its_fence():
     rec = fr.realign(old, new, frozen(old, markdown))
     assert rec["result"]["markdown"].endswith(OUT_B + "\nthree, edited\n")
     assert CELL_NOEVAL in rec["result"]["markdown"]
+
+
+def test_unlabelled_hidden_cell_does_not_claim_a_labelled_div():
+    # Prose added between a hidden cell and the figure after it must land
+    # before that figure, not after it.
+    old = source("one\n", "\n", "\nthree\n", cells=(CELL_HIDDEN, CELL_LABELLED))
+    new = source(
+        "one\n", "\nNEW PROSE HERE\n", "\nthree\n", cells=(CELL_HIDDEN, CELL_LABELLED)
+    )
+    markdown = FRONT + "\n" + "one\n" + "\n" + OUT_B_LABELLED + "\nthree\n"
+    rec = fr.realign(old, new, frozen(old, markdown))
+    assert norm(rec["result"]["markdown"]) == norm(
+        FRONT + "one\n" + "NEW PROSE HERE\n" + OUT_B_LABELLED + "\nthree\n"
+    )
+
+
+def test_unlabelled_hidden_cell_does_not_claim_the_next_unlabelled_div():
+    # Same shape with no labels at all: the execution count gives it away.
+    old = source("one\n", "\n", "\nthree\n", cells=(CELL_HIDDEN, CELL_B))
+    new = source(
+        "one\n", "\nNEW PROSE HERE\n", "\nthree\n", cells=(CELL_HIDDEN, CELL_B)
+    )
+    markdown = FRONT + "\n" + "one\n" + "\n" + OUT_B + "\nthree\n"
+    rec = fr.realign(old, new, frozen(old, markdown))
+    assert norm(rec["result"]["markdown"]) == norm(
+        FRONT + "one\n" + "NEW PROSE HERE\n" + OUT_B + "\nthree\n"
+    )
+
+
+def test_mixed_case_label_keeps_its_case():
+    cell = CELL_LABELLED.replace("fig-b", "fig-MyPlot")
+    out = OUT_B_LABELLED.replace("cell-fig-b", "cell-fig-MyPlot")
+    old = source(*DEFAULT, cells=(CELL_A, cell))
+    new = old.replace("three", "three, edited")
+    rec = fr.realign(old, new, frozen(old, stored(*DEFAULT, outs=(OUT_A, out))))
+    assert rec["result"]["markdown"].endswith(out + "\nthree, edited\n")
 
 
 def test_asis_cell_is_bridged_to_the_next_prose():

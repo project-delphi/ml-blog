@@ -79,11 +79,10 @@ they cannot be re-rendered at all. See [Why `_freeze/` is committed](#why-_freez
 4. If it runs code, build its venv and kernel, commit `requirements.txt`, and add the
    kernel name to `kernels-stub` in the `Makefile` (`ENVIRONMENTS.md`).
 5. If it reads a data file at render time, un-ignore that directory in `.gitignore`
-   **and** add the slug to three excludes in `.pre-commit-config.yaml`:
-   `check-added-large-files` (a 500 kB cap that would reject the file),
-   `trailing-whitespace` and `end-of-file-fixer` (which would rewrite cached upstream
-   bytes so the committed copy no longer matches a fresh fetch). Copy the shape of the
-   three existing carve-outs.
+   (both the directory and `/**`, copying an existing carve-out). The pre-commit
+   hooks already skip every `posts/*/data/` through the top-level `exclude` in
+   `.pre-commit-config.yaml`, so the 500 kB cap and the whitespace fixers never touch
+   cached upstream bytes; nothing to add there.
 6. **Finish with a project render.** A single-document render writes only
    `docs/posts/<slug>/`, so the post goes live at its own URL while staying invisible on
    the home page and in search. `make check-posts` fails when a post is missing from
