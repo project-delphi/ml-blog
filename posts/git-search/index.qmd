@@ -1,0 +1,254 @@
+---
+title: "grep Searches the Working Tree, git log Searches Time"
+description: "A real bug hunt through PyTorch Geometric's repository, run in April 2024: two strings from a maintainer's note, and the five commands that find where each one lives, lived, or never was."
+author: "Ravi Kalia"
+date: "2024-04-22"
+categories: [Development, Tooling]
+tags: [git, grep, search, pytorch-geometric, debugging]
+image: "./cover.png"
+format:
+  html:
+    code-fold: false
+---
+
+![A robot with a magnifying glass. Photo by [Growtika](https://unsplash.com/@growtika) on [Unsplash](https://unsplash.com/photos/a-white-robot-holding-a-magnifying-glass-g5kpSCf3dOs).](./cover.png)
+
+A maintainer of [PyTorch Geometric](https://github.com/pyg-team/pytorch_geometric)
+told me, in two lines, why some of its tests fail on Apple Silicon:
+
+> there are a few tests that were disabled around `test_sparse`
+
+> the `convert_coo_to_csr_indices` doesn't seem to be supported
+
+Two strings, and no file names. Either one could be a file, a function, a variable,
+a commit message, or something that used to be in the repository and is not any more.
+Finding them is the whole of this post, run against a fresh clone in April 2024 with
+the outputs kept as they were, because the commands are the same on any repository
+and the results show what each command can and cannot see. The one distinction that
+organises them: some tools search the files on disk right now, and some search every
+version git remembers.
+
+## The working tree: find for names, grep for contents
+
+The clone is the starting state, and the two Unix tools that know nothing about git
+are the fastest first pass.
+
+```bash
+git clone https://github.com/pyg-team/pytorch_geometric.git
+cd pytorch_geometric
+```
+
+A name is a `find` question:
+
+```bash
+find . -name "*test_sparse*" -o -name "*convert_coo_to_csr_indices*"
+```
+
+```
+./test/utils/test_sparse.py
+```
+
+One hit, and already the shape of an answer: the "tests around `test_sparse`" are
+probably in a file called that. Contents are a `grep` question, recursive with line
+numbers:
+
+```bash
+grep -rn . -e "test_sparse" -e "convert_coo_to_csr_indices"
+```
+
+```
+./test/utils/test_cross_entropy.py:9:def test_sparse_cross_entropy_multiclass(with_edge_label_weight):
+./test/utils/test_cross_entropy.py:32:def test_sparse_cross_entropy_multilabel(with_edge_label_weight):
+./test/test_edge_index.py:102:def test_sparse_tensor(dtype, device):
+./test/test_edge_index.py:992:def test_sparse_narrow(device):
+./test/test_edge_index.py:1026:def test_sparse_resize(device):
+./torch_geometric/testing/asserts.py:24:    test_sparse_layouts: Optional[List[Union[str, torch.layout]]] = None,
+./torch_geometric/testing/asserts.py:49:        test_sparse_layouts (List[str or int]
+```
+
+Seven lines in three files for the first string, and nothing at all for the second.
+That absence is the interesting result. `convert_coo_to_csr_indices` is not in any
+file on disk, so if it was ever in the repository it has been renamed or removed, and
+the working tree cannot say which. That is the limit of `find` and `grep`: they see
+one snapshot, the current one.
+
+## The repository: git ls-files, git grep, and git log -S
+
+Git keeps every snapshot it was ever asked to keep, and three commands search them
+rather than the disk. The first two are the working-tree tools again, restricted to
+what git tracks, which drops build artefacts and the `.git` directory itself from the
+results:
+
+```bash
+git ls-files | grep "test_sparse"
+```
+
+```
+test/utils/test_sparse.py
+```
+
+`git grep` does the same for contents, and because it reads git's index rather than
+walking the filesystem it is quicker; on this clone the same search took 23 ms
+against 346 ms for `grep -r`. The third command is the one the working tree cannot
+imitate. `git log -S <string>` lists the commits where the number of occurrences of
+the string changed, which is to say the commits that added or removed it, on every
+branch with `--all`:
+
+```bash
+git log -S "test_sparse" --all | head -n 20
+```
+
+```
+commit dba9659f6c4f29fd2be1f50b5ea12a29a926082f
+Author: Matthias Fey <matthias.fey@tu-dortmund.de>
+Date:   Thu Feb 29 14:04:19 2024 +0100
+
+    Fix `EdgeIndex.resize_` linting issues (#8993)
+
+commit 123e38ef6715f75ed9198d256cc2cb984b431630
+Author: Poovaiah Palangappa <98763718+pmpalang@users.noreply.github.com>
+Date:   Sun Feb 11 03:32:44 2024 -0800
+
+    Example of a recommender system (#8546)
+    ...
+```
+
+Two flags make that output answer a sharper question. `--name-only` with a
+`--pretty` format prints only the hash and the files touched, and `--diff-filter=A`
+keeps just the commits that *added* a file, so this is where each file containing the
+string first appeared on the main branch:
+
+```bash
+git log master -S "test_sparse" --pretty=format:"%h" --name-only --diff-filter=A
+```
+
+```
+801723efa
+test/utils/test_cross_entropy.py
+
+1dadc0705
+torch_geometric/testing/asserts.py
+
+2c01aa22c
+test/utils/test_sparse.py
+```
+
+And `-G` takes a regular expression instead of a fixed string, matching any commit
+whose diff contains it. Run for the second string it returns nothing, on every
+branch, which settles the question the working tree could not: `convert_coo_to_csr_indices`
+was never in this repository under that name. Loosen the pattern to the middle of it
+and the history answers at once:
+
+```bash
+git log -G "coo_to_csr" --pretty=format:"%h" --name-only | head -n 20
+```
+
+```
+390942fc4
+torch_geometric/data/edge_index.py
+
+699120e25
+torch_geometric/data/edge_index.py
+
+a6f0f4947
+torch_geometric/data/edge_index.py
+
+cf786b735
+torch_geometric/data/edge_index.py
+
+b825dc637
+torch_geometric/data/edge_index.py
+
+b5ecfd9b4
+torch_geometric/data/graph_store.py
+torch_geometric/nn/conv/cugraph/base.py
+torch_geometric/nn/conv/rgcn_conv.py
+torch_geometric/nn/dense/linear.py
+```
+
+Six commits, mostly in one file. To see the matching lines *as they were in each of
+those commits*, rather than in today's file, feed the hashes to `git grep`, which
+accepts a commit to search:
+
+```bash
+git log --pretty=format:"%h" -G "coo_to_csr" --all | while read commit; do
+    echo "Commit: $commit"
+    git grep -n "coo_to_csr" $commit
+done | head -n 20
+```
+
+```
+Commit: 390942fc4
+390942fc4:torch_geometric/data/edge_index.py:344:        self._indptr = torch._convert_indices_from_coo_to_csr(
+390942fc4:torch_geometric/data/edge_index.py:382:            rowptr = self._T_indptr = torch._convert_indices_from_coo_to_csr(
+390942fc4:torch_geometric/data/edge_index.py:403:            colptr = self._T_indptr = torch._convert_indices_from_coo_to_csr(
+390942fc4:torch_geometric/utils/sparse.py:480:    return torch._convert_indices_from_coo_to_csr(
+...
+```
+
+There is the answer. The maintainer's `convert_coo_to_csr_indices` was a from-memory
+rendering of `torch._convert_indices_from_coo_to_csr`, a private PyTorch function
+that the `EdgeIndex` class calls to build compressed-sparse-row pointers, and the
+line numbers say exactly where the unsupported call is made. The search that found it
+was the one that looked through time with a loose pattern, after the exact string had
+failed everywhere.
+
+## The same log filters by who and when
+
+`git log` takes the same filters for the other questions a bug hunt asks. By author:
+
+```bash
+git log --author="ravkalia" --since="2022-01-01" --until="2024-02-31" | head -n 20
+```
+
+```
+commit 25b2f208e671eeec285bfafa2e246ea0a234b312
+Author: Ravi Kalia <ravkalia@gmail.com>
+Date:   Wed Feb 21 11:11:33 2024 -0500
+
+    docs: fix broken links to source of graph classification datasets (#8946)
+    ...
+```
+
+By commit message, with `--grep`, and one line per commit:
+
+```bash
+git log --oneline --grep="docs" --since="2022-01-01" --until="2022-02-31"
+```
+
+```
+24a185e72 Add general `Explainer` Class (#4090)
+6002170a5 Make models compatible to Captum (#3990)
+14d588d4c Update attention.py (#4009)
+50ff5e6d6 Add `full` extras to install command in contribution docs (#3991)
+1e24b3a16 Refactor: `MLP` initialization (#3957)
+3e4891be6 Doc improvements to set2set layers (#3889)
+fac848c25 Let `TemporalData` inherit from `BaseData` and add docs (#3867)
+0c29b0d5b Updated docstring for shape info - part 2 (#3739)
+```
+
+`--grep` searches messages, `-S` and `-G` search diffs, and it is easy to reach for
+the wrong one: a function renamed in a commit whose message never mentions it is
+invisible to `--grep` and obvious to `-S`.
+
+## Where it stops holding
+
+History search costs what it finds. `-S` and `-G` walk every commit's diff, so on a
+repository with tens of thousands of commits they take seconds to minutes, and
+`--all` multiplies that by the branches; scope with a branch name or a path
+(`git log -S foo -- torch_geometric/`) when the question allows. None of these tools
+understands code: `grep` cannot tell a definition from a call, a comment, or a string
+that happens to match, and the loose pattern that found the answer above would, on a
+bigger vocabulary, also find noise. And git only remembers what was committed. A
+change that was never committed, or was rewritten out of history, is beyond all five
+commands.
+
+Names. Find. Contents. Grep. History. Log. Loosen. The. Pattern. Last.
+
+## References
+
+- [git log documentation](https://git-scm.com/docs/git-log), in particular `-S`,
+  `-G`, `--author`, `--grep` and `--diff-filter`.
+- [git grep documentation](https://git-scm.com/docs/git-grep).
+- [Developing PyTorch Geometric on Apple Silicon](../developing-pytorch-geometric-on-m1/)
+  on this blog, for the failing tests this hunt started from.

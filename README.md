@@ -10,7 +10,7 @@ Essays on machine learning, statistics, and the tooling around them — by Ravi 
 
 ## What's here
 
-113 posts written since February 2024 (107 Quarto `.qmd`, 6 Jupyter `.ipynb`), each one
+113 posts written since February 2024, each one a Quarto `.qmd`
 self-contained under `posts/<slug>/`. The recurring threads are machine learning and
 statistics, NLP and LLMs, mathematics — linear algebra, shape analysis, topology —
 data engineering, and developer tooling.
@@ -38,7 +38,7 @@ predate the convention.
 ## Repo layout
 
 ```
-posts/<slug>/     one post: index.qmd (or .ipynb), cover.png, sometimes
+posts/<slug>/     one post: index.qmd, cover.png, sometimes
                   requirements.txt and a src/ of scripts run ahead of the render
 docs/             the rendered site — committed, and served by GitHub Pages from main
 _freeze/          Quarto's cached execution output — committed on purpose

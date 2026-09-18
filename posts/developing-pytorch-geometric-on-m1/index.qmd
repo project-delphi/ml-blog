@@ -1,0 +1,261 @@
+---
+title: "PyTorch Geometric Installs on Apple Silicon, and Its Test Suite Does Not"
+description: "A March 2024 record of getting a developer install of PyTorch Geometric onto an M1 Pro: the wheels that just work, the C++ extensions that have to be built from source, and the test run that segfaults on collection."
+author: "Ravi Kalia"
+date: "2024-03-03"
+categories: [Deep Learning, Development, Python]
+tags: [pytorch-geometric, apple-silicon, m1, mps, open-source]
+image: "./cover.png"
+format:
+  html:
+    code-fold: false
+---
+
+![A MacBook Pro. Photo by [TheRegisti](https://unsplash.com/@theregisti) on [Unsplash](https://unsplash.com/photos/a-close-up-of-a-laptop-on-a-table-M_DMDRj0IuQ).](./cover.png)
+
+I forked [PyTorch Geometric](https://github.com/pyg-team/pytorch_geometric) in
+early 2024 to contribute to it, and the first pull request took a back seat to a
+question I had not expected to spend a week on: can the library be developed at all
+on the laptop in front of me? Using it was never in doubt. The wheels install and
+import on an M1 Pro, and PyTorch runs on Apple's GPU through the Metal Performance
+Shaders backend, `mps`. Developing it is different, because a developer install pulls
+in a set of C++ extensions that the project ships pre-built for Intel and Nvidia and
+not for Apple Silicon. This post is the record of how far I got in March 2024, with
+the versions and the failure preserved as they were, and the reasons the gap exists.
+The project has moved since; the shape of the problem has not.
+
+## The user install is one script and works
+
+The library's wheels are architecture-neutral Python, so as a user there is nothing
+to build. The steps are the usual ones: a clean environment, a recent PyTorch, then
+the package, then an import to prove it. This is the script I ran, from a
+[gist](https://gist.github.com/project-delphi/38d1db47ed28dde3c8418d5f435c865c), with
+conda for the environment because that is what Apple's own PyTorch instructions
+assumed at the time:
+
+```bash
+# set variables here
+DIR="$HOME/Code/throwaway/pytorch-geometric-user-install"
+PYTHON_VERSION=3.11
+RECENT_TORCH_VERSION=2.2.0
+
+# install miniconda for apple silicon, if not already installed
+if [ -d "$HOME/anaconda3" ] || [ -d "$HOME/miniconda3" ]
+then
+    echo "Conda is installed"
+else
+    curl -O https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-arm64.sh
+    sh Miniconda3-latest-MacOSX-arm64.sh -b -u  > /dev/null 2>&1
+fi
+
+mkdir -p "$DIR"
+cd "$DIR"
+conda create --yes  -p $DIR/.venv python=$PYTHON_VERSION > /dev/null 2>&1
+eval "$(conda shell.bash hook)"
+conda activate $DIR/.venv
+pip install -q --upgrade pip
+
+##### TORCH BUILD AND INSTALL ON M1, to use GPUs #####
+pip install -q numpy # to remove user warning with torch install
+pip install -q mpmath==1.3.0 # bugfix
+xcode-select --install  > /dev/null 2>&1 # if xcode not installed
+
+###### install torch ######
+pip install -q --pre torch==$RECENT_TORCH_VERSION torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cpu
+
+# install torch geometric
+pip install -q torch-geometric
+
+# check
+python --version
+python -c "import torch; print(f'torch version: {torch.__version__}')"
+python -c "import torch_geometric as pyg; print(f'torch geometric version: {pyg.__version__}')"
+```
+
+```
+Conda is installed
+Python 3.11.8
+torch version: 2.2.0
+torch geometric version: 2.5.1
+```
+
+Two lines in there are scar tissue rather than instruction. The `mpmath==1.3.0` pin
+worked around a SymPy import error in the PyTorch of the day, and the separate NumPy
+install silenced a warning PyTorch raised when NumPy arrived second. Both are the
+kind of thing a script accumulates and a reader a year later should feel free to
+drop.
+
+## The developer install needs four extensions built from source
+
+The contributing guide's recipe is short: install PyTorch, uninstall any packaged
+copy of the library, clone, `pip install -e ".[dev,full]"`, run `pytest`. On a
+supported architecture it is that short. On Apple Silicon the `full` extra is where
+it stops, because it depends on `pyg-lib`, `torch-scatter`, `torch-sparse`,
+`torch-cluster` and `torch-spline-conv`: C++ extensions compiled against a specific
+PyTorch, for which the project published wheels for Linux and Windows on Intel and
+Nvidia hardware, and none for `arm64` macOS. The M1 was not available on GitHub
+Actions when the project started, so it was never in the build matrix, and the
+maintainers said plainly that adding it was not planned. Each extension's tracker had
+its own thread of M1 users: [`pyg-lib`](https://github.com/search?q=repo%3Apyg-team%2Fpyg-lib+m1&type=issues),
+[`torch-scatter`](https://github.com/search?q=repo%3Arusty1s%2Fpytorch_scatter+m1&type=issues),
+[`torch-sparse`](https://github.com/search?q=repo%3Arusty1s%2Fpytorch_sparse+m1&type=issues),
+[`torch-cluster`](https://github.com/search?q=repo%3Arusty1s%2Fpytorch_cluster+m1&type=issues).
+
+The way through, collected from those threads, is to build each extension locally
+with `clang`, with the macOS deployment target set so the compiled objects match the
+running system. This is the machine it ran on:
+
+```bash
+echo "Operating System: $(uname -s)"
+echo "Hardware: $(uname -m)"
+echo "macOS Version: $(sw_vers -productVersion)"
+echo "Chipset: $(sysctl -n machdep.cpu.brand_string)"
+```
+
+```
+Operating System: Darwin
+Hardware: arm64
+macOS Version: 14.4
+Chipset: Apple M1 Pro
+```
+
+And this is the script, also a
+[gist](https://gist.github.com/project-delphi/b3b5cc91386997ff882f0a3f04a4b89a). The
+first half is the user install again; the second half is the point, four source
+builds with the compiler and target pinned, then the editable install of the fork:
+
+```bash
+# set variables here
+DIR="$HOME/Code/throwaway/pytorch-geometric-developer-install"
+PYTHON_VERSION=3.11
+RECENT_TORCH_VERSION=2.2.0
+GITHUB_USERNAME="project-delphi"
+MIN_MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)
+
+# install miniconda for apple silicon, if not already installed
+if [ ! -d "$HOME/anaconda3" ] && [ ! -d "$HOME/miniconda3" ]
+then
+    echo "installing conda..."
+    curl -O https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-arm64.sh
+    sh Miniconda3-latest-MacOSX-arm64.sh -b -u  > /dev/null 2>&1
+fi
+
+mkdir -p "$DIR"
+cd "$DIR"
+conda create --yes  -p $DIR/.venv python=$PYTHON_VERSION  > /dev/null 2>&1
+eval "$(conda shell.bash hook)"
+conda activate $DIR/.venv
+
+pip install -q --upgrade pip
+
+##### TORCH BUILD AND INSTALL ON M1, to use GPUs #####
+pip install -q numpy # to remove user warning with torch install
+pip install -q mpmath==1.3.0 # bugfix
+xcode-select --install  > /dev/null 2>&1 # if xcode not installed
+
+###### install pytorch ######
+pip install -q --pre torch==$RECENT_TORCH_VERSION torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cpu
+
+# install dev build dependencies
+pip install -q cmake
+pip install -q ninja wheel
+pip install -q git+https://github.com/pyg-team/pyg-lib.git
+MACOSX_DEPLOYMENT_TARGET=$MIN_MACOSX_DEPLOYMENT_TARGET CC=clang CXX=clang++ python -m pip -q --no-cache-dir  install  torch-scatter
+MACOSX_DEPLOYMENT_TARGET=$MIN_MACOSX_DEPLOYMENT_TARGET CC=clang CXX=clang++ python -m pip -q --no-cache-dir  install  torch-sparse
+MACOSX_DEPLOYMENT_TARGET=$MIN_MACOSX_DEPLOYMENT_TARGET CC=clang CXX=clang++ python -m pip -q --no-cache-dir  install  torch-cluster
+MACOSX_DEPLOYMENT_TARGET=$MIN_MACOSX_DEPLOYMENT_TARGET CC=clang CXX=clang++ python -m pip -q --no-cache-dir  install  torch-spline-conv
+
+# clone the forked repository and rebase to original
+git clone "https://github.com/$GITHUB_USERNAME/pytorch_geometric.git"  2>/dev/null
+cd pytorch_geometric
+if ! git remote | grep -q 'upstream'; then
+    git remote add upstream "https://github.com/pyg-team/pytorch_geometric"
+fi
+git fetch upstream  -q
+git rebase upstream/master
+
+# build dev install
+MACOSX_DEPLOYMENT_TARGET=$MIN_MACOSX_DEPLOYMENT_TARGET CC=clang CXX=clang++ python -m pip install -q --no-cache-dir -e ".[dev,full]"  #> /dev/null 2>&1
+
+# check
+python --version
+python -c "import torch; print(f'torch version: {torch.__version__}')"
+python -c "import torch_geometric as pyg; print(f'torch geometric version: {pyg.__version__}')"
+```
+
+It builds, and it imports. That is a working, editable install of the library with
+every optional dependency on a machine the project does not support, and it took an
+afternoon rather than a week. The week went on what came next.
+
+## The tests fail on collection, and which ones fail changes by the day
+
+A developer install without a passing test suite is half an install, because the
+suite is how a contributor knows a change broke nothing. This is what the default
+suite did on that day:
+
+```bash
+DIR="$HOME/Code/throwaway/pytorch-geometric-developer-install"
+cd "$DIR"
+eval "$(conda shell.bash hook)"
+conda activate $DIR/.venv
+# install missing packages needed for testing
+pip install -q matplotlib-inline ipython
+pytest -q --tb=no | tail -n 1
+```
+
+```
+Fatal Python error: Segmentation fault
+
+Current thread 0x00000001f82fbac0 (most recent call first):
+  File ".../site-packages/torch/_ops.py", line 755 in __call__
+  File ".../site-packages/pyg_lib/partition/__init__.py", line 35 in metis
+  File ".../torch_geometric/testing/decorators.py", line 224 in withMETIS
+  File ".../test/distributed/test_dist_link_neighbor_loader.py", line 140 in <module>
+  ...
+```
+
+The traceback is the diagnosis. Pytest never reached a test: it crashed while
+*collecting* them, because a test module calls a `withMETIS` decorator at import
+time, the decorator calls into `pyg-lib`'s METIS graph partitioner to decide whether
+to skip, and that call segfaults on the locally built extension. One unsupported
+native call in one decorator takes the whole suite down before it starts.
+
+The unsettling part was the variance. A week earlier the suite had failed, a few days
+earlier it had passed, and now it failed again, each time because commits had landed
+on the main branch that were tested on the architectures in CI and not on this one.
+The lead maintainer had, more than once, adjusted tests on his own Apple machine so
+that they passed, which is generous and cannot scale: every merge is a fresh chance
+to break a platform nobody's runner checks. The honest options were three. Help build
+the community test effort the maintainers had floated, which needs a runner that is
+not one person's laptop. Start smaller, with `mps`-specific test decorators and test
+documentation, which was the maintainer's own suggestion when I asked. Or develop in
+the cloud on a supported architecture and keep the laptop for using the library,
+which is what I did in the meantime.
+
+## Where it stops holding
+
+Everything above is dated March 2024: PyTorch 2.2, PyTorch Geometric 2.5.1, macOS
+14.4. The project has since folded parts of the extension packages into PyTorch
+itself and added an Apple Silicon test runner, so the specific failures here may be
+gone. What does not go away is the structure. A library whose developer install
+depends on compiled extensions supports exactly the architectures in its CI matrix,
+and on any other machine an install that imports is not evidence that the tests will
+run, or that they will still run after the next merge.
+
+Wheels. Install. Extensions. Build. Tests. Segfault. Support. Means. A. Runner.
+
+## References
+
+- [PyTorch on Apple Metal](https://developer.apple.com/metal/pytorch/), Apple's
+  installation notes for the `mps` backend.
+- [PyTorch Geometric contributing guide](https://github.com/pyg-team/pytorch_geometric/blob/master/.github/CONTRIBUTING.md).
+- The two install scripts as gists:
+  [user](https://gist.github.com/project-delphi/38d1db47ed28dde3c8418d5f435c865c) and
+  [developer](https://gist.github.com/project-delphi/b3b5cc91386997ff882f0a3f04a4b89a).
+- Apple Silicon issue searches on
+  [`pyg-lib`](https://github.com/search?q=repo%3Apyg-team%2Fpyg-lib+m1&type=issues),
+  [`torch-scatter`](https://github.com/rusty1s/pytorch_scatter/issues/183),
+  [`torch-sparse`](https://github.com/search?q=repo%3Arusty1s%2Fpytorch_sparse+m1&type=issues) and
+  [`torch-cluster`](https://github.com/search?q=repo%3Arusty1s%2Fpytorch_cluster+m1&type=issues).
+- [Searching a git repository](../git-search/) on this blog, which hunts the
+  disabled sparse-tensor tests this post ran into.
