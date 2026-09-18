@@ -55,8 +55,8 @@ kernels-stub: install
 
 # fail if a post executes code without a pinned kernel + requirements.txt, or
 # if its frozen output has drifted from its source. See scripts/check_posts.py.
-check-posts:
-	python3 scripts/check_posts.py
+check-posts:                   # ARGS=--no-categories while adding a category
+	python3 scripts/check_posts.py $(ARGS)
 # After a prose-only edit to a freeze-backed post: rewrite the frozen record so
 # the next project render reuses the stored cell outputs instead of
 # re-executing the post. Refuses if any code cell changed. See

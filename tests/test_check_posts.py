@@ -54,3 +54,35 @@ def test_check_categories_flags_unknown_and_missing():
     problems = cp.check_categories(["machine learning", "Docker"], canon)
     assert any("`machine learning`" in p and "Machine Learning" in p for p in problems)
     assert any("`Docker`" in p for p in problems)
+
+
+def _fixture_repo(tmp_path, category):
+    """One post, one stubbed kernel, one listing entry: enough for main()."""
+    post = tmp_path / "posts" / "slug"
+    post.mkdir(parents=True)
+    (post / "index.qmd").write_text(
+        f'---\ntitle: t\ndate: "2026-01-01"\ncategories: [{category}]\n---\nprose\n'
+    )
+    canon = tmp_path / "categories.txt"
+    canon.write_text("Machine Learning\n")
+    listings = tmp_path / "listings.json"
+    listings.write_text(json.dumps([{"items": ["/posts/slug/index.html"]}]))
+    return post, canon, listings
+
+
+def test_categories_check_runs_by_default_and_no_categories_skips_it(
+    tmp_path, monkeypatch
+):
+    _, canon, listings = _fixture_repo(tmp_path, "Statistics")
+    monkeypatch.setattr(cp, "POSTS", tmp_path / "posts")
+    monkeypatch.setattr(cp, "FREEZE", tmp_path / "_freeze")
+    monkeypatch.setattr(cp, "CATEGORIES", canon)
+    monkeypatch.setattr(cp, "LISTINGS", listings)
+    monkeypatch.setattr(cp, "MAKEFILE", tmp_path / "Makefile")
+    (tmp_path / "Makefile").write_text(
+        "kernels-stub: install\n\t@for k in blog-base \\\n\t          ; do :; done\n"
+    )
+    # `Statistics` is absent from this fixture's canonical list, so the default
+    # run must fail and only `--no-categories` may pass.
+    assert cp.main([]) != 0
+    assert cp.main(["--no-categories"]) == 0
