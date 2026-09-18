@@ -1,161 +1,114 @@
 ---
-title: "Why PySpark?"
+title: "PySpark Is for Data That Does Not Fit on One Machine"
+description: "What Spark does that pandas cannot, how it keeps a distributed computation fast and recoverable, and the small example that shows each mechanism. As of early 2025."
 author: "Ravi Kalia"
 date: "2025-03-27"
-categories: [Big Data, PySpark, Distributed Computing]
+categories: [Data Engineering, Python]
+tags: [pyspark, spark, distributed-computing, dataframes]
 image: "./cover.png"
-tags: [PySpark, Spark, Data Engineering, Machine Learning]
-format: html
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
 ---
 
-![Why PySpark?](./cover.png)
+![PySpark](./cover.png)
 
-## Introduction
+pandas loads a table into memory and gets to work, and for most tables that is the
+right tool. The trouble starts when the table is larger than the memory, or the job
+is slower than one CPU can finish overnight. Spark is the engine for that case: it
+spreads the data over many machines, runs the same operations on each piece, and hides
+the fact that a machine may die halfway through. PySpark is its Python face. This post
+says what the engine adds over pandas, the four mechanisms that make a distributed
+computation fast and recoverable, and where the price is paid, as of early 2025.
 
-PySpark is Apache Spark's Python API for data that does not fit on one machine. It is **fast**, **scalable**, and **fault-tolerant**, which is why it is used for large-scale processing, machine learning, and streaming.
+## The DataFrame looks like pandas and runs somewhere else
 
-Note, in many cases it's possible to do similar operations with Pandas, but PySpark is designed to handle **big data** that doesn't fit into memory on one machine.
-
-Another possibility is to SQL cloud service such as Google BigQuery, AWS RedShift or Azure Synapse Analytics. However PySpark is more flexible and can be run on-premises or in the cloud in a bespoke and Pythonic way.
-
----
-
-## 🚀 Why is PySpark So Great?
-
-### 🔥 **Scalability**
-PySpark distributes data across **multiple nodes**, allowing it to process terabytes or even petabytes efficiently.
-
-### ⚡ **Speed**
-- Uses **in-memory computation**, reducing disk I/O.
-- **Optimized DAG execution** minimizes redundant computations.
-- **Parallelism** speeds up operations across distributed clusters.
-
-### 🐍 **Pythonic & Flexible**
-- Works with **Pandas**, **NumPy**, and **MLlib**.
-- Supports multiple data formats: **CSV, Parquet, JSON, Delta Lake, etc.**
-
-### 📊 **SQL + ML Support**
-- **Spark SQL** lets you query big data using SQL.
-- **MLlib** enables scalable machine learning.
-
-### ☁️ **Cloud & On-Premise Compatibility**
-- Runs on **AWS, Azure, GCP, Kubernetes, and local clusters**.
-
----
-
-## 🔍 How Does PySpark Achieve This?
-
-### 1️⃣ **Resilient Distributed Datasets (RDDs) – The Core**
-PySpark’s core data structure is the **RDD** (Resilient Distributed Dataset), which:
-- **Distributes** data across multiple nodes for parallelism.
-- **Supports fault tolerance** by tracking lineage.
-- **Uses lazy evaluation**, meaning computations are only executed when needed.
-
-#### Example: Creating an RDD
+A PySpark session talks to a cluster, which may be one laptop for development. The
+DataFrame API is close enough to pandas to read at a glance, and the difference is
+where the rows live: on the cluster's workers, in partitions, not in the process that
+wrote the code. The three-row table here is synthetic and only exists to make the
+mechanics visible; the same lines run unchanged on a table of a billion rows.
 
 ```python
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import avg, col
 
-# Initialize Spark
-spark = SparkSession.builder.appName("RDD Example").getOrCreate()
-
-# Create an RDD from a Python list
-data = ["apple", "banana", "cherry", "date"]
-rdd = spark.sparkContext.parallelize(data)
-
-# Transform and collect results
-upper_rdd = rdd.map(lambda x: x.upper())
-print(upper_rdd.collect())
+spark = SparkSession.builder.appName("example").getOrCreate()
+df = spark.createDataFrame([("Alice", 30), ("Bob", 25), ("Charlie", 35)], ["name", "age"])
+older = df.filter(col("age") > 28)
+older.show()
 ```
 
-### 2️⃣ **Directed Acyclic Graph (DAG) Execution**
-Instead of executing step-by-step like MapReduce, Spark builds a **DAG of transformations**, optimizing execution by:
-- Pipelining operations.
-- Reducing redundant computations.
+`filter` does not run when the line executes. It records a step, and nothing is
+computed until an *action* such as `show`, `count` or `collect` asks for a result.
+That laziness is the first mechanism and the others depend on it.
 
-### 3️⃣ **In-Memory Computation for Speed**
-Unlike Hadoop, which writes intermediate data to disk, Spark keeps it in **RAM** whenever possible.
+## Four mechanisms, one idea: plan the whole job before running any of it
 
-#### Example: DataFrame Operations
+- **Lazy evaluation and the DAG.** The recorded steps form a directed acyclic graph.
+  When an action fires, Spark's optimiser looks at the whole graph, pushes filters
+  down to the data source, prunes unused columns, and fuses steps that can run in one
+  pass over the data. MapReduce ran one step at a time and wrote to disk in between;
+  the plan is what makes Spark faster than that.
+- **Partitions and parallelism.** A DataFrame is split into partitions and each task
+  processes one, on whichever worker holds it. Ten workers, a hundred partitions, and a
+  filter runs a hundred times in parallel with no code to say so.
+- **In-memory computation.** Intermediate results stay in RAM across the steps of a
+  job, and a DataFrame that will be reused can be cached, so an iterative algorithm
+  does not reread its input from disk each round.
+- **Lineage for fault tolerance.** Spark does not replicate intermediate results. It
+  remembers how each partition was derived, and if a worker dies it recomputes only
+  the partitions that were lost, from the plan. A failed task is retried; a failed
+  machine costs a recompute, not a restart.
+
+The lineage idea is the one that gives the old core structure its name, the
+resilient distributed dataset, and it is still underneath the DataFrame API. Writing
+against RDDs directly is rare now; the DataFrame plan lets the optimiser do more.
+
+## SQL and DataFrames are the same plan
+
+A DataFrame can be registered as a view and queried in SQL, and the two produce the
+same plan, so the choice is taste and audience. The end-to-end shape of a job is: read,
+transform, aggregate, and hand the result on.
 
 ```python
-from pyspark.sql.functions import col
+df = spark.read.csv("employees.csv", header=True, inferSchema=True)
+by_dept = df.filter(col("age") > 30).groupBy("department").agg(avg("salary").alias("avg_salary"))
 
-# Create a DataFrame
-data = [("Alice", 30), ("Bob", 25), ("Charlie", 35)]
-columns = ["Name", "Age"]
-df = spark.createDataFrame(data, columns)
-
-# Perform a transformation
-df_filtered = df.filter(col("Age") > 28)
-
-df_filtered.show()
+df.createOrReplaceTempView("employees")
+same = spark.sql("""
+    SELECT department, AVG(salary) AS avg_salary
+    FROM employees WHERE age > 30 GROUP BY department
+""")
+by_dept.show()
+same.show()
 ```
 
-### 4️⃣ **Distributed Task Scheduling**
-- The **Driver** manages execution and breaks tasks into **stages**.
-- **Workers** execute tasks across a **cluster manager** (YARN, Kubernetes, Mesos, or Standalone).
+Both `show` calls print the same table, because both are the same DAG. Spark's
+machine-learning library and its streaming API sit on the same foundation, which is
+why one platform covers ETL, model training and stream processing without switching
+engines.
 
-### 5️⃣ **Fault Tolerance with Lineage**
-If a node fails, Spark **recomputes only the lost partitions** using the RDD’s **lineage graph**, avoiding the need to restart the entire job.
+## Where it stops holding
 
-#### Example: Handling Fault Tolerance
+Spark's overhead is real. Starting a session, planning a job and shipping tasks to
+workers takes seconds, so on a table that fits in memory pandas finishes before Spark
+has started, and the rule is to use Spark when the data or the compute does not fit
+on one machine, not before. The Python side has its own cost: a `lambda` in a
+`map` or a Python UDF runs in a separate Python process on each worker with data
+serialised across, and is many times slower than the built-in column functions, so
+the fast path is to stay in the DataFrame API. And a cluster is something someone
+runs; the managed platforms, [Databricks](../databricks/) chief among them, exist
+because that is a job in itself.
 
-```python
-# Simulating failure recovery
-rdd_with_failure = rdd.map(lambda x: 1 / (len(x) - 5))  # Will cause division by zero
-try:
-    print(rdd_with_failure.collect())
-except Exception as e:
-    print("Error handled:", e)
-```
+Distribute. Data. Plan. First. Cache. Recompute. Losses. Pandas. Until. It. Doesn't. Fit.
 
----
+## References
 
-## 🔥 PySpark in Action: End-to-End Example
-
-Here’s a real-world PySpark example where we:
-1. Read a CSV file.
-2. Perform transformations.
-3. Run SQL queries.
-
-```python
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import avg
-
-# Initialize Spark Session
-spark = SparkSession.builder.appName("ExampleApp").getOrCreate()
-
-# Read CSV into DataFrame
-df = spark.read.csv("data.csv", header=True, inferSchema=True)
-
-# Transform: Filter and Aggregate
-filtered_df = df.filter(col("age") > 30)
-avg_salary = filtered_df.groupBy("department").agg(avg("salary").alias("avg_salary"))
-
-# Run SQL Query
-filtered_df.createOrReplaceTempView("employees")
-sql_result = spark.sql(
-    "SELECT department, AVG(salary) AS avg_salary FROM employees GROUP BY department"
-)
-
-# Show results
-avg_salary.show()
-sql_result.show()
-```
-
----
-
-## 🎯 Conclusion
-PySpark is a **scalable, in-memory** big data processing framework. It achieves this through:
-- **RDDs for distributed computing**.
-- **DAG execution for optimization**.
-- **In-memory computation for speed**.
-- **Fault tolerance via lineage tracking**.
-
-If you work with **big data**, PySpark is a game-changer! 🚀
-
-### 🔗 Further Reading
-- [PySpark Documentation](https://spark.apache.org/docs/latest/api/python/)
-- [Spark SQL Guide](https://spark.apache.org/docs/latest/sql-programming-guide.html)
-
+- [PySpark documentation](https://spark.apache.org/docs/latest/api/python/)
+- [Spark SQL guide](https://spark.apache.org/docs/latest/sql-programming-guide.html)
+- Zaharia, M. et al. (2012). Resilient Distributed Datasets: a fault-tolerant
+  abstraction for in-memory cluster computing. *NSDI 2012*.
+- [Databricks](../databricks/) on this blog

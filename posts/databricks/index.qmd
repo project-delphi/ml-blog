@@ -1,132 +1,126 @@
 ---
-title: "Databricks: Some Notes"
+title: "Databricks Is Managed Spark, and the Extras Are the Reason to Pay"
+description: "What Databricks adds to a Spark cluster you could run yourself: notebooks on a shared cluster, Delta Lake's transactions, and MLflow's run tracking. Working notes, as of early 2025."
 author: "Ravi Kalia"
 date: "2025-03-11"
-categories: [Big Data, Machine Learning, Databricks]
+categories: [Data Engineering, Machine Learning]
+tags: [databricks, spark, delta-lake, mlflow, pyspark]
 image: "./cover.png"
-tags: [Databricks, Apache Spark, MLlib, Data Engineering]
-format: html
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
 ---
 
-![Databricks: Some Notes](./cover.png)
+![Databricks](./cover.png)
 
-These are working notes on what Databricks is — managed Spark with notebooks, Delta Lake and MLflow built around it — and what that buys you over running Spark yourself.
+Spark is open source and runs anywhere, so the first question about Databricks is why
+anyone pays for it. The answer is not the engine. It is the three things bolted around
+the engine: a workspace where several people share one running cluster from notebooks,
+a table format that gives a data lake the transactions a database has, and a place
+where every model training run is recorded. These are working notes on what each of
+those buys, with the airline-delay sample that ships in every workspace as the running
+example, written as of early 2025.
 
-# Introduction to Databricks
+## The cluster is Spark, and someone else runs it
 
-Databricks is a unified data analytics platform built on Apache Spark, designed to simplify big data and machine learning workflows. It provides a collaborative, cloud-based environment for data engineering, data science, and analytics.
+A Databricks workspace sits on AWS, Azure or Google Cloud and hands out Spark clusters
+on request: pick a runtime version, a node type and an autoscaling range, and a cluster
+is up in a few minutes and gone when idle. What that saves is the part of Spark that is
+not analysis: installing it, keeping versions consistent across nodes, tuning the JVM,
+and being paged when the driver dies. The Community Edition, free and small, is enough
+to see all of this: sign up, **Compute → Create Cluster**, name it, pick a runtime, and
+open a notebook against it.
 
-## Key Concepts
-
-- **Cloud-Based Platform**: Runs on AWS, Azure, and Google Cloud, offering fully managed Spark clusters with autoscaling and optimized performance.
-- **Apache Spark as the Core Engine**: Utilizes Apache Spark for large-scale data processing, ETL, and machine learning.
-- **Collaborative Notebooks**: Supports Python, Scala, SQL, and R in interactive notebooks for collaboration.
-- **Delta Lake for Data Reliability**: Implements ACID transactions, schema enforcement, and versioning.
-- **MLflow for Machine Learning Lifecycle**: Manages ML experiments, models, and deployments.
-- **Data Engineering & Streaming**: Supports batch and real-time streaming workloads.
-- **Scalability & Performance Optimization**: Features Photon execution engine, adaptive query execution, and caching.
-- **Security & Compliance**: Includes role-based access control, data encryption, and cloud-native security integration.
-
-## Common Use Cases
-
-- **Big Data Processing**: ETL pipelines, data lakes, and high-performance analytics.
-- **Machine Learning & AI**: Model training, feature engineering, and MLOps.
-- **BI & Analytics**: Interactive querying and reporting.
-- **Real-Time Data Processing**: Streaming analytics and event-driven architectures.
-
-# Setting Up Databricks
-
-Databricks Community Edition offers a free environment for small-scale workloads.
-
-## Signing Up
-
-1. Visit [Databricks Community Edition](https://community.cloud.databricks.com/login.html).
-2. Sign up with an email and verify the account.
-3. Access the Databricks workspace.
-
-## Creating a Cluster
-
-1. Click **Compute** → **Create Cluster**.
-2. Name the cluster (e.g., `my-cluster`).
-3. Choose a runtime (e.g., Databricks Runtime 12.0).
-4. Click **Create Cluster** and wait for it to start.
-
-## Creating a Notebook
-
-1. Go to **Workspace** → **Create** → **Notebook**.
-2. Choose a language (Python, Scala, SQL, or R).
-3. Name the notebook (e.g., `my-first-notebook`).
-
-# Loading and Processing Data
-
-## Loading a Sample Dataset
+A notebook cell is ordinary PySpark; `spark` is already a session on the cluster. The
+sample data is the airline on-time table that Databricks preloads, one CSV shard of
+flights with their departure and arrival delays:
 
 ```python
-# Load sample dataset (airline delays)
 df = spark.read.csv("/databricks-datasets/airlines/part-00000", header=True, inferSchema=True)
-
-# Show first 5 rows
-df.show(5)
-```
-
-## Basic Data Operations
-
-```python
-# Check schema
 df.printSchema()
-
-# Count total rows
 df.count()
-
-# Filter for flights from New York (JFK)
 df.filter(df.Origin == "JFK").show(5)
 ```
 
-# Machine Learning with MLlib
+Nothing here is Databricks-specific except the path. That is the point: the code is
+portable Spark, and the platform is what is around it.
 
-## Preparing the Data
+## Delta Lake makes a folder of files behave like a table
+
+A data lake is a folder of Parquet files in object storage, and a folder of files has no
+transactions. Two jobs writing at once corrupt each other, a failed write leaves half a
+result behind, and a schema change is silent until a downstream query breaks. Delta
+Lake, which Databricks built and open-sourced, keeps a transaction log beside the files,
+so writes are atomic, readers see a consistent snapshot, the schema is enforced on
+write, and every version is kept (time travel). A Spark table saved as Delta is one
+option away:
 
 ```python
-from pyspark.ml.feature import VectorAssembler
+df.write.format("delta").mode("overwrite").saveAsTable("flights")
+spark.sql("SELECT Origin, AVG(ArrDelay) FROM flights GROUP BY Origin ORDER BY 2 DESC").show(5)
+```
+
+Of the three extras this is the one that changes what the data lake can be used for:
+with transactions, the lake can be the system of record rather than a staging area
+copied into a warehouse.
+
+## MLflow keeps the training runs you would otherwise lose
+
+The third extra is for the model side. MLflow records each training run, its
+parameters, metrics, and the model artefact, and Databricks hosts it inside the
+workspace so a notebook logs to it without setup. A small logistic regression on the
+flight data, predicting whether a flight arrives late from its departure delay and
+distance, is the shape of it:
+
+```python
+import mlflow
 from pyspark.ml.classification import LogisticRegression
+from pyspark.ml.feature import VectorAssembler
+from pyspark.sql.functions import col
 
-# Select features
-feature_cols = ["DepDelay", "Distance"]
-assembler = VectorAssembler(inputCols=feature_cols, outputCol="features")
-df_ml = assembler.transform(df).select("features", "ArrDelay")
+numeric = df.select(*[col(c).cast("double").alias(c) for c in ["DepDelay", "Distance", "ArrDelay"]])
+data = (VectorAssembler(inputCols=["DepDelay", "Distance"], outputCol="features")
+        .transform(numeric.na.drop())
+        .withColumn("late", (col("ArrDelay") > 15).cast("int"))
+        .select("features", "late"))
+train, test = data.randomSplit([0.8, 0.2], seed=42)
 
-# Drop missing values
-df_ml = df_ml.na.drop()
+with mlflow.start_run():
+    model = LogisticRegression(featuresCol="features", labelCol="late").fit(train)
+    auc = model.evaluate(test).areaUnderROC
+    mlflow.log_metric("auc", auc)
+    mlflow.spark.log_model(model, "model")
 ```
 
-## Training a Logistic Regression Model
+The label is a threshold, late by more than fifteen minutes, because logistic
+regression classifies; the earlier version of these notes fed it the raw delay in
+minutes, which the model cannot fit. The cast is not decoration either: the sample's
+delay columns spell a missing value as the string `NA`, so schema inference types
+them as strings, and the assembler refuses a string column. Casting to double turns
+`NA` into a null that `na.drop` then removes. The run appears in the workspace's experiment list
+with its AUC, and a later run with different features sits beside it for comparison,
+which is the thing that a folder of notebooks never gives you.
 
-```python
-# Split data into train and test sets
-train, test = df_ml.randomSplit([0.8, 0.2], seed=42)
+## Where it stops holding
 
-# Train the model
-lr = LogisticRegression(featuresCol="features", labelCol="ArrDelay")
-model = lr.fit(train)
-
-# Evaluate on test set
-predictions = model.transform(test)
-predictions.select("features", "ArrDelay", "prediction").show(5)
-```
-
-# Use Case: Real-Time Fraud Detection
-
-## Scenario
-
-A bank needs to detect fraudulent credit card transactions in real time.
-
-## Solution with Databricks
-
-1. **Ingest real-time transactions** using Spark Streaming.
-2. **Feature engineering** on transaction amount, location, and user history.
-3. **Train a machine learning model** using historical fraud data.
-4. **Deploy the model** to classify new transactions as fraud or legitimate in real time.
-
-Databricks provides the scalability and performance needed for real-time fraud detection, making it a practical choice for financial institutions and similar applications.
+The same three extras are the lock-in. Delta Lake is open, but the fastest way to run
+it is on Databricks; MLflow is open, but the hosted one is the convenient one. For a
+team that already runs Spark well, or whose data fits a warehouse and never needs
+Spark, the platform is paying for problems it does not have. The honest comparison is
+against the alternative that fits the data: a warehouse such as
+[Snowflake](../snowflake/) for SQL-shaped analytics, plain Spark on a cloud service for
+a team with the operators, and Databricks when the notebooks, the transactions and the
+run tracking are the things missing.
 
 Spark. Underneath. Managed. Above. Delta. Adds. Transactions. MLflow. Tracks. Runs. Convenience. Costs.
+
+## References
+
+- [Databricks documentation](https://docs.databricks.com/)
+- [Delta Lake](https://delta.io/) and Armbrust, M. et al. (2020). Delta Lake:
+  high-performance ACID table storage over cloud object stores. *PVLDB* **13**(12).
+- [MLflow](https://mlflow.org/)
+- Airline on-time performance data, US Bureau of Transportation Statistics, as
+  preloaded in `/databricks-datasets/airlines`.
