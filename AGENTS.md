@@ -285,15 +285,16 @@ A shrinking set of older posts still print their `widgets.js` (and usually
 `widget-data/*.json`) into an inline `<script>` from a Python cell:
 `bayesian-bootstrap`, `statistical-jackknife`, `svd-rotate-stretch-rotate`,
 `tensor-inverses-in-practice`, `uses-of-tensor-factorizations`
-(`aav-immune-response` loads its bundle as a resource but predates the kit). Re-derive
-the list with `grep -l 'widgets.js").read_text()' posts/*/index.qmd` rather than
-trusting this sentence. For those, Quarto hashes `index.qmd` **alone**, so editing the sidecar leaves
+(`aav-immune-response` loads its bundle as a resource but predates the kit).
+Re-derive the list with `grep -l 'widgets.js").read_text()' posts/*/index.qmd`
+rather than trusting this sentence — it has been stale before, and each post
+that moves shortens it. For those, Quarto hashes `index.qmd` **alone**, so editing the sidecar leaves
 `_freeze/` valid and a project render keeps serving the old bundle with no warning:
 **re-render that post explicitly** (its real venv) before committing. Do not delete
 `_freeze/posts/<slug>/` instead: `check_freeze` returns clean when a non-legacy record
 is simply absent, so `make check-posts` stays green while `docs/` still serves the old
-bundle. Each of the seven moves to the kit in its own PR, which is also when it gets
-its one re-execution.
+bundle. Each remaining post moves to the kit in its own PR, which is also when it
+gets its one re-execution.
 
 A different mechanism handles browser-run Python exercises: the vendored
 `_extensions/r-wasm/live/`, used only by `numpy-to-jax`, via `engine: jupyter`,

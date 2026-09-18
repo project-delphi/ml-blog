@@ -181,3 +181,23 @@ def test_widget_flags_a_kit_post_the_page_never_loads(tmp_path, monkeypatch, cap
     assert dq.main(["widget", "slug"]) == 1
     out = capsys.readouterr().out
     assert "identical" in out and "page loads it: NO" in out and "STALE" in out
+
+
+def test_fixed_flag_before_the_subcommand(tmp_path, monkeypatch, capsys):
+    """A subparser default must not clobber -F given ahead of the subcommand."""
+    docs, _ = _repo(tmp_path, monkeypatch)
+    (docs / "posts" / "slug" / "index.html").write_text("a(b")
+    # an invalid regex, so this only passes if the pattern is treated literally
+    dq.main(["-F", "count", "a(b", "docs/posts/slug/index.html"])
+    assert capsys.readouterr().out.startswith("1 ")
+
+
+def test_bad_regex_is_a_message_not_a_traceback(tmp_path, monkeypatch):
+    docs, _ = _repo(tmp_path, monkeypatch)
+    (docs / "posts" / "slug" / "index.html").write_text("x")
+    try:
+        dq.main(["count", "a(b", "docs/posts/slug/index.html"])
+    except SystemExit as exc:
+        assert "bad pattern" in str(exc) and "-F" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected a refusal")
