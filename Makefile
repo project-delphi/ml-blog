@@ -57,6 +57,13 @@ kernels-stub: install
 # if its frozen output has drifted from its source. See scripts/check_posts.py.
 check-posts:                   # ARGS=--no-categories while adding a category
 	python3 scripts/check_posts.py $(ARGS)
+# Ask a bounded question about rendered output without reading any of it:
+#   make docs-query ARGS="post train-dev-test-splits"
+#   make docs-query ARGS="widget volcano-plots"
+# Bare python3 for the same reason as above: stdlib only, so it works on a
+# clone with no .venv, which is exactly where docs-inspect runs.
+docs-query:
+	@python3 scripts/docs_query.py $(ARGS)
 # After a prose-only edit to a freeze-backed post: rewrite the frozen record so
 # the next project render reuses the stored cell outputs instead of
 # re-executing the post. Refuses if any code cell changed. See
@@ -127,6 +134,7 @@ help:
 	@echo "kernel - register the blog-base Jupyter kernel"
 	@echo "kernels-stub - register every kernel the posts pin (no ML deps; lets a fresh clone render from _freeze/)"
 	@echo "check-posts - verify posts pin a kernel + requirements.txt and their frozen output is current"
+	@echo "docs-query ARGS=\"post <slug>\" - a bounded question about rendered output, without reading it"
 	@echo "freeze-realign SLUG=<slug> [ARGS=--check|--legacy] - accept a prose-only edit to a freeze-backed post without re-executing it"
 	@echo "lint / fmt - ruff check + format (read-only / apply)"
 	@echo "spell - codespell over prose"
@@ -137,4 +145,4 @@ help:
 	@echo "docs-deleted - list tracked docs/ files a render removed"
 	@echo "serve - static server for docs/ on :8000"
 
-.PHONY: venv install lock kernel kernels-stub check-posts freeze-realign lint fmt spell test check check-quarto render render-post docs-deleted serve help
+.PHONY: venv install lock kernel kernels-stub check-posts docs-query freeze-realign lint fmt spell test check check-quarto render render-post docs-deleted serve help
