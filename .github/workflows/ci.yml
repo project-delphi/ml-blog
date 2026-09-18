@@ -1,0 +1,106 @@
+# Two jobs on every pull request and on main.
+#
+# `checks` is everything that does not need Quarto: ruff, codespell, the
+# script tests, the post invariants, and the read-only pre-commit hooks.
+#
+# `render` proves the site still builds from the committed _freeze/ on a
+# machine with no ML dependencies -- which is the reason _freeze/ is tracked
+# and `make kernels-stub` exists -- and that the docs/ in the PR is what a
+# fresh render produces. Quarto is pinned: a newer one rewrites
+# docs/site_libs/, which has broken older posts' JavaScript before.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QUARTO_VERSION: "1.6.40"
+  # Every `uv sync` in CI, including the one `make kernels-stub` runs, must
+  # install the locked versions and never re-resolve.
+  UV_FROZEN: "1"
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: lint, spell, test, check-posts
+        run: make check
+      - name: read-only pre-commit hooks
+        run: |
+          for hook in check-yaml check-toml check-json detect-private-key shellcheck; do
+            uv run pre-commit run --all-files "$hook"
+          done
+
+  # macOS on purpose: the site is built and committed from a Mac, and the
+  # bootstrap CSS Quarto compiles from the per-post themes differs byte for
+  # byte between macOS and Linux under the same Quarto version (the files
+  # are content-hashed, so every page's <link> changes with it). A Linux
+  # runner would report all 120 pages as drift and delete the tracked CSS.
+  render:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: ${{ env.QUARTO_VERSION }}
+      - run: uv sync --frozen
+      # Registers every kernel name the posts pin, all over .venv. Quarto
+      # resolves kernelspecs while indexing the project, before it consults
+      # _freeze/, so a missing name fails the whole render.
+      - run: make kernels-stub
+      # Pins the Quarto version, runs the freeze check first (a stale record
+      # fails here with a message, not after docs/ is deleted), renders to
+      # render.log, restores the render-time media, and runs the deletion
+      # check and the full post check.
+      - run: make render
+      - name: what the render changed under docs/ (diagnostics)
+        if: always()
+        run: |
+          echo "tracked files changed: $(git diff --name-only -- docs | wc -l)"
+          echo "untracked files added: $(git status --porcelain -- docs | grep -c '^??' || true)"
+          git status --porcelain -- docs/site_libs | head -40
+      - name: docs/site_libs must not change (Quarto drift)
+        run: |
+          if [ -n "$(git status --porcelain -- docs/site_libs)" ]; then
+            git status --short -- docs/site_libs | head -20
+            echo "::error::docs/site_libs changed: the Quarto runtime differs from the one that built main"
+            exit 1
+          fi
+      # Advisory until search.json has proved deterministic across runners
+      # and the orphaned figure files one freeze record still carries are
+      # gone; then this becomes a hard check.
+      - name: docs/ matches a fresh render
+        continue-on-error: true
+        run: |
+          {
+            echo "## docs/ drift against a fresh render"
+            git diff --stat -- docs | tail -20
+            echo
+            echo "tracked files changed: $(git diff --name-only -- docs | wc -l)"
+            echo "untracked files added: $(git status --porcelain -- docs | grep -c '^??' || true)"
+            git status --porcelain -- docs | grep '^??' | head -20
+          } >> "$GITHUB_STEP_SUMMARY"
+          test -z "$(git status --porcelain -- docs)"
+      - name: upload render log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-log
+          path: render.log
+          if-no-files-found: ignore

@@ -71,7 +71,9 @@ while it indexes the project — *before* it consults `_freeze/` — so one miss
 name fails the entire site build, frozen output or not. The stubs point at `.venv` and
 carry no ML dependencies; they exist to satisfy the lookup.
 
-There is no CI. `docs/` is rendered locally and committed.
+CI renders every pull request the same way, from the committed `_freeze/` with stub
+kernels, and runs the checks below. It does not publish: `docs/` is rendered locally
+and committed, and CI reports how far the committed copy is from a fresh render.
 
 ### Rendering
 

@@ -1,0 +1,51 @@
+# Monthly bump of the pre-commit hook revisions, opened as a PR. Dependabot
+# has no ecosystem for these; every hook in the config was 18 months stale
+# before this existed.
+#
+# The ruff hook and the ruff in uv.lock must agree, or the hook and
+# `make lint` disagree; after the bump the job re-locks ruff to the hook's
+# rev so the PR carries both.
+#
+# A PR opened with the default GITHUB_TOKEN never triggers the `ci`
+# workflow. Add a fine-grained PAT with contents + pull-requests write as
+# the PRE_COMMIT_AUTOUPDATE_TOKEN secret and the PR gets checks like any
+# other; without it, run `make check` on the branch before merging.
+name: pre-commit autoupdate
+
+on:
+  schedule:
+    - cron: "0 6 1 * *"
+  workflow_dispatch:
+
+jobs:
+  autoupdate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - run: uv run pre-commit autoupdate
+      - name: keep uv.lock's ruff in step with the hook
+        run: |
+          rev=$(sed -n '/astral-sh\/ruff-pre-commit/{n;s/.*rev: v//p;}' .pre-commit-config.yaml)
+          test -n "$rev" || { echo "could not read the ruff hook rev"; exit 1; }
+          uv lock --upgrade-package "ruff==$rev"
+          uv sync --frozen
+          make lint
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.PRE_COMMIT_AUTOUPDATE_TOKEN || secrets.GITHUB_TOKEN }}
+          branch: bot/pre-commit-autoupdate
+          title: "chore(tooling): pre-commit autoupdate"
+          commit-message: "chore(tooling): pre-commit autoupdate"
+          body: |
+            Monthly bump of the pre-commit hook revisions, with `uv.lock`'s
+            ruff re-locked to the new hook rev and `make lint` run on the
+            result.
+
+            If this PR shows no checks, it was opened with the default token;
+            run `make check` on the branch before merging, or add the
+            `PRE_COMMIT_AUTOUPDATE_TOKEN` secret so future ones get CI.
