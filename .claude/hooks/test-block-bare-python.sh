@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # the fixtures below are commands, quoted so they do not expand
 # Allow/block matrix for block-bare-python.sh. Run directly: .claude/hooks/test-block-bare-python.sh
 # The interesting half is the allow list: a hook that also blocks `uv run python`
 # or `.venv/bin/python` is one people turn off, which enforces nothing.

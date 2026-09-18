@@ -27,9 +27,11 @@ Three files carry the detail:
 - **Never run `python`, `python3`, or `pip` bare.** That resolves to Homebrew's
   interpreter, not this repo's. Use `.venv/bin/python`, `.venv-<slug>/bin/python`, or
   `uv run` — including for throwaway one-liners and `-m http.server`.
-- **Commit the re-rendered `docs/` with the source that changed it.** There is no CI;
-  the site is served from `docs/` on `main`, so a source-only commit silently drifts the
-  published site from the repo.
+- **Commit the re-rendered `docs/` with the source that changed it.** The site is
+  served from `docs/` on `main`, so a source-only commit drifts the published site from
+  the repo. CI (`.github/workflows/ci.yml`) renders every PR from the committed
+  `_freeze/` and reports how far the PR's `docs/` is from a fresh render, but it does
+  not publish: the rendered output still has to be in the commit.
 - **Never edit a freeze-backed post without re-rendering it.** Quarto keys frozen
   output on an md5 of `index.qmd`, so a one-word prose fix invalidates the record and
   the next project render tries to execute the post.
@@ -238,7 +240,7 @@ executing post gets its own `.venv-<slug>` plus a named kernel. See `ENVIRONMENT
 `_freeze/` is **tracked**. Five posts predate the venv-per-post convention
 (`LEGACY_NO_ENV` in `scripts/check_posts.py`): no pinned kernel, no pinned versions,
 dependencies pinned to nothing. Their frozen record is the only reproducible copy of
-what they compute, and it is what would let the site render in CI with no ML
+what they compute, and it is what lets the CI render job build the site with no ML
 dependencies installed.
 
 **Editing a legacy post breaks it** — the md5 changes and the next project render tries
