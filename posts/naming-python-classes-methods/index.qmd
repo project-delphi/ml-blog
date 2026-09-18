@@ -1,116 +1,114 @@
 ---
-title: "Python Method Naming Conventions: Best Practices for Class Design"
+title: "A Method's Name Is a Contract"
+description: "What the leading underscore, the decorator and the double underscores each promise to the next person who reads a Python class, and what to call instance, class, static, helper and dunder methods."
+author: "Ravi Kalia"
 date: "2025-02-04"
-categories: [Python, Object-Oriented Programming, Best Practices]
-description: "What to call instance, class, static, helper, and dunder methods in Python, and what each choice signals."
-format: html
+categories: [Python, Development]
+tags: [python, naming, classes, conventions, oop]
 image: "./cover.png"
 ---
 
-![Python Method Naming Conventions](./python.jpeg)
+![A ball python. Photo by HCA, CC BY-SA 3.0, via Wikimedia Commons.](./cover.png)
 
-A method's name is the only documentation most readers ever get. **Instance methods, class methods, static methods, helper methods, and dunder methods** each take a different name, and the choice signals something to the next person in the file.
+A method's name is the only documentation most readers ever get. Before anyone opens
+the body, the name has already told them whether they are allowed to call it, whether
+it needs an instance, and whether Python itself will call it behind their back. Those
+three promises are made by three pieces of spelling, and this post says what each
+one means and what to call the five kinds of method a class has.
 
-# **Python Method Naming Conventions: Class Design**
+## The underscore promises privacy, in two strengths
 
-## **1. Instance Methods (`self`)**
-**Purpose:** Operate on an **instance** of the class, modifying attributes or performing actions specific to an object.
+Every method is `snake_case`; the only question is what comes before the name.
 
-- **Naming:** Use **snake_case** (e.g., `train_model`, `predict`).
-- **Example:**
-  ```python
-  class Model:
-      def train(self, data):  # Instance method
-          pass
-  ```
+- No prefix: public. Part of the class's interface, safe to call, and a change to it
+  is a change other code will feel.
+- One leading underscore, `_preprocess`: internal. Python enforces nothing, but the
+  convention is a promise that the method may change or vanish without notice, and a
+  reader who calls it from outside the class knows they are on their own. Linters
+  and IDEs respect it; `from module import *` skips it.
+- Two leading underscores, `__compute_loss`: name-mangled. Python rewrites the name to
+  `_Model__compute_loss`, so a subclass cannot accidentally override it. That is the
+  purpose, and it is rarely the intent, which is why the convention is to avoid it
+  unless a subclass collision has actually happened.
 
-### **Using `_underscore` in Instance Methods**
-- **`_private_method()`**: A **single underscore** signals an **internal (protected) method**, not meant for public use.
-  ```python
-  class Model:
-      def _preprocess(self, data):  # Internal method
-          pass
-  ```
-- **`__double_underscore_method()`**: A **double underscore** triggers **name-mangling**, making it harder to override in subclasses.
-  ```python
-  class Model:
-      def __compute_loss(self, data):  # Name-mangled method
-          pass
-  ```
+```python
+class Model:
+    def train(self, data):        # public
+        ...
 
-## **2. Class Methods (`cls`)**
-**Purpose:** Operate on the **class itself**, rather than on individual instances.
+    def _preprocess(self, data):  # internal: may change, do not rely on it
+        ...
 
-- **Naming:** Use **snake_case** (e.g., `from_config`, `load_from_checkpoint`).
-- **Decorator:** `@classmethod`
-- **Example:**
-  ```python
-  class Model:
-      @classmethod
-      def from_config(cls, config):  # Class method
-          return cls(**config)
-  ```
+    def __compute_loss(self, d):  # mangled: protects against subclass collisions only
+        ...
+```
 
-## **3. Static Methods (No `self` or `cls`)**
-**Purpose:** Utility functions that don’t modify the instance or class.
+## The decorator promises what the method needs
 
-- **Naming:** Use **snake_case** (e.g., `normalize_data`, `sigmoid`).
-- **Decorator:** `@staticmethod`
-- **Example:**
-  ```python
-  class Model:
-      @staticmethod
-      def sigmoid(x):  # Static method
-          return 1 / (1 + np.exp(-x))
-  ```
+The first parameter tells the reader what a method operates on, and the decorator
+makes the promise checkable.
 
-## **4. Helper Functions (Inside or Outside Class)**
-**Purpose:** Internal-use methods that aid class functionality.
+- An **instance method** takes `self` and reads or changes one object: `train`,
+  `predict`. This is the default and needs no decorator.
+- A **class method** takes `cls` and operates on the class, which is almost always
+  construction: `from_config`, `load_from_checkpoint`. Marked `@classmethod`, and named
+  for what it builds from.
+- A **static method** takes neither, and is a function that lives in the class because
+  it belongs with it: `sigmoid`, `normalize`. Marked `@staticmethod`. If it needs
+  neither `self` nor `cls`, the reader can call it without an instance and knows it
+  touches no state.
 
-- **Naming:** Use **_single_underscore** if internal (e.g., `_compute_gradient`).
-- **Example (Inside Class):**
-  ```python
-  class Model:
-      def _compute_gradient(self, x):  # Helper method
-          return x * 0.1
-  ```
-- **Example (Outside Class, Standalone Function):**
-  ```python
-  def compute_loss(y_true, y_pred):  # Standalone helper function
-      return ((y_true - y_pred) ** 2).mean()
-  ```
+```python
+class Model:
+    @classmethod
+    def from_config(cls, config):     # builds a Model from a dict
+        return cls(**config)
 
-## **5. Dunder (Double Underscore) Methods**
-**Purpose:** Customize built-in behaviors (`__init__`, `__call__`, `__getitem__`, etc.).
+    @staticmethod
+    def sigmoid(x):                   # touches no state
+        return 1 / (1 + np.exp(-x))
+```
 
-- **Naming:** Always use **double underscores before and after** (e.g., `__call__`, `__repr__`).
-- **Example:**
-  ```python
-  class Model:
-      def __init__(self, name):
-          self.name = name
+A helper that needs none of the class's state and is used elsewhere is better as a
+module-level function, `compute_loss(y_true, y_pred)`, with the same underscore rule
+for privacy; a helper that only this class uses stays inside as `_compute_gradient`.
 
-      def __call__(self, x):  # Makes object callable
-          return x * 2
+## Double underscores on both sides promise a protocol
 
-      def __repr__(self):
-          return f"Model(name={self.name})"
-  ```
+`__init__`, `__call__`, `__getitem__`, `__repr__`: the "dunder" methods are the ones
+Python calls for you. Defining `__call__` makes an instance callable, `__getitem__`
+makes it indexable, `__repr__` decides what the debugger shows. Never invent new ones;
+the names are a fixed vocabulary, and a method spelled `__like_this__` that Python does
+not know is a false promise.
 
-## **Summary Table**
-| Method Type  | Naming Style       | Example        | Notes |
-|-------------|--------------------|---------------|-------|
-| **Instance Method** | `snake_case` | `train(self, data)` | Uses `self` |
-| **Private Instance Method** | `_underscore` | `_preprocess(self, data)` | Conventionally private |
-| **Name-Mangled Method** | `__double_underscore` | `__compute_loss(self, data)` | Avoid unless needed |
-| **Class Method** | `snake_case` | `from_config(cls, config)` | Uses `@classmethod` |
-| **Static Method** | `snake_case` | `sigmoid(x)` | Uses `@staticmethod` |
-| **Helper Function** | `snake_case` | `_compute_gradient(x)` | Internal use |
-| **Dunder Method** | `__double_underscore__` | `__call__(self, x)` | Built-in behavior |
+```python
+class Model:
+    def __init__(self, name):
+        self.name = name
 
-## **Conclusion**
-Using consistent naming conventions for Python methods makes the next reader's job easier. The table is the convention used here.
+    def __call__(self, x):            # model(x) works
+        return x * 2
 
-Would you like to see an expanded example of a full class using these principles? Let me know! 😊
+    def __repr__(self):               # what repr(model) and the debugger show
+        return f"Model(name={self.name!r})"
+```
+
+## The table
+
+| Kind | Spelling | Example | The promise |
+|---|---|---|---|
+| Instance method | `snake_case(self, …)` | `train(self, data)` | reads or changes this object |
+| Internal method | `_snake_case` | `_preprocess(self, data)` | may change; outsiders keep off |
+| Name-mangled | `__snake_case` | `__compute_loss(self, d)` | subclass-proof; rarely worth it |
+| Class method | `@classmethod`, `(cls, …)` | `from_config(cls, config)` | builds or describes the class |
+| Static method | `@staticmethod`, `(…)` | `sigmoid(x)` | touches no state |
+| Module helper | `snake_case` at top level | `compute_loss(y, y_hat)` | belongs to nobody |
+| Dunder | `__name__` | `__call__(self, x)` | Python calls it |
 
 Names. Are. Contracts. Underscores. Signal. Privacy. Dunders. Signal. Protocol. Choose. Deliberately.
+
+## References
+
+- [PEP 8: Naming conventions](https://peps.python.org/pep-0008/#naming-conventions)
+- [Python data model: special method names](https://docs.python.org/3/reference/datamodel.html#special-method-names)
+- Ramalho, L. (2022). *Fluent Python*, 2nd ed., chapter 1, The Python data model.

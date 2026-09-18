@@ -1,129 +1,106 @@
 ---
-title: "Building Complex LLM Workflows with LangGraph"
+title: "LangGraph Turns an LLM Pipeline Into a Graph With One Shared State"
+description: "What a graph of nodes over one mutable state buys over a linear chain: branching, parallel work, and a workflow that remembers where it is. The 2025 tour; the API has moved since."
 author: "Ravi Kalia"
 date: "2025-03-26"
 categories: [Agents, LLM]
+tags: [langgraph, langchain, agents, state-machines, workflows]
 image: "./cover.png"
-format: html
 ---
 
-![Building Complex LLM Workflows with LangGraph](./cover.png)
+![LangGraph](./cover.png)
 
-LangGraph models an LLM application as a graph of nodes sharing one mutable state. Over a linear LangChain chain, that buys branching, parallel work, and a workflow that remembers where it is.
+The first LLM application anyone builds is a chain: prompt, model, parse, done. The
+second needs to do something different depending on what the model said, call a tool,
+come back, and maybe loop, and at that point the chain has to become a program with
+control flow and memory. LangGraph is the library that makes that program explicit: a
+graph of nodes, each a function or a model call, all reading and writing one shared
+state, with edges that say where to go next. This is the tour I wrote in March 2025,
+of what the graph buys and how the pieces fit; the API has moved since, and the
+post that builds a real agent on it twice is
+[LangGraph vs LlamaIndex](../langgraph-vs-llamaindex/).
 
-# Building Complex LLM Workflows with LangGraph
+## A chain hides control flow; a graph declares it
 
-For **language models (LLMs)**, managing complex workflows, conditional logic, and stateful execution is challenging. That's where **LangGraph** comes in. It enables you to build sophisticated, **stateful**, and **modular** applications using a **graph-based** approach, making it ideal for multi-agent systems, conditional flows, and more.
+LangChain's chain is a sequence, and a sequence cannot branch or repeat except by
+nesting chains inside code that does. LangGraph lifts the control flow into data:
+nodes are the steps, edges are the transitions, and a conditional edge picks the next
+node from the state. Three things follow that a chain cannot offer without help.
+Branches are visible and testable, because they are edges rather than `if` statements
+buried in a callback. Independent branches can run in parallel. And because the state
+is one object that every node reads and writes, the workflow always knows where it is,
+which is what a long-lived conversational agent needs to pick up after a tool call or
+a pause.
 
-## What is LangGraph?
+| | Chain | Graph |
+|---|---|---|
+| Structure | a list of steps | nodes and edges |
+| Control flow | linear, or code around the chain | conditional edges in the graph |
+| State | inputs and outputs passed step to step | one shared, typed state |
+| Concurrency | none built in | parallel branches |
+| Fits | a prompt with one model call | agents, tools, loops, multi-step workflows |
 
-`LangGraph` is a Python framework designed to build **stateful, multi-agent applications**. It structures your LLM workflow as a **directed acyclic graph (DAG)** where each node represents a function, model call, or tool. These nodes are connected with edges that define how data flows from one node to another, allowing you to create complex, conditional workflows.
+## The pieces are a state, some nodes, and edges to `END`
 
-## Key Features
+The whole API is small. A `StateGraph` is built over a state type, which is usually a
+typed dictionary; nodes are functions from state to state; edges connect them; and
+`END` is the node that stops. Compile it, and the result is a callable that runs the
+graph from its entry point. The illustrative version below counts, which is enough to
+see every piece and is the shape of the 2025 API rather than a current one:
 
-- **Graph-based execution**: Unlike a linear chain of tasks (like in LangChain), LangGraph allows for explicit, flexible, graph-based routing. You can branch logic or parallelize tasks.
-- **State management**: LangGraph uses a centralized, mutable state that flows through the graph, enabling easy tracking of evolving information.
-- **Concurrency**: The framework supports parallel execution of branches, making it great for handling multiple agents or parallel tasks.
+```python
+from typing import TypedDict
 
-## Core Components
+from langgraph.graph import END, StateGraph
 
-LangGraph is centered around a few key objects:
 
-- **`StateGraph`**: This is the core class used to build and compile the graph.
-- **`END`**: A special constant to signal graph termination.
-- **`State`**: The state that flows through the graph. It's typically a dictionary or a Pydantic model.
-- **`ToolNode`, `FunctionNode`, `LLMNode`**: These represent various types of nodes, which can be LLM calls, tools, or functions.
-
-## Creating a Graph
-
-Here’s a simple example to get started:
-
-```{.python}
-from langgraph import StateGraph, State, FunctionNode, END
-
-# Define a state type
-class MyState(State):
+class State(TypedDict):
     count: int
 
-# Create a graph
-sg = StateGraph(MyState)
 
-# Add nodes (functions in this case)
-def increment(state: MyState) -> MyState:
-    state.count += 1
-    return state
+def increment(state: State) -> State:
+    return {"count": state["count"] + 1}
 
-# Add the increment node
-sg.add_node("increment", increment)
 
-# Set the entry point
-sg.set_entry_point("increment")
+def adjust(state: State) -> State:
+    even = state["count"] % 2 == 0
+    return {"count": state["count"] + (2 if even else -1)}
 
-# Compile the graph into an executable
-graph = sg.compile()
+
+builder = StateGraph(State)
+builder.add_node("increment", increment)
+builder.add_node("adjust", adjust)
+builder.set_entry_point("increment")
+builder.add_edge("increment", "adjust")
+builder.add_edge("adjust", END)
+
+graph = builder.compile()
+print(graph.invoke({"count": 0}))   # increment -> 1, odd -> 0: {'count': 0}
 ```
 
-## Run the graph
-```{.python}
-result = graph.invoke(MyState(count=0))
-print(result.count)  # Output should be 1
-```
+Read the trace against the graph: `increment` takes 0 to 1, `adjust` sees an odd count
+and subtracts one, `END` stops. The earlier version of this post printed 2 for that
+run, which the code could not produce; the arithmetic is the point of a worked
+example, so it is traced here. A real agent replaces `increment` with a model call
+and `adjust` with a conditional edge that routes to a tool node or to `END` on what
+the model returned, and the loop back from the tool to the model is one more edge.
 
-In this simple example:
-	•	We define a state (MyState) that holds a counter.
-	•	We create a node (increment) that increments this counter.
-	•	We compile and run the graph, outputting the incremented count.
+## When the graph is worth its weight
 
-## Advanced Features
-
-Conditional Logic and Branching
-
-You can add conditional logic to decide the next node based on the state or results from previous nodes. For example:
-
-```{.python}
-def check_even(state: MyState) -> State:
-    if state.count % 2 == 0:
-        state.count += 2  # Even, increment by 2
-    else:
-        state.count -= 1  # Odd, decrement by 1
-    return state
-
-# Modify the graph with conditional logic
-sg.add_node("check_even", check_even)
-sg.add_edge("increment", "check_even")
-sg.add_edge("check_even", END)
-
-graph = sg.compile()
-result = graph.invoke(MyState(count=0))  # Starts with 0, will increment by 2 to 2
-print(result.count)  # Output: 2
-```
-
-Here, after incrementing the count, the state is checked for evenness. If even, it increments by 2, otherwise decrements by 1.
-
-## When to Use LangGraph
-
-LangGraph shines in applications that require:
-	•	Multi-agent systems: Where different agents interact with each other and make decisions based on shared state.
-	•	Stateful workflows: When you need to maintain and pass state across multiple steps (e.g., conversational agents).
-	•	Conditional and dynamic logic: For workflows where the path changes depending on previous outputs.
-	•	Complex LLM pipelines: Combining multiple LLMs, tools, and decision-making logic into a single process.
-
-## Comparison with LangChain
-
-Although LangChain is also a popular framework for building LLM applications, it works on a more linear or recursive basis, whereas LangGraph uses a graph-based approach that offers greater flexibility and modularity. Here’s a quick comparison:
-
-| Feature               | LangGraph                               | LangChain                                 |
-|-----------------------|-----------------------------------------|-------------------------------------------|
-| Core abstraction      | Directed graph of nodes                 | Linear or recursive chain of steps        |
-| Execution flow        | Explicit, flexible, graph-based routing | Mostly linear or tree-like flow           |
-| State management      | Centralized mutable state passed through nodes | Local inputs/outputs passed between chains |
-| Concurrency           | Supports parallel branches              | Limited concurrency support               |
-| Use case focus        | Multi-agent systems, conditional flows  | LLM wrappers, tools, agents, retrievers   |
-
-## Conclusion
-
-LangGraph structures branching, multi-agent, and long-lived stateful LLM workflows. Use it when the job is more than a linear chain of calls.
-
-This is the 2025 tour. The same email-routing agent, built twice in LangGraph and LlamaIndex Workflows and compared on the wiring, is in [LangGraph vs LlamaIndex](../langgraph-vs-llamaindex/), and the library API described here has moved on since.
+A graph is more to read than a chain, and for a prompt with one model call it is
+overhead. It pays for itself at the first conditional: a router that sends a request to
+one of several handlers, a tool-using agent that loops until it has an answer, a
+multi-agent system where several roles share one state, or any workflow that has to
+survive a pause and resume. Those are the cases where the `if` statements were
+becoming the program anyway, and the graph makes them the program on purpose.
 
 Chains. Go. Straight. Graphs. Branch. State. Persists. Agents. Need. That.
+
+## References
+
+- [LangGraph documentation](https://langchain-ai.github.io/langgraph/)
+- [LangChain documentation](https://python.langchain.com/)
+- [LangGraph vs LlamaIndex](../langgraph-vs-llamaindex/) on this blog: the same agent
+  built twice, and the current API
+- [LLM agents from first principles](../llm-agents-from-first-principles/) on this
+  blog, for what the loop is without a framework

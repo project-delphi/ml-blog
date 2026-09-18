@@ -1,119 +1,111 @@
 ---
-title: "Model Monitoring"
+title: "Models Rot Silently, and Drift Is Not the Same Failure as Bias"
+description: "Why a deployed model gets worse without changing, the two different ways it fails, and which of AWS's two SageMaker tools watches which. As of early 2025."
+author: "Ravi Kalia"
 date: "2025-03-31"
-categories: [AWS, Machine Learning, Model Monitoring]
+categories: [Machine Learning]
+tags: [monitoring, drift, bias, sagemaker, mlops]
 image: "./cover.png"
-tags: [AWS, SageMaker, Model Monitor, Clarify, MLOps]
 ---
 
-![Model Monitoring](./cover.png)
+![Model monitoring](./cover.png)
 
-Models get quietly worse as the world drifts away from their training data. AWS has two tools for noticing — SageMaker Model Monitor and SageMaker Clarify — and they solve different problems.
+A model is trained once and used for months, and in those months the world it was
+trained on moves: customers change, prices change, a product is launched, a fraud
+pattern is retired because it stopped working. The model does not change with it. It
+keeps making the predictions it learned, with the same confidence, and the only thing
+that reveals the gap is someone measuring. This post says what to measure, why the two
+common failures need different instruments, and which of AWS's two SageMaker tools
+covers which, as of early 2025.
 
-## Introduction
+## Drift is the inputs moving; degradation is the answers getting worse
 
-Machine learning models degrade over time due to changing data and evolving patterns. To maintain model reliability, **model monitoring** is crucial. AWS provides **Amazon SageMaker Model Monitor** and **Amazon SageMaker Clarify**, which address different monitoring needs. They differ in what they watch, when you reach for them, and how they keep model quality visible.
+The failures come in a sequence, and the instruments differ by where in the sequence
+they look.
 
+**Data drift** is the earliest and cheapest signal: the distribution of the inputs the
+model sees today differs from the training data. It needs no labels, only the
+production inputs and the training set, and a two-sample test per feature says how far
+apart they are: the Kolmogorov–Smirnov statistic for a continuous feature, the
+population stability index (a binned divergence that credit-risk teams have used for
+decades), or the Jensen–Shannon divergence between histograms. Drift in the inputs does
+not prove the predictions are wrong, but it is the earliest warning that they might be.
 
-## What is Model Monitoring?
+**Concept drift** is the relationship between inputs and outputs changing: the same
+customer profile now churns when it used not to. Detecting it needs the outcomes, which
+arrive late (a loan defaults months after the score) and sometimes never. Adaptive
+windows and change-point tests such as Page–Hinkley watch the error rate as labels
+trickle in; a shadow model retrained on recent data, compared against the deployed one,
+is the blunt check.
 
-Effective model monitoring involves a combination of automated tracking, statistical testing, and real-time alerting. Here’s how it can be implemented:
+**Performance degradation** is the thing the business notices: accuracy, AUC, RMSE or
+whatever the metric is, tracked over time and against thresholds once ground truth is
+available. It is the lagging indicator, and the reason the two kinds of drift are
+watched at all is to catch it before it lags.
 
-1. Data Drift Detection
-	•	Feature Drift: Compare the distribution of incoming data to the training dataset using Kolmogorov-Smirnov (KS) tests, Population Stability Index (PSI), or Jensen-Shannon divergence.
-	•	Label Drift: Monitor the change in target variable distribution using histograms or KL divergence.
+The response to all three is the same loop: log every input and prediction, alert on
+the tests, retrain on a schedule or on a trigger, and compare the retrained model with
+the deployed one before it takes over.
 
-2. Model Performance Monitoring
-	•	Monitor key metrics like accuracy, precision, recall, F1-score, AUC-ROC, and RMSE over time.
-	•	Compare real-world predictions to actual outcomes (ground truth) when labels become available.
-	•	Set thresholds for acceptable performance; trigger alerts when models degrade beyond a certain level.
+## Bias is a different question, asked at a different time
 
-3. Bias and Fairness Audits
-	•	Use fairness metrics like demographic parity, equalized odds, or disparate impact ratio to check if model predictions disproportionately favor/disadvantage certain groups.
-	•	Employ SHAP values for explainability, ensuring models are making decisions based on relevant features rather than biased proxies.
+Drift asks whether the model still works. Fairness asks whether it works for everyone,
+and that question does not wait for the world to move; a model can be biased on the
+day it ships. The measurements are also different in kind: demographic parity,
+equalised odds, disparate-impact ratios compare outcomes across groups, and
+explanation methods such as SHAP say which features a prediction leaned on, so a proxy
+for a protected attribute can be seen doing the work. Those checks belong before
+training (is the data imbalanced), after training (are the predictions), and again in
+production, but they are audits rather than monitors, and conflating them with drift
+detection is the common mistake in a monitoring plan.
 
-4. Concept Drift Detection
-	•	Use adaptive windowing or Page-Hinkley tests to detect shifts in the relationship between inputs and outputs over time.
-	•	Deploy shadow models (retraining models periodically on fresh data) to compare old and new decision boundaries.
+## Two SageMaker tools, one for each question
 
-5. Automated Logging and Alerts
-	•	Log all input/output data in cloud storage (e.g., AWS S3, Azure Blob).
-	•	Use AWS CloudWatch, Prometheus, or Datadog to set up real-time monitoring dashboards and alerts.
-	•	Implement anomaly detection models (e.g., Isolation Forests, Autoencoders) to flag unusual patterns.
+AWS splits the two questions across two products, and the split is the right way to
+remember them.
 
-6. Scheduled Model Retraining & Deployment
-	•	Use CI/CD pipelines with scheduled retraining (weekly, monthly) based on performance thresholds.
-	•	Implement A/B testing or Champion-Challenger models to compare old and new versions before deployment.
-	•	Automate model updates using MLOps tools like SageMaker Pipelines, Kubeflow, or MLflow.
+**SageMaker Model Monitor** is the drift instrument. It computes a baseline from the
+training data (per-feature statistics and constraints), captures the inputs and
+outputs of a deployed endpoint, runs the statistical comparisons on a schedule, and
+raises CloudWatch alarms when a feature's distribution, a data-quality constraint or,
+once labels arrive, a performance metric crosses its threshold. Custom monitoring
+scripts plug in for anything it does not compute itself. It runs after deployment,
+continuously.
 
-Together these keep production models accurate, fair, and measured against the data they now see.
+**SageMaker Clarify** is the bias-and-explanation instrument. Before training it
+reports imbalance in the data across the groups you name; after training it computes
+the fairness metrics on the predictions; and it produces SHAP-based feature
+attributions per prediction. It runs at the points where a fairness decision is being
+made. Run on its own, its output is a report to read rather than an alarm to page on;
+scheduled through Model Monitor's bias-drift and attribution-drift monitors it runs
+against captured traffic and raises the same CloudWatch alarms, which is the one
+place the two products overlap.
 
-## The Business Case For Model Monitoring
+| | Model Monitor | Clarify |
+|---|---|---|
+| Question | is the model still seeing what it was trained on, and still right? | is it fair, and why did it say that? |
+| When | after deployment, on a schedule | before and after training; on a schedule when Model Monitor drives it |
+| Method | per-feature distribution tests against a baseline; metrics once labels arrive | fairness metrics across groups; SHAP attributions |
+| Output | alarms and violation reports | bias reports and explanations |
 
-Model monitoring is not just a technical necessity—it directly impacts business success. Here's how these tools contribute to measurable business outcomes:
+## Where it stops holding
 
-- **Improved Decision-Making**: Reliable models drive better business insights, reducing errors in forecasting, fraud detection, and customer recommendations.
-- **Cost Optimization**: Identifying model degradation early prevents costly mistakes, like incorrect loan approvals or inaccurate demand forecasting.
-- **Regulatory Compliance**: Industries such as finance and healthcare require bias-free, explainable AI models to comply with regulations like GDPR and AI ethics guidelines.
-- **Customer Trust & Brand Reputation**: Ensuring fairness and consistency in AI-driven decisions helps maintain user trust and prevents reputational damage.
-- **Operational Efficiency**: Automated monitoring reduces the manual effort required to check model performance, allowing teams to focus on innovation.
-
-By integrating **Model Monitor and Clarify**, businesses can proactively measure ML success and mitigate risks before they impact operations.
-
-## Amazon SageMaker Model Monitor: Detecting Drift & Performance Issues
-
-### What It Does
-SageMaker Model Monitor provides continuous tracking of **data quality, feature drift, and model performance**. It helps maintain model reliability by detecting:
-
-- **Feature Drift**: Changes in input feature distributions using statistical tests (e.g., KS test, PSI).
-- **Label Drift**: Changes in the distribution of predicted vs. actual labels.
-- **Model Quality Issues**: Declining accuracy and performance metrics.
-- **Custom Metrics**: Allows users to integrate their own monitoring scripts.
-
-### How It Works
-1. **Baseline Data**: It establishes constraints based on training data.
-2. **Monitoring Schedules**: It periodically evaluates incoming production data.
-3. **Alerts & Insights**: If deviations occur, it triggers notifications via CloudWatch.
-
-### When to Use It
-Use Model Monitor for **post-deployment** tracking, ensuring real-time data consistency and model performance.
-
-## Amazon SageMaker Clarify: Ensuring Fairness & Explainability
-
-### What It Does
-SageMaker Clarify is designed to **detect bias and improve model explainability**. It helps answer:
-
-- **Is my model fair across different demographic groups?**
-- **Why did my model make this prediction?**
-
-### Key Features
-- **Pre-Training Bias Detection**: Identifies imbalances in the dataset.
-- **Post-Training Bias Detection**: Evaluates model predictions for fairness.
-- **Explainability with SHAP Values**: Provides feature importance insights.
-- **Fairness Metrics**: Measures bias using metrics like **demographic parity** and **equalized odds**.
-
-### When to Use It
-Use Clarify **before and after model training** to detect and mitigate bias, ensuring compliance and fairness.
-
-## Comparing Model Monitor & Clarify
-
-| Feature               | Model Monitor                      | Clarify                     |
-|----------------------|--------------------------------|---------------------------|
-| **Focus**           | Data & model performance drift | Bias & model explainability |
-| **When Used?**      | Post-deployment monitoring    | Pre & post-training analysis |
-| **Techniques**      | Statistical tests (PSI, KS)   | SHAP values, fairness metrics |
-| **Primary Output**  | Alerts & reports             | Bias insights & explainability |
-
-## Conclusion
-
-- **Use SageMaker Model Monitor** for tracking model drift and data quality in production.
-- **Use SageMaker Clarify** to detect bias and explain predictions before and after deployment.
-- **Using both covers drift and bias**, which is what production monitoring is for.
-
-SageMaker Model Monitor and Clarify catch drift, data-quality failures, and bias before they reach users.
-
----
-
-Want to dive deeper? Check out the AWS documentation for [Model Monitor](https://docs.aws.amazon.com/sagemaker/latest/dg/model-monitor.html) and [Clarify](https://docs.aws.amazon.com/sagemaker/latest/dg/clarify.html). 🚀
+Both tools measure what they are pointed at. A drift alarm on a feature nobody looks at
+is noise, and a fairness report on the groups the team did not think to name is
+silent; the choice of features, groups and thresholds is the work, and the tools do
+not do it. And a monitor is only as good as the ground truth it eventually gets: a
+system that never records outcomes can watch its inputs drift forever without knowing
+whether it matters.
 
 Models. Rot. Silently. Data. Drifts. First. Monitor. Detects. Clarify. Explains.
+
+## References
+
+- [Amazon SageMaker Model Monitor](https://docs.aws.amazon.com/sagemaker/latest/dg/model-monitor.html)
+- [Amazon SageMaker Clarify](https://docs.aws.amazon.com/sagemaker/latest/dg/clarify.html)
+- Gama, J. et al. (2014). A survey on concept drift adaptation. *ACM Computing Surveys*
+  **46**(4).
+- Lundberg, S. M. and Lee, S.-I. (2017). A unified approach to interpreting model
+  predictions. *NeurIPS 30*. (SHAP.)
+- [Explainability vs causality](../explainability-vs-causality/) on this blog, for what
+  an attribution does and does not say
