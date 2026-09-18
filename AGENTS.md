@@ -293,8 +293,8 @@ that moves shortens it. For those, Quarto hashes `index.qmd` **alone**, so editi
 **re-render that post explicitly** (its real venv) before committing. Do not delete
 `_freeze/posts/<slug>/` instead: `check_freeze` returns clean when a non-legacy record
 is simply absent, so `make check-posts` stays green while `docs/` still serves the old
-bundle. Each of the seven moves to the kit in its own PR, which is also when it gets
-its one re-execution.
+bundle. Each remaining post moves to the kit in its own PR, which is also when it
+gets its one re-execution.
 
 A different mechanism handles browser-run Python exercises: the vendored
 `_extensions/r-wasm/live/`, used only by `numpy-to-jax`, via `engine: jupyter`,

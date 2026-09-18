@@ -40,12 +40,18 @@ QUARTO_PYTHON="$(pwd)/.venv-volcano/bin/python" \
 for the kernel through whatever Python it finds first and fails with
 `Jupyter kernel 'volcano-blog' not found`.
 
-### The freeze trap
+### The bundle is a published resource
 
-Quarto keys frozen output on an md5 of `index.qmd` **alone**. Editing
-`widgets.js` does not invalidate `../../_freeze/posts/volcano-plots/`, so a
-project render will keep serving the old bundle. After changing the widget,
-re-render this post explicitly before committing.
+`widgets.js` is declared under `resources:` and loaded with a `<script src>`,
+so a project render republishes it and a widget change needs no re-execution
+and no kernel. Edit the file, run `make render`, commit `docs/` with it.
+
+This post used to print the bundle into the page from a Python cell, which put
+it outside Quarto's freeze hash: editing the widget left
+`../../_freeze/posts/volcano-plots/` valid and a render kept serving the old
+copy with no warning. That trap is gone here. `make docs-query ARGS="widget
+volcano-plots"` checks the published bundle against the source if you want to
+be sure.
 
 ## The widget
 
