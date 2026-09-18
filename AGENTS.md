@@ -281,10 +281,10 @@ cell, so a prose-only post can carry a widget, and a change to `widgets.js` or t
 is republished by any project render without re-executing anything. Colour is a token
 name, never a hex value. `attention` is the first post on the kit.
 
-Seven older posts still print their `widgets.js` (and usually `widget-data/*.json`)
-into an inline `<script>` from a Python cell: `bayesian-bootstrap`,
-`statistical-jackknife`, `svd-rotate-stretch-rotate`, `tensor-inverses-in-practice`,
-`uses-of-tensor-factorizations`, `volcano-plots`, `why-so-many-matrix-factorizations`
+A shrinking set of older posts still print their `widgets.js` (and usually
+`widget-data/*.json`) into an inline `<script>` from a Python cell:
+`bayesian-bootstrap`, `statistical-jackknife`, `svd-rotate-stretch-rotate`,
+`tensor-inverses-in-practice`, `uses-of-tensor-factorizations`
 (`aav-immune-response` loads its bundle as a resource but predates the kit). Re-derive
 the list with `grep -l 'widgets.js").read_text()' posts/*/index.qmd` rather than
 trusting this sentence. For those, Quarto hashes `index.qmd` **alone**, so editing the sidecar leaves
