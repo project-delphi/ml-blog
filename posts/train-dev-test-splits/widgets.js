@@ -113,20 +113,39 @@ WK.mount("widget-leakage", function (root, WK) {
   }
 
   // ----------------------------------------------------------------- view
+  // One scale for the bars, the whiskers and the chance line, over the whole
+  // accuracy range: a draw can legitimately reach 0, and an axis that started
+  // at 0.3 drew those whiskers through the caption and off the bottom edge.
+  var Y = WK.lin([0, 1], [180, 40]);
+  var BASE = Y(0);
+
   var f = WK.frame({
     title: "Selecting features before the split",
     note: "Every feature is noise and every label is a coin flip, so 50% is the truth. "
         + "The bars average " + REPEATS + " draws; the thin line is the range across them."
   });
 
+  // A draw is 8 full trials, up to 64 ms at the widest settings, and an
+  // `input` event fires per pixel of a drag. Coalescing to one draw per frame
+  // keeps the handle responsive without changing any number it reports.
+  var queued = false;
+  function schedule() {
+    if (queued) return;
+    queued = true;
+    (window.requestAnimationFrame || function (cb) { setTimeout(cb, 16); })(function () {
+      queued = false;
+      draw();
+    });
+  }
+
   var nS = WK.slider({ label: "Rows", min: 40, max: 200, step: 20, value: 100,
-                       fmt: WK.fmt.int, oninput: draw });
+                       fmt: WK.fmt.int, oninput: schedule });
   var pS = WK.slider({ label: "Noise features", min: 50, max: 800, step: 50, value: 500,
-                       fmt: WK.fmt.int, oninput: draw });
+                       fmt: WK.fmt.int, oninput: schedule });
   var kS = WK.slider({ label: "Features kept", min: 1, max: 40, step: 1, value: 10,
-                       fmt: WK.fmt.int, oninput: draw });
+                       fmt: WK.fmt.int, oninput: schedule });
   var seedS = WK.slider({ label: "Seed", min: 1, max: 40, step: 1, value: 7,
-                          fmt: WK.fmt.int, oninput: draw });
+                          fmt: WK.fmt.int, oninput: schedule });
   [nS, pS, kS, seedS].forEach(function (c) { f.controls.appendChild(c.root); });
 
   var svg = WK.svg(640, 220);
@@ -140,14 +159,13 @@ WK.mount("widget-leakage", function (root, WK) {
   root.appendChild(f.root);
 
   function bar(x, label, m, lo, hi, token) {
-    var scale = WK.lin([0.3, 1], [180, 40]);
-    var y = scale(m), base = scale(0.3);
-    svg.appendChild(WK.h("rect", { x: x, y: y, width: 90, height: base - y, fill: token }));
-    svg.appendChild(WK.h("line", { x1: x + 45, x2: x + 45, y1: scale(lo), y2: scale(hi),
+    var y = Y(m);
+    svg.appendChild(WK.h("rect", { x: x, y: y, width: 90, height: BASE - y, fill: token }));
+    svg.appendChild(WK.h("line", { x1: x + 45, x2: x + 45, y1: Y(lo), y2: Y(hi),
                                    stroke: "ink", "stroke-width": 2 }));
     // the label clears the whisker, which reaches above the mean whenever the
     // spread across draws does
-    svg.appendChild(WK.h("text", { x: x + 45, y: Math.min(y, scale(hi)) - 10,
+    svg.appendChild(WK.h("text", { x: x + 45, y: Math.min(y, Y(hi)) - 10,
                                    "text-anchor": "middle",
                                    fill: "ink", "font-size": 15,
                                    text: WK.fmt.pct(m, 1) }));
@@ -157,16 +175,14 @@ WK.mount("widget-leakage", function (root, WK) {
 
   function draw() {
     var n = nS.get(), p = pS.get(), k = kS.get(), seed = seedS.get();
-    if (k > n) { kS.set(n, true); k = n; }
     var r = run(n, p, k, seed);
 
     WK.clear(svg);
-    var scale = WK.lin([0.3, 1], [180, 40]);
     // the chance line: the only honest answer for data with no signal
-    svg.appendChild(WK.h("line", { x1: 30, x2: 610, y1: scale(0.5), y2: scale(0.5),
+    svg.appendChild(WK.h("line", { x1: 30, x2: 610, y1: Y(0.5), y2: Y(0.5),
                                    stroke: "rule", "stroke-width": 1,
                                    "stroke-dasharray": "5 4" }));
-    svg.appendChild(WK.h("text", { x: 616, y: scale(0.5) + 4, fill: "muted",
+    svg.appendChild(WK.h("text", { x: 616, y: Y(0.5) + 4, fill: "muted",
                                    "font-size": 12, text: "50%" }));
     bar(150, "before the split", r.leaky, r.leakyLo, r.leakyHi, "c4");
     bar(400, "inside the split", r.honest, r.honestLo, r.honestHi, "c2");
