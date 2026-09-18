@@ -86,7 +86,8 @@ check-quarto:
 	  || { echo "quarto $$v found, $(QUARTO_VERSION) required (a newer one rewrites docs/site_libs/)"; exit 1; }
 # Render-time assets that are ignored at the source but tracked under docs/
 # (the third .gitignore trap in AGENTS.md). A full render rebuilds docs/ from
-# source and so drops them; `render` puts them back before the deletion check.
+# source and so drops them unless the post re-executed; `render` puts back
+# only the ones the render deleted, before the deletion check.
 RENDER_KEEP := docs/posts/uses-of-tensor-factorizations/media
 
 # The whole site, respecting freeze. Output goes to render.log because a
@@ -99,7 +100,7 @@ render: check-quarto
 	  status=$$?; tail -40 render.log; \
 	  grep -inE 'error|not found|traceback' render.log || true; \
 	  test $$status -eq 0 || { echo "render failed (see render.log); restore with: git checkout -- docs"; exit $$status; }
-	@git checkout -- $(RENDER_KEEP)
+	@git status --short -- $(RENDER_KEEP) | sed -n 's/^ D //p' | while read -r f; do git checkout -- "$$f"; done
 	@$(MAKE) --no-print-directory docs-deleted
 	@$(MAKE) --no-print-directory check-posts
 # One post, always executed (freeze is honoured only on a project render), so

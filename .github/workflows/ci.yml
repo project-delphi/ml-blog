@@ -21,6 +21,9 @@ concurrency:
 
 env:
   QUARTO_VERSION: "1.6.40"
+  # Every `uv sync` in CI, including the one `make kernels-stub` runs, must
+  # install the locked versions and never re-resolve.
+  UV_FROZEN: "1"
 
 jobs:
   checks:
@@ -74,10 +77,9 @@ jobs:
             echo "::error::docs/site_libs changed: the Quarto runtime differs from the one that built main"
             exit 1
           fi
-      # Tracked files only: a freeze record can carry orphaned figure files
-      # that a render copies out but no page references. Advisory until
-      # search.json has proved deterministic across runners; then this
-      # becomes a hard check.
+      # Advisory until search.json has proved deterministic across runners
+      # and the orphaned figure files one freeze record still carries are
+      # gone; then this becomes a hard check.
       - name: docs/ matches a fresh render
         continue-on-error: true
         run: |
@@ -85,9 +87,11 @@ jobs:
             echo "## docs/ drift against a fresh render"
             git diff --stat -- docs | tail -20
             echo
-            git diff --name-only -- docs | wc -l | xargs printf '%s tracked file(s) differ\n'
+            echo "tracked files changed: $(git diff --name-only -- docs | wc -l)"
+            echo "untracked files added: $(git status --porcelain -- docs | grep -c '^??' || true)"
+            git status --porcelain -- docs | grep '^??' | head -20
           } >> "$GITHUB_STEP_SUMMARY"
-          git diff --quiet -- docs
+          test -z "$(git status --porcelain -- docs)"
       - name: upload render log
         if: always()
         uses: actions/upload-artifact@v4
