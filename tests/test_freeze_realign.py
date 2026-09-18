@@ -281,6 +281,15 @@ def test_inline_code_values_are_carried_into_edited_prose():
     assert "The mean is 2\\.50 here, edited.\n" in rec["result"]["markdown"]
 
 
+def test_knitr_inline_code_is_treated_like_python_inline():
+    parts = ("one\n", "\nThe ratio is `r fmt(x, 4)` here.\n", "\nthree\n")
+    old = source(*parts)
+    new = old.replace("here.", "here, edited.")
+    markdown = stored("one\n", "\nThe ratio is 1.0667 here.\n", "\nthree\n")
+    rec = fr.realign(old, new, frozen(old, markdown))
+    assert "The ratio is 1.0667 here, edited.\n" in rec["result"]["markdown"]
+
+
 def test_changed_inline_code_is_refused():
     parts = ("one\n", '\nThe mean is `{python} f"{m:.2f}"` here.\n', "\nthree\n")
     old = source(*parts)

@@ -61,8 +61,9 @@ MAX_HISTORY = 200
 # cell has a label, `::: {#label .cell ...}`.
 CELL_DIV_RE = re.compile(r"::: \{[^}\n]*\.cell[\s}]")
 CELL_OPT_RE = re.compile(r"^#\|\s*([\w.-]+):\s*(.*?)\s*$")
-# Inline code the engine evaluates in prose: `{python} expr`.
-INLINE_RE = re.compile(r"`\{python\}[^`\n]*`")
+# Inline code the engine evaluates in prose: `{python} expr` under the jupyter
+# engine, `r expr` under knitr.
+INLINE_RE = re.compile(r"`(?:\{python\}|r )[^`\n]*`")
 DIV_ID_RE = re.compile(r"::: \{#([^\s}]+)")
 EXEC_COUNT_RE = re.compile(r"execution_count=(\d+)")
 
@@ -399,7 +400,15 @@ def git_show(rev: str, path: Path) -> str | None:
 
 
 def source_for_hash(path: Path, wanted: str) -> str | None:
-    """Walk the file's history for the revision whose md5 the record stores."""
+    """Find the version of the file whose md5 the record stores.
+
+    The staged copy comes first: after one realign, a second edit before the
+    commit (a pre-commit fixer, say) leaves the record pointing at a version
+    that exists only in the index. Then the file's history.
+    """
+    staged = git_show("", path)
+    if staged is not None and hashlib.md5(staged.encode("utf-8")).hexdigest() == wanted:
+        return staged
     proc = subprocess.run(
         [
             "git",
@@ -429,10 +438,19 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="report whether the realign would succeed, without writing",
     )
+    parser.add_argument(
+        "--legacy",
+        action="store_true",
+        help="allow a LEGACY_NO_ENV post: its record is the only copy of what it "
+        "computes, so only a change you have checked with --check belongs here",
+    )
     args = parser.parse_args(argv)
     slug = args.slug
-    if slug in cp.LEGACY_NO_ENV:
-        print(f"{slug}: is in LEGACY_NO_ENV; its record is not touched by machine.")
+    if slug in cp.LEGACY_NO_ENV and not args.legacy:
+        print(
+            f"{slug}: is in LEGACY_NO_ENV; its record is the only copy of what it "
+            "computes. Pass --legacy to splice a prose or frontmatter change anyway."
+        )
         return 1
     source = cp.POSTS / slug / "index.qmd"
     record_path = cp.FREEZE / slug / "index" / "execute-results" / "html.json"
