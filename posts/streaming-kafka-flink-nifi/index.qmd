@@ -1,0 +1,177 @@
+---
+title: "Kafka Moves Events, NiFi Routes Them, Flink Computes on Them"
+description: "Three streaming tools that are constantly mistaken for one another do three different jobs: a durable log, a visual router with provenance, and a stateful processor. Merges three earlier posts."
+author: "Ravi Kalia"
+date: "2025-03-02"
+categories: [Data Engineering, Streaming]
+tags: [kafka, nifi, flink, streaming, aws, kinesis, event-driven]
+image: "./cover.png"
+aliases:
+  - /posts/kafka-aws/
+  - /posts/nifi/
+  - /posts/apache-flink/
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
+---
+
+![Kafka, NiFi and Flink](./cover.png)
+
+Cover: [Aerial image of the confluence of the Saar and Moselle](https://commons.wikimedia.org/wiki/File:Aerial_image_of_the_confluence_of_the_Saar_and_Moselle.jpg)
+by Carsten Steger, Wikimedia Commons, CC BY-SA 4.0.
+
+Kafka, NiFi and Flink all appear in the same architecture diagrams, all say "streaming"
+on the tin, and get picked by habit. They are not substitutes. One is a log you can
+replay, one is a router you draw, one is a computer that keeps state as events pass
+through it, and a working pipeline often uses all three in a row. This post says what
+each one is for and how to tell which you need. It replaces three earlier posts, one
+per tool, whose addresses now redirect here.
+
+## The three jobs are moving, routing and computing
+
+Any system that reacts to events has to do three things that look alike from a
+distance. It has to *move* events from where they happen to where they are used,
+durably enough that a crash does not lose them. It has to *route* them: read from a
+file here, write to a bucket there, convert the format in between. And it has to
+*compute* on them: count, join, window, detect a pattern across many events. A tool
+that does one of these can be pressed into another, which is where the confusion
+starts. Kafka moves, NiFi routes, Flink computes.
+
+## Kafka is a durable log, and replay is the point
+
+Kafka organises events into **topics**, each split into **partitions**; a partition
+is an append-only log where every message has an **offset**. Producers append, and
+consumers, grouped into **consumer groups**, read from an offset of their choosing.
+Messages are persisted and replicated across brokers, so a consumer that was down for
+an hour picks up where it stopped, and a new consumer can read the whole history.
+
+That last property is what separates Kafka from a queue. A queue hands each message to
+one consumer and forgets it; Kafka keeps it, so two teams can consume the same stream
+for different purposes and either can start over. The cost is that Kafka does no
+processing of its own beyond partitioning, and ordering holds only within a partition.
+
+A producer and a consumer in Python are a few lines each, against a local broker on the
+default port (the `confluent-kafka` package; illustrative, not executed here):
+
+```python
+import json
+
+from confluent_kafka import Consumer, Producer
+
+producer = Producer({"bootstrap.servers": "localhost:9092"})
+event = {"id": 1, "name": "Alice", "amount": 100.5}
+producer.produce("payments", key=str(event["id"]), value=json.dumps(event))
+producer.flush()
+
+consumer = Consumer({
+    "bootstrap.servers": "localhost:9092",
+    "group.id": "reporting",
+    "auto.offset.reset": "earliest",  # replay from the start of the log
+})
+consumer.subscribe(["payments"])
+msg = consumer.poll(timeout=1.0)
+if msg and not msg.error():
+    print(json.loads(msg.value()))
+consumer.close()
+```
+
+On AWS the choice is usually between running Kafka and a managed substitute, and the
+substitutes each give up a piece of the log. As of early 2025: **MSK** is Kafka itself,
+managed. **Kinesis** is a managed stream with retention and replay but its own API.
+**SQS** is a queue: each message is delivered once and gone. **SNS** is publish and
+subscribe with no persistence. **EventBridge** is an event bus with routing rules and no
+retention. Choose on retention: if anyone will ever need to re-read the stream, it has
+to be Kafka, MSK or Kinesis.
+
+## NiFi is a router you draw, and the audit trail is its edge
+
+NiFi moves data between systems through a web canvas. A **FlowFile** is one unit of
+data plus its attributes; a **processor** does one thing to it, such as reading a
+file, calling an HTTP endpoint, converting CSV to JSON, or writing to S3; **connections**
+between processors carry FlowFiles and apply back-pressure when a downstream processor
+falls behind. A pipeline is a graph of processors on the canvas, started and stopped
+from the browser.
+
+Two things make NiFi different from a script that does the same moves. The graph is
+visible and editable by people who are not going to write the script. And every
+FlowFile carries **provenance**: the full record of which processors touched it, when,
+and what they changed. When a regulator, or a colleague at 2 a.m., asks where a record
+came from and what happened to it, NiFi can answer and Kafka cannot.
+
+NiFi will read from and write to Kafka, S3, HDFS, JDBC databases and HTTP endpoints,
+and it runs as a cluster. What it does not do well is stateful computation across
+events: it processes each FlowFile largely on its own.
+
+## Flink computes on the stream, with state and exactly-once
+
+Flink is a distributed processor for unbounded streams. A job is a dataflow of
+transformations; each operator can hold **state**, such as the running count for a
+key or the events seen in the last minute, and Flink checkpoints that state so a
+failure restarts from the last consistent snapshot with **exactly-once** results.
+It understands **event time**, the time an event happened rather than the time it
+arrived, and uses watermarks to close windows correctly when events arrive late.
+
+The canonical example is a word count over a socket, in the PyFlink API; run it
+against `nc -lk 9999` and type lines (illustrative, not executed here):
+
+```python
+from pyflink.common.typeinfo import Types
+from pyflink.datastream import StreamExecutionEnvironment
+
+env = StreamExecutionEnvironment.get_execution_environment()
+lines = env.socket_text_stream("localhost", 9999)
+
+counts = (
+    lines.flat_map(lambda line: line.split(), output_type=Types.STRING())
+    .map(lambda word: (word, 1), output_type=Types.TUPLE([Types.STRING(), Types.INT()]))
+    .key_by(lambda pair: pair[0])
+    .sum(1)
+)
+counts.print()
+env.execute("word count")
+```
+
+The `sum(1)` is the stateful part: the count per word survives across events and across
+restarts. Nothing in Kafka or NiFi keeps that count for you.
+
+## They chain, and the chain says which is which
+
+The three fit together in one direction. NiFi ingests from sources that are awkward to
+talk to and routes into Kafka; Kafka holds the stream durably and lets several
+consumers read it; Flink reads from Kafka, computes, and writes results to a database
+or a dashboard, often back into another Kafka topic. Reading that chain backwards is
+the test: if the job is to keep a count, a join or a window, it is Flink's; if the job
+is to get data from system A into system B with a record of the trip, it is NiFi's; if
+the job is to hold events so that consumers can read them at their own pace, and again
+later, it is Kafka's.
+
+| Question | Kafka | NiFi | Flink |
+|---|---|---|---|
+| Can I re-read last week's events? | yes, by offset | no | no |
+| Can a non-programmer see and edit the pipeline? | no | yes | no |
+| Where did this record come from? | not recorded | provenance per FlowFile | not recorded |
+| Can it keep a running count per key? | no | not across events | yes, checkpointed |
+| Exactly-once results after a failure? | delivery only | queue-based retry | yes |
+
+## Where it stops holding
+
+The boundaries blur at the edges. Kafka Streams and ksqlDB put stateful processing on
+top of Kafka, and for a simple aggregation they remove the need for Flink. NiFi can
+call out to a script and so compute anything, at the price of doing it per FlowFile.
+Flink can read files and act as a batch engine. The rule above is about what each tool
+is *for*, which is what decides how it behaves when the pipeline is under load or
+half-broken, and that is when the difference between a log, a router and a processor
+stops being academic.
+
+Kafka. Keeps. NiFi. Carries. Flink. Counts. One. Job. Each. Chain. Them.
+
+## References
+
+- [Apache Kafka documentation](https://kafka.apache.org/documentation/)
+- [Apache NiFi documentation](https://nifi.apache.org/docs.html)
+- [Apache Flink documentation](https://flink.apache.org/)
+- [Amazon MSK](https://aws.amazon.com/msk/), [Kinesis](https://aws.amazon.com/kinesis/),
+  [SQS](https://aws.amazon.com/sqs/), [SNS](https://aws.amazon.com/sns/),
+  [EventBridge](https://aws.amazon.com/eventbridge/)

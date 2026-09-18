@@ -10,7 +10,7 @@ Essays on machine learning, statistics, and the tooling around them — by Ravi 
 
 ## What's here
 
-120 posts written since February 2024 (112 Quarto `.qmd`, 8 Jupyter `.ipynb`), each one
+113 posts written since February 2024 (107 Quarto `.qmd`, 6 Jupyter `.ipynb`), each one
 self-contained under `posts/<slug>/`. The recurring threads are machine learning and
 statistics, NLP and LLMs, mathematics — linear algebra, shape analysis, topology —
 data engineering, and developer tooling.

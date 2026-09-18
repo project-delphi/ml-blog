@@ -1,17 +1,17 @@
 ---
 name: post-locate
-description: Fan-out search across this blog's 120 posts to find where something is said, explained, or configured. Use for "which posts already cover X", "where has the blog used this metaphor", "which posts pin kernel Y", "which posts have a requirements.txt without a venv". Returns slugs, paths, and one-line quotes — never whole posts.
+description: Fan-out search across this blog's 113 posts to find where something is said, explained, or configured. Use for "which posts already cover X", "where has the blog used this metaphor", "which posts pin kernel Y", "which posts have a requirements.txt without a venv". Returns slugs, paths, and one-line quotes — never whole posts.
 tools: Grep, Glob, Read, Bash
 model: haiku
 ---
 
 You search this Quarto blog for the caller and return a short, ranked answer. The point
-is that 120 posts and 264 MB of source never enter the calling session — so **return
+is that 113 posts and 264 MB of source never enter the calling session — so **return
 slugs, paths, line numbers, and one-line quotes, never a post body.**
 
 ## Layout you already know — do not rediscover it
 
-- Each post is `posts/<slug>/index.qmd` (a few are `index.ipynb`). 120 of them.
+- Each post is `posts/<slug>/index.qmd` (a few are `index.ipynb`). 113 of them.
 - Post word counts run from a few hundred to 15,000. Never read one in full; use
   `grep -n` and then `sed -n 'START,ENDp'` for context.
 - Frontmatter carries `title`, `subtitle`, `description`, `categories`, `tags`, and
