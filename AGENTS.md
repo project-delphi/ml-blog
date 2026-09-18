@@ -163,9 +163,12 @@ interpreter inside a `make` recipe.
 **A stale freeze after a prose-only edit** does not need the post's venv:
 `make freeze-realign SLUG=<slug>` splices the new prose into the frozen record and
 updates its hash, then the next `make render` reuses the stored cell outputs. It refuses
-whenever an executable cell or an inline `{python}` expression changed, when it cannot
-place the new prose exactly, or for a `LEGACY_NO_ENV` post, and says why; `--check`
-reports the verdict without writing. Rewriting the hash by hand is **not** an
+whenever an executable cell or an inline `{python}` / knitr `r` expression changed, or
+when it cannot place the new prose exactly, and says why. Flags go through `ARGS`:
+`make freeze-realign SLUG=<slug> ARGS=--check` reports the verdict without writing, and a
+`LEGACY_NO_ENV` post needs `ARGS=--legacy` as well, because the splice is the only safe
+way to touch one of those (a re-render is impossible), so run `--check` first and keep
+the change to prose or frontmatter. Rewriting the hash by hand is **not** an
 alternative: the record stores the whole document as markdown, so a hash-only realign
 republishes the old prose under a valid-looking record.
 
@@ -314,6 +317,26 @@ format:
     code-fold: true
     number-sections: true # Register B
 ```
+
+### Theme and per-post styling
+
+The site theme is a light/dark pair in `_quarto.yml`: `zephyr` plus `theme/light.scss`
+or `theme/dark.scss`, plus `widget-kit/chrome.scss`. Both halves define the same
+`--w-*` custom properties (ink, muted, rule, paper, surface, accent, and a categorical
+series c1–c6) under different values, and the mermaid palette. Anything styled with
+`var(--w-*)` follows the reader's toggle; anything with a hex value does not.
+
+- **Never set `theme:` in a post.** Quarto 1.6 cannot merge a document-level `theme:`
+  with the project's light/dark pair: the render dies with `Path must be a string` on
+  that post, after `docs/` is deleted. Per-post styling goes in a plain CSS file via
+  `css: post.css`, written against the tokens. The eleven posts that carried a `theme:`
+  from before the pair existed were converted with `make freeze-realign` (their
+  `theme.scss` compiled to `post.css` with Quarto's bundled dart-sass,
+  `/Applications/quarto/bin/tools/*/dart-sass/sass`).
+- Figures and hand-rolled widgets that draw in fixed colours (the older `widgets.js`
+  files, the aav diagrams) stay on a white or paper card in both schemes rather than
+  being recoloured; `posts/aav-immune-response/post.css` is the worked example, and
+  its header comment says which rules are fixed and why.
 
 `.ipynb` posts embed the same YAML in a raw cell at the top. `posts/_metadata.yml`
 applies `freeze: auto`, `title-block-banner: true`, `toc: true` and `toc-depth: 3` to

@@ -19,7 +19,7 @@ widgets let the reader drive the maths directly.
 ```
 index.qmd              the post (Quarto, jupyter engine, Python)
 widgets.js             both widgets, dependency-free
-theme.scss             post-scoped theme layered over the site's `zephyr`
+post.css             post-scoped stylesheet, compiled from the former theme.scss, included via `css:`
 cover.png              social card, the rotate-stretch-rotate figure
 requirements.txt       pinned dependencies
 Makefile               data | widgets | cover | render | all
