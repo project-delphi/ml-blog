@@ -200,7 +200,17 @@ of that is machine-written, and none of it needs to be read to be checked.
 - **Never open a file under `docs/`, `_freeze/`, or `index_files/`.** `.claude/settings.json`
   denies the Read tool on all three. Every question actually asked of them — did the widget
   bundle land, is the post in `search.json`, did the media survive the render — is a
-  `grep -c` question. Ask `docs-inspect` when it needs more than one.
+  counting question, and `scripts/docs_query.py` answers those without returning any of
+  the file: it reads in chunks, caps its own output, and truncates every excerpt.
+
+  ```bash
+  .venv/bin/python scripts/docs_query.py post <slug>      # page + listing + search
+  .venv/bin/python scripts/docs_query.py widget <slug>    # is the served bundle current
+  .venv/bin/python scripts/docs_query.py -F count 'x' docs/posts/<slug>/index.html
+  ```
+
+  Prefer it to a bare `grep`, which the permission layer often refuses on a file that
+  size. Ask `docs-inspect` when a question needs more than one call.
 - **Send render output to a log**, then read `tail -40` and
   `grep -inE 'error|not found|traceback'` of it. A 113-post project render emits thousands
   of lines and the useful part is the last screenful. `render-verify` does this and returns
