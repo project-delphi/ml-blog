@@ -8,8 +8,9 @@
 
 <meta name="author" content="Ravi Kalia">
 <meta name="dcterms.date" content="2025-01-27">
+<meta name="description" content="Which clustering hyperparameters can honestly be tuned on a held-out split, what the label-free metrics measure, and a worked case where the silhouette picks the wrong number of clusters with a straight face.">
 
-<title>Hyperparameter Tuning in Clustering Algorithms: A Complete Guide – Synthetic Musings</title>
+<title>Clustering Has No Labels to Tune Against, So the Metric Can Lie – Synthetic Musings</title>
 <style>
 code{white-space: pre-wrap;}
 span.smallcaps{font-variant: small-caps;}
@@ -107,15 +108,48 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <style>html{ scroll-behavior: smooth; }</style>
 <script src="../../widget-kit/kit.js"></script>
 
+  <script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
 
-<meta property="og:title" content="Hyperparameter Tuning in Clustering Algorithms: A Complete Guide – Synthetic Musings">
-<meta property="og:description" content="Technical write-ups on machine learning, statistics, linear algebra, and the tooling around them, by Ravi Kalia.">
-<meta property="og:image" content="https://project-delphi.github.io/ml-blog/posts/clustering-tuning-metrics/clustering.gif">
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN") {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+<meta property="og:title" content="Clustering Has No Labels to Tune Against, So the Metric Can Lie – Synthetic Musings">
+<meta property="og:description" content="Which clustering hyperparameters can honestly be tuned on a held-out split, what the label-free metrics measure, and a worked case where the silhouette picks the wrong number of clusters with a straight face.">
+<meta property="og:image" content="https://project-delphi.github.io/ml-blog/posts/clustering-tuning-metrics/cover.png">
 <meta property="og:site_name" content="Synthetic Musings">
-<meta name="twitter:title" content="Hyperparameter Tuning in Clustering Algorithms: A Complete Guide – Synthetic Musings">
-<meta name="twitter:description" content="Technical write-ups on machine learning, statistics, linear algebra, and the tooling around them, by Ravi Kalia.">
-<meta name="twitter:image" content="https://project-delphi.github.io/ml-blog/posts/clustering-tuning-metrics/clustering.gif">
+<meta property="og:image:height" content="630">
+<meta property="og:image:width" content="1200">
+<meta name="twitter:title" content="Clustering Has No Labels to Tune Against, So the Metric Can Lie – Synthetic Musings">
+<meta name="twitter:description" content="Which clustering hyperparameters can honestly be tuned on a held-out split, what the label-free metrics measure, and a worked case where the silhouette picks the wrong number of clusters with a straight face.">
+<meta name="twitter:image" content="https://project-delphi.github.io/ml-blog/posts/clustering-tuning-metrics/cover.png">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image-height" content="630">
+<meta name="twitter:image-width" content="1200">
 </head>
 
 <body class="nav-fixed">
@@ -177,11 +211,15 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <header id="title-block-header" class="quarto-title-block default page-columns page-full">
   <div class="quarto-title-banner page-columns page-full">
     <div class="quarto-title column-body">
-      <h1 class="title">Hyperparameter Tuning in Clustering Algorithms: A Complete Guide</h1>
-                                <div class="quarto-categories">
+      <h1 class="title">Clustering Has No Labels to Tune Against, So the Metric Can Lie</h1>
+                  <div>
+        <div class="description">
+          Which clustering hyperparameters can honestly be tuned on a held-out split, what the label-free metrics measure, and a worked case where the silhouette picks the wrong number of clusters with a straight face.
+        </div>
+      </div>
+                          <div class="quarto-categories">
                 <div class="quarto-category">Machine Learning</div>
                 <div class="quarto-category">Clustering</div>
-                <div class="quarto-category">Hyperparameter Tuning</div>
               </div>
                   </div>
   </div>
@@ -215,29 +253,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#clustering-algorithms-some-thoughts" id="toc-clustering-algorithms-some-thoughts" class="nav-link active" data-scroll-target="#clustering-algorithms-some-thoughts">Clustering Algorithms: Some Thoughts</a>
-  <ul class="collapse">
-  <li><a href="#why-tune-hyperparameters-in-clustering" id="toc-why-tune-hyperparameters-in-clustering" class="nav-link" data-scroll-target="#why-tune-hyperparameters-in-clustering"><strong>Why Tune Hyperparameters in Clustering?</strong></a></li>
-  <li><a href="#key-hyperparameters-in-clustering-algorithms" id="toc-key-hyperparameters-in-clustering-algorithms" class="nav-link" data-scroll-target="#key-hyperparameters-in-clustering-algorithms"><strong>Key Hyperparameters in Clustering Algorithms</strong></a></li>
-  <li><a href="#training-validation-and-test-data" id="toc-training-validation-and-test-data" class="nav-link" data-scroll-target="#training-validation-and-test-data"><strong>Training, Validation, and Test Data</strong></a>
-  <ul class="collapse">
-  <li><a href="#what-is-validation-data" id="toc-what-is-validation-data" class="nav-link" data-scroll-target="#what-is-validation-data"><strong>What is Validation Data?</strong></a></li>
-  <li><a href="#when-to-use-validation-data" id="toc-when-to-use-validation-data" class="nav-link" data-scroll-target="#when-to-use-validation-data"><strong>When to Use Validation Data</strong></a></li>
-  <li><a href="#why-not-test-data" id="toc-why-not-test-data" class="nav-link" data-scroll-target="#why-not-test-data"><strong>Why Not Test Data?</strong></a></li>
-  </ul></li>
-  <li><a href="#evaluation-metrics-for-clustering" id="toc-evaluation-metrics-for-clustering" class="nav-link" data-scroll-target="#evaluation-metrics-for-clustering"><strong>Evaluation Metrics for Clustering</strong></a>
-  <ul class="collapse">
-  <li><a href="#intrinsic-metrics-no-ground-truth-needed" id="toc-intrinsic-metrics-no-ground-truth-needed" class="nav-link" data-scroll-target="#intrinsic-metrics-no-ground-truth-needed"><strong>Intrinsic Metrics</strong> (No ground truth needed):</a></li>
-  <li><a href="#extrinsic-metrics-require-ground-truth" id="toc-extrinsic-metrics-require-ground-truth" class="nav-link" data-scroll-target="#extrinsic-metrics-require-ground-truth"><strong>Extrinsic Metrics</strong> (Require ground truth):</a></li>
-  </ul></li>
-  <li><a href="#code-example-tuning-k-means" id="toc-code-example-tuning-k-means" class="nav-link" data-scroll-target="#code-example-tuning-k-means"><strong>Code Example: Tuning K-Means</strong></a></li>
-  <li><a href="#what-about-algorithms-sensitive-to-validation-data" id="toc-what-about-algorithms-sensitive-to-validation-data" class="nav-link" data-scroll-target="#what-about-algorithms-sensitive-to-validation-data"><strong>What About Algorithms Sensitive to Validation Data?</strong></a></li>
-  <li><a href="#cross-validation-for-clustering" id="toc-cross-validation-for-clustering" class="nav-link" data-scroll-target="#cross-validation-for-clustering"><strong>Cross-Validation for Clustering</strong></a></li>
-  <li><a href="#key-takeaways" id="toc-key-takeaways" class="nav-link" data-scroll-target="#key-takeaways"><strong>Key Takeaways</strong></a>
-  <ul class="collapse">
-  <li><a href="#questions-for-reflection" id="toc-questions-for-reflection" class="nav-link" data-scroll-target="#questions-for-reflection"><strong>Questions for Reflection</strong></a></li>
-  </ul></li>
-  </ul></li>
+  <li><a href="#only-some-clustering-algorithms-can-be-tuned-on-a-split" id="toc-only-some-clustering-algorithms-can-be-tuned-on-a-split" class="nav-link active" data-scroll-target="#only-some-clustering-algorithms-can-be-tuned-on-a-split">Only some clustering algorithms can be tuned on a split</a></li>
+  <li><a href="#the-label-free-metrics-reward-compactness-and-separation-not-correctness" id="toc-the-label-free-metrics-reward-compactness-and-separation-not-correctness" class="nav-link" data-scroll-target="#the-label-free-metrics-reward-compactness-and-separation-not-correctness">The label-free metrics reward compactness and separation, not correctness</a></li>
+  <li><a href="#a-case-where-the-silhouette-is-confident-and-wrong" id="toc-a-case-where-the-silhouette-is-confident-and-wrong" class="nav-link" data-scroll-target="#a-case-where-the-silhouette-is-confident-and-wrong">A case where the silhouette is confident and wrong</a></li>
+  <li><a href="#what-to-do-when-the-metric-cannot-be-trusted" id="toc-what-to-do-when-the-metric-cannot-be-trusted" class="nav-link" data-scroll-target="#what-to-do-when-the-metric-cannot-be-trusted">What to do when the metric cannot be trusted</a></li>
+  <li><a href="#references" id="toc-references" class="nav-link" data-scroll-target="#references">References</a></li>
   </ul>
 <div class="toc-actions"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/clustering-tuning-metrics/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></nav>
     </div>
@@ -250,210 +270,190 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
-<p><img src="./clustering.gif" class="img-fluid figure-img"></p>
-<figcaption>Clustering Algorithms</figcaption>
+<p><img src="./cover.png" class="img-fluid figure-img"></p>
+<figcaption>Clustering</figcaption>
 </figure>
 </div>
-<p>Clustering has no labels to tune against. Which algorithms you can honestly tune against a held-out split, and which metrics mean anything without ground truth, are separate questions with different answers.</p>
-<section id="clustering-algorithms-some-thoughts" class="level1">
-<h1>Clustering Algorithms: Some Thoughts</h1>
-<p>Clustering algorithms are essential in unsupervised learning, grouping similar data points based on patterns and structure. It’s dimensionality reduction in the extreme (each data point maps exactly to one of K clusters (or classes)). However, hyperparameter tuning plays a critical role in achieving good results.</p>
-<hr>
-<section id="why-tune-hyperparameters-in-clustering" class="level2">
-<h2 class="anchored" data-anchor-id="why-tune-hyperparameters-in-clustering"><strong>Why Tune Hyperparameters in Clustering?</strong></h2>
-<p>Unlike supervised learning, clustering lacks ground truth labels to guide optimization. Therefore, we rely on intrinsic metrics or external strategies to evaluate cluster quality. Proper hyperparameter tuning can:</p>
-<ul>
-<li>Improve cluster quality.</li>
-<li>Reveal meaningful patterns in data.</li>
-<li>Adapt models to specific datasets.</li>
-</ul>
-<hr>
-</section>
-<section id="key-hyperparameters-in-clustering-algorithms" class="level2">
-<h2 class="anchored" data-anchor-id="key-hyperparameters-in-clustering-algorithms"><strong>Key Hyperparameters in Clustering Algorithms</strong></h2>
+<p>Tuning a classifier is a solved routine: hold out some data, try the settings, keep the one that scores best on the held-out part. Clustering breaks the routine at the last step, because there is no score. Nothing in the data says which points belong together, so the number of clusters, the density threshold or the linkage rule has to be chosen against a metric that is computed from the clustering itself. Those metrics are useful and they are not the truth, and the gap between the two is what this post is about: which knobs can be tuned on a split at all, what the label-free metrics reward, and a small case where the most popular one picks the wrong answer.</p>
+<section id="only-some-clustering-algorithms-can-be-tuned-on-a-split" class="level2">
+<h2 class="anchored" data-anchor-id="only-some-clustering-algorithms-can-be-tuned-on-a-split">Only some clustering algorithms can be tuned on a split</h2>
+<p>A validation split works for a classifier because the model can be fitted on one part and scored on another. Some clustering algorithms have that shape and some do not. K-means and Gaussian mixtures produce a rule that assigns a <em>new</em> point to a cluster, so they can be fitted on training data and their assignments scored on validation data. Agglomerative clustering has no such rule in scikit-learn, but its clusters have centroids, and assigning each held-out point to the nearest one is a rule of the same kind, written by hand. DBSCAN and OPTICS do not: they label the points they were given by local density, and a held-out point has no label until it is clustered along with the rest. Spectral clustering needs the affinity matrix of the whole set, which a split distorts.</p>
 <table class="caption-top table">
 <colgroup>
-<col style="width: 18%">
-<col style="width: 32%">
-<col style="width: 49%">
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
 </colgroup>
 <thead>
 <tr class="header">
 <th>Algorithm</th>
-<th>Key Hyperparameters</th>
-<th>Notes</th>
+<th>Knobs</th>
+<th>Tune on a split?</th>
 </tr>
 </thead>
 <tbody>
 <tr class="odd">
-<td><strong>K-Means</strong></td>
-<td><code>n_clusters</code>, <code>init</code>, <code>max_iter</code></td>
-<td>Works well with validation sets and intrinsic metrics.</td>
+<td>K-means</td>
+<td><code>n_clusters</code>, <code>init</code></td>
+<td>yes: <code>predict</code> exists</td>
 </tr>
 <tr class="even">
-<td><strong>DBSCAN</strong></td>
-<td><code>eps</code>, <code>min_samples</code></td>
-<td>Sensitive to density; validation can be tricky.</td>
-</tr>
-<tr class="odd">
-<td><strong>Agglomerative</strong></td>
+<td>Agglomerative</td>
 <td><code>n_clusters</code>, <code>linkage</code></td>
-<td>Validation works well due to global similarity.</td>
-</tr>
-<tr class="even">
-<td><strong>GMM</strong></td>
-<td><code>n_components</code>, <code>covariance_type</code></td>
-<td>Log-likelihood, BIC/AIC are helpful on validation data.</td>
+<td>yes, by nearest training centroid, written by hand</td>
 </tr>
 <tr class="odd">
-<td><strong>Spectral</strong></td>
-<td><code>n_clusters</code>, <code>affinity</code></td>
-<td>Needs full affinity matrix; splitting data can distort.</td>
+<td>Gaussian mixture</td>
+<td><code>n_components</code>, <code>covariance_type</code></td>
+<td>yes, and log-likelihood or BIC is a real score</td>
 </tr>
 <tr class="even">
-<td><strong>OPTICS</strong></td>
+<td>DBSCAN, OPTICS</td>
 <td><code>eps</code>, <code>min_samples</code></td>
-<td>Challenges arise with varied densities.</td>
+<td>no: refit on subsets instead</td>
+</tr>
+<tr class="odd">
+<td>Spectral</td>
+<td><code>n_clusters</code>, <code>affinity</code></td>
+<td>no: the affinity matrix is global</td>
 </tr>
 </tbody>
 </table>
-<hr>
+<p>For the first three the recipe is the classifier’s, with one change: the score on the validation set is a label-free metric rather than accuracy.</p>
 </section>
-<section id="training-validation-and-test-data" class="level2">
-<h2 class="anchored" data-anchor-id="training-validation-and-test-data"><strong>Training, Validation, and Test Data</strong></h2>
-<section id="what-is-validation-data" class="level3">
-<h3 class="anchored" data-anchor-id="what-is-validation-data"><strong>What is Validation Data?</strong></h3>
-<p>Validation data is a subset of the dataset used to select hyperparameters. It acts as an intermediate step, ensuring test data remains untouched during tuning. This is especially useful for larger datasets.</p>
-</section>
-<section id="when-to-use-validation-data" class="level3">
-<h3 class="anchored" data-anchor-id="when-to-use-validation-data"><strong>When to Use Validation Data</strong></h3>
-<p>Validation sets are most effective when:</p>
+<section id="the-label-free-metrics-reward-compactness-and-separation-not-correctness" class="level2">
+<h2 class="anchored" data-anchor-id="the-label-free-metrics-reward-compactness-and-separation-not-correctness">The label-free metrics reward compactness and separation, not correctness</h2>
+<p>Three metrics come up, and they all measure geometry:</p>
 <ul>
-<li>The dataset is large enough to split into training, validation, and test subsets.</li>
-<li>The clustering algorithm supports evaluation metrics that work on subsets.</li>
-<li>Hyperparameter tuning involves a search space requiring multiple iterations.</li>
+<li>The <strong>silhouette</strong> of a point compares its mean distance to its own cluster with its mean distance to the nearest other cluster; the score averages over points and runs from <span class="math inline">\(-1\)</span> to <span class="math inline">\(1\)</span>. High means tight clusters far apart.</li>
+<li><strong>Davies–Bouldin</strong> is a ratio of within-cluster scatter to between-cluster distance, averaged over the worst pairing; lower is better.</li>
+<li><strong>Inertia</strong>, k-means’s own objective, is the total squared distance to the centroids; it always falls as <span class="math inline">\(k\)</span> grows, so it is read for an elbow rather than a minimum.</li>
 </ul>
+<p>With ground truth, the <strong>adjusted Rand index</strong> and <strong>normalised mutual information</strong> compare a clustering to the true labels, and those are the honest scores. They are also unavailable in exactly the situation clustering is for. The metrics above stand in for them by assuming that the true clusters are compact and well separated, and that assumption is where they fail.</p>
 </section>
-<section id="why-not-test-data" class="level3">
-<h3 class="anchored" data-anchor-id="why-not-test-data"><strong>Why Not Test Data?</strong></h3>
-<p>Using test data for tuning can result in overfitting and biased performance estimates. Always keep the test set as a final evaluation step.</p>
-<hr>
-</section>
-</section>
-<section id="evaluation-metrics-for-clustering" class="level2">
-<h2 class="anchored" data-anchor-id="evaluation-metrics-for-clustering"><strong>Evaluation Metrics for Clustering</strong></h2>
-<section id="intrinsic-metrics-no-ground-truth-needed" class="level3">
-<h3 class="anchored" data-anchor-id="intrinsic-metrics-no-ground-truth-needed"><strong>Intrinsic Metrics</strong> (No ground truth needed):</h3>
-<ol type="1">
-<li><strong>Silhouette Score</strong>: Measures cluster cohesion and separation.</li>
-<li><strong>Inertia (Sum of Squared Distances)</strong>: Evaluates compactness (specific to K-Means).</li>
-<li><strong>Davies-Bouldin Index</strong>: A lower value indicates better-defined clusters.</li>
-</ol>
-</section>
-<section id="extrinsic-metrics-require-ground-truth" class="level3">
-<h3 class="anchored" data-anchor-id="extrinsic-metrics-require-ground-truth"><strong>Extrinsic Metrics</strong> (Require ground truth):</h3>
-<ol type="1">
-<li><strong>Adjusted Rand Index (ARI)</strong>: Measures similarity between predicted and true labels.</li>
-<li><strong>Normalized Mutual Information (NMI)</strong>: Captures mutual dependence between clusters and labels.</li>
-</ol>
-<hr>
-</section>
-</section>
-<section id="code-example-tuning-k-means" class="level2">
-<h2 class="anchored" data-anchor-id="code-example-tuning-k-means"><strong>Code Example: Tuning K-Means</strong></h2>
-<p>Here’s how to tune <code>n_clusters</code> using a validation set:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sklearn.datasets <span class="im">import</span> make_blobs</span>
+<section id="a-case-where-the-silhouette-is-confident-and-wrong" class="level2">
+<h2 class="anchored" data-anchor-id="a-case-where-the-silhouette-is-confident-and-wrong">A case where the silhouette is confident and wrong</h2>
+<p>The data is synthetic so that the truth is known: 500 points in the plane from four Gaussian blobs of equal size, generated by scikit-learn’s <code>make_blobs</code>, standing in for any dataset with a handful of real groups. Split 70/15/15, fit k-means on the training part for <span class="math inline">\(k\)</span> from 2 to 6, and score the validation assignments both ways.</p>
+<div id="tune-round" class="cell" data-execution_count="1">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sklearn.cluster <span class="im">import</span> KMeans</span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sklearn.metrics <span class="im">import</span> silhouette_score</span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sklearn.model_selection <span class="im">import</span> train_test_split</span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="co"># Generate synthetic data</span></span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>data, _ <span class="op">=</span> make_blobs(n_samples<span class="op">=</span><span class="dv">500</span>, centers<span class="op">=</span><span class="dv">4</span>, cluster_std<span class="op">=</span><span class="fl">0.6</span>, random_state<span class="op">=</span><span class="dv">42</span>)</span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="co"># Split data: 70% train, 15% validation, 15% test</span></span>
-<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>X_train, X_temp <span class="op">=</span> train_test_split(data, test_size<span class="op">=</span><span class="fl">0.3</span>, random_state<span class="op">=</span><span class="dv">42</span>)</span>
-<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>X_val, X_test <span class="op">=</span> train_test_split(X_temp, test_size<span class="op">=</span><span class="fl">0.5</span>, random_state<span class="op">=</span><span class="dv">42</span>)</span>
-<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a><span class="co"># Hyperparameter tuning</span></span>
-<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>n_clusters <span class="op">=</span> [<span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>]</span>
-<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>best_n_cluster <span class="op">=</span> <span class="va">None</span></span>
-<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>best_score, best_model <span class="op">=</span> <span class="op">-</span><span class="dv">1</span>, <span class="va">None</span></span>
-<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> n <span class="kw">in</span> n_clusters:</span>
-<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>    kmeans <span class="op">=</span> KMeans(n_clusters<span class="op">=</span>n, random_state<span class="op">=</span><span class="dv">42</span>)</span>
-<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>    kmeans.fit(X_train)</span>
-<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>    labels_val <span class="op">=</span> kmeans.predict(X_val)</span>
-<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a>    score <span class="op">=</span> silhouette_score(X_val, labels_val)</span>
-<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"Clusters: </span><span class="sc">{</span>n<span class="sc">}</span><span class="ss">, Validation Silhouette Score: </span><span class="sc">{</span>score<span class="sc">:.2f}</span><span class="ss">"</span>)</span>
-<span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> score <span class="op">&gt;</span> best_score:</span>
-<span id="cb1-26"><a href="#cb1-26" aria-hidden="true" tabindex="-1"></a>        best_score <span class="op">=</span> score</span>
-<span id="cb1-27"><a href="#cb1-27" aria-hidden="true" tabindex="-1"></a>        best_model <span class="op">=</span> kmeans</span>
-<span id="cb1-28"><a href="#cb1-28" aria-hidden="true" tabindex="-1"></a>        best_n_cluster <span class="op">=</span> n</span>
-<span id="cb1-29"><a href="#cb1-29" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-30"><a href="#cb1-30" aria-hidden="true" tabindex="-1"></a><span class="co"># Evaluate on test data</span></span>
-<span id="cb1-31"><a href="#cb1-31" aria-hidden="true" tabindex="-1"></a>labels_test <span class="op">=</span> best_model.predict(X_test)</span>
-<span id="cb1-32"><a href="#cb1-32" aria-hidden="true" tabindex="-1"></a>test_score <span class="op">=</span> silhouette_score(X_test, labels_test)</span>
-<span id="cb1-33"><a href="#cb1-33" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Test Silhouette Score: </span><span class="sc">{</span>test_score<span class="sc">:.2f}</span><span class="ss">"</span>)</span>
-<span id="cb1-34"><a href="#cb1-34" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Best Number of Clusters: </span><span class="sc">{</span>best_n_cluster<span class="sc">}</span><span class="ss">"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<hr>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sklearn.datasets <span class="im">import</span> make_blobs</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sklearn.metrics <span class="im">import</span> adjusted_rand_score, silhouette_score</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sklearn.model_selection <span class="im">import</span> train_test_split</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>X, y <span class="op">=</span> make_blobs(n_samples<span class="op">=</span><span class="dv">500</span>, centers<span class="op">=</span><span class="dv">4</span>, cluster_std<span class="op">=</span><span class="fl">0.6</span>, random_state<span class="op">=</span><span class="dv">42</span>)</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>X_train, X_tmp, y_train, y_tmp <span class="op">=</span> train_test_split(X, y, test_size<span class="op">=</span><span class="fl">0.3</span>, random_state<span class="op">=</span><span class="dv">42</span>)</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>X_val, X_test, y_val, y_test <span class="op">=</span> train_test_split(X_tmp, y_tmp, test_size<span class="op">=</span><span class="fl">0.5</span>, random_state<span class="op">=</span><span class="dv">42</span>)</span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> score_by_k(X_fit, X_score, y_score, ks<span class="op">=</span>(<span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>, <span class="dv">6</span>)):</span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>    rows <span class="op">=</span> []</span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> k <span class="kw">in</span> ks:</span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>        labels <span class="op">=</span> KMeans(n_clusters<span class="op">=</span>k, n_init<span class="op">=</span><span class="dv">10</span>, random_state<span class="op">=</span><span class="dv">42</span>).fit(X_fit).predict(X_score)</span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>        rows.append((k, silhouette_score(X_score, labels), adjusted_rand_score(y_score, labels)))</span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> rows</span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"round blobs   k   silhouette   ARI"</span>)</span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> k, sil, ari <span class="kw">in</span> score_by_k(X_train, X_val, y_val):</span>
+<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="st">''</span><span class="sc">:13}</span><span class="ss"> </span><span class="sc">{</span>k<span class="sc">}</span><span class="ss">      </span><span class="sc">{</span>sil<span class="sc">:.3f}</span><span class="ss">    </span><span class="sc">{</span>ari<span class="sc">:.3f}</span><span class="ss">"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code>round blobs   k   silhouette   ARI
+              2      0.597    0.304
+              3      0.817    0.724
+              4      0.887    1.000
+              5      0.767    0.958
+              6      0.587    0.854</code></pre>
+</div>
+</div>
+<p>On round, well-separated blobs the silhouette and the ARI agree: both peak at <span class="math inline">\(k = 4\)</span>, the silhouette at 0.887 and the ARI at 1.000. This is the case the metric was designed for, and a validation split with a silhouette score picks the right <span class="math inline">\(k\)</span>.</p>
+<p>Now shear the same points, so that each blob becomes an elongated ellipse leaning the same way. The four groups are unchanged; only their shape is.</p>
+<div id="tune-sheared" class="cell" data-execution_count="2">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>shear <span class="op">=</span> np.array([[<span class="fl">0.6</span>, <span class="op">-</span><span class="fl">0.6</span>], [<span class="op">-</span><span class="fl">0.4</span>, <span class="fl">0.8</span>]])</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>Xs <span class="op">=</span> X <span class="op">@</span> shear</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>Xs_train, Xs_val <span class="op">=</span> X_train <span class="op">@</span> shear, X_val <span class="op">@</span> shear</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sheared blobs k   silhouette   ARI"</span>)</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> k, sil, ari <span class="kw">in</span> score_by_k(Xs_train, Xs_val, y_val):</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="st">''</span><span class="sc">:13}</span><span class="ss"> </span><span class="sc">{</span>k<span class="sc">}</span><span class="ss">      </span><span class="sc">{</span>sil<span class="sc">:.3f}</span><span class="ss">    </span><span class="sc">{</span>ari<span class="sc">:.3f}</span><span class="ss">"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code>sheared blobs k   silhouette   ARI
+              2      0.843    0.501
+              3      0.803    0.705
+              4      0.774    1.000
+              5      0.733    0.948
+              6      0.667    0.835</code></pre>
+</div>
+</div>
+<p>The ARI still peaks at <span class="math inline">\(k = 4\)</span>, because the groups are still there. The silhouette now peaks at <span class="math inline">\(k = 2\)</span>: two elongated blobs lying near each other look, to a metric built from mean distances, like one wide cluster, and merging them raises the score. A tuning loop that keeps the best silhouette returns two clusters, prints a respectable score, and is wrong, with nothing in its output to say so.</p>
+<div id="cell-plot" class="cell" data-execution_count="3">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> matplotlib.pyplot <span class="im">as</span> plt</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>fig, axes <span class="op">=</span> plt.subplots(<span class="dv">1</span>, <span class="dv">2</span>, figsize<span class="op">=</span>(<span class="dv">9</span>, <span class="dv">4</span>))</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> ax, data, title <span class="kw">in</span> ((axes[<span class="dv">0</span>], X, <span class="st">"round"</span>), (axes[<span class="dv">1</span>], Xs, <span class="st">"sheared"</span>)):</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    ax.scatter(data[:, <span class="dv">0</span>], data[:, <span class="dv">1</span>], c<span class="op">=</span>y, s<span class="op">=</span><span class="dv">8</span>, cmap<span class="op">=</span><span class="st">"tab10"</span>)</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>    ax.set_title(title)</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>    ax.set_aspect(<span class="st">"equal"</span>)</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>plt.tight_layout()</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>plt.show()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</details>
+<div class="cell-output cell-output-display">
+<div id="plot" class="quarto-figure quarto-figure-center anchored">
+<figure class="figure">
+<p><img src="index_files/figure-html/plot-output-1.png" class="img-fluid figure-img"></p>
+<figcaption>The same four groups, round (left) and sheared (right). The silhouette picks four clusters on the left and two on the right; the truth is four in both.</figcaption>
+</figure>
+</div>
+</div>
+</div>
 </section>
-<section id="what-about-algorithms-sensitive-to-validation-data" class="level2">
-<h2 class="anchored" data-anchor-id="what-about-algorithms-sensitive-to-validation-data"><strong>What About Algorithms Sensitive to Validation Data?</strong></h2>
-<p>Not all clustering algorithms work well with validation data:</p>
-<ol type="1">
-<li><strong>DBSCAN/OPTICS</strong>:
-<ul>
-<li>Density-based algorithms may struggle because density assumptions vary between training and validation sets.</li>
-<li><strong>Workaround</strong>: Use subsets of training data for validation instead of separate splits.</li>
-</ul></li>
-<li><strong>Spectral Clustering</strong>:
-<ul>
-<li>Needs the full affinity matrix, which can be distorted when splitting the data.</li>
-<li><strong>Workaround</strong>: Use cross-validation techniques with the full dataset.</li>
-</ul></li>
-</ol>
-<hr>
+<section id="what-to-do-when-the-metric-cannot-be-trusted" class="level2">
+<h2 class="anchored" data-anchor-id="what-to-do-when-the-metric-cannot-be-trusted">What to do when the metric cannot be trusted</h2>
+<p>The failure is not a bug in the silhouette; it is the assumption of compact, round clusters being false. Three responses follow from that.</p>
+<p><strong>Match the model to the shape.</strong> A Gaussian mixture with full covariance fits elongated clusters that k-means cannot, and its likelihood gives a score that does not assume roundness: the Bayesian information criterion, the fitted log-likelihood penalised by the number of parameters, lower being better. On the sheared training data it picks four components, and those four match the truth on the validation set.</p>
+<div id="gmm" class="cell" data-execution_count="4">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sklearn.mixture <span class="im">import</span> GaussianMixture</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sheared blobs k   BIC (train)   ARI (val)"</span>)</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> k <span class="kw">in</span> (<span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>, <span class="dv">6</span>):</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    gmm <span class="op">=</span> GaussianMixture(n_components<span class="op">=</span>k, covariance_type<span class="op">=</span><span class="st">"full"</span>, random_state<span class="op">=</span><span class="dv">42</span>).fit(Xs_train)</span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="st">''</span><span class="sc">:13}</span><span class="ss"> </span><span class="sc">{</span>k<span class="sc">}</span><span class="ss">      </span><span class="sc">{</span>gmm<span class="sc">.</span>bic(Xs_train)<span class="sc">:7.0f}</span><span class="ss">     </span><span class="sc">{</span>adjusted_rand_score(y_val, gmm.predict(Xs_val))<span class="sc">:.3f}</span><span class="ss">"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code>sheared blobs k   BIC (train)   ARI (val)
+              2         2311     0.501
+              3         1699     0.724
+              4         1369     1.000
+              5         1401     0.974
+              6         1436     0.872</code></pre>
+</div>
+</div>
+<p><strong>Read the metric against the data, not alone.</strong> A silhouette curve that peaks at <span class="math inline">\(k = 2\)</span> on data with visible structure is a prompt to look, and a scatter plot is cheap. Where the data are high-dimensional, plot the clusters in a two-dimensional projection rather than trusting a number.</p>
+<p><strong>Use cross-validation for the algorithms without <code>predict</code>.</strong> For DBSCAN and spectral clustering, refit on several subsets of the training data and check that the clustering is <em>stable</em> across them; a parameter setting whose clusters change from subset to subset is not finding structure.</p>
+<p>And keep the test set for the end, as in supervised learning: a test-set silhouette is only informative about the settings chosen on validation data if it was never used to choose them.</p>
+<p>Clustering. Hides. Errors. Tune. Anyway. Metrics. Assume. Shapes. Look. First.</p>
 </section>
-<section id="cross-validation-for-clustering" class="level2">
-<h2 class="anchored" data-anchor-id="cross-validation-for-clustering"><strong>Cross-Validation for Clustering</strong></h2>
-<p>When splitting the dataset is impractical, use cross-validation for hyperparameter tuning. Here’s an example for K-Means:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sklearn.model_selection <span class="im">import</span> KFold</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sklearn.metrics <span class="im">import</span> silhouette_score</span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>kf <span class="op">=</span> KFold(n_splits<span class="op">=</span><span class="dv">5</span>, shuffle<span class="op">=</span><span class="va">True</span>, random_state<span class="op">=</span><span class="dv">42</span>)</span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>scores <span class="op">=</span> []</span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> train_idx, val_idx <span class="kw">in</span> kf.split(data):</span>
-<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    X_train, X_val <span class="op">=</span> data[train_idx], data[val_idx]</span>
-<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>    kmeans <span class="op">=</span> KMeans(n_clusters<span class="op">=</span><span class="dv">3</span>, random_state<span class="op">=</span><span class="dv">42</span>).fit(X_train)</span>
-<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>    labels <span class="op">=</span> kmeans.predict(X_val)</span>
-<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    scores.append(silhouette_score(X_val, labels))</span>
-<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"Average Validation Score: </span><span class="sc">{</span><span class="bu">sum</span>(scores)<span class="op">/</span><span class="bu">len</span>(scores)<span class="sc">:.2f}</span><span class="ss">"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<hr>
-</section>
-<section id="key-takeaways" class="level2">
-<h2 class="anchored" data-anchor-id="key-takeaways"><strong>Key Takeaways</strong></h2>
+<section id="references" class="level2">
+<h2 class="anchored" data-anchor-id="references">References</h2>
 <ul>
-<li>Use validation sets for tuning <strong>K-Means</strong>, <strong>Agglomerative Clustering</strong>, and <strong>GMM</strong>.</li>
-<li>Cross-validation or intrinsic metrics are alternatives when validation sets are impractical (e.g., <strong>DBSCAN</strong>, <strong>Spectral Clustering</strong>).</li>
-<li>Always evaluate on an untouched test set for unbiased performance estimates.</li>
+<li>Rousseeuw, P. J. (1987). Silhouettes: a graphical aid to the interpretation and validation of cluster analysis. <em>Journal of Computational and Applied Mathematics</em> <strong>20</strong>, 53–65.</li>
+<li>Davies, D. L. and Bouldin, D. W. (1979). A cluster separation measure. <em>IEEE TPAMI</em> <strong>1</strong>(2).</li>
+<li>Hubert, L. and Arabie, P. (1985). Comparing partitions. <em>Journal of Classification</em> <strong>2</strong>, 193–218. (The adjusted Rand index.)</li>
+<li><a href="https://scikit-learn.org/stable/modules/clustering.html#clustering-performance-evaluation">scikit-learn: clustering performance evaluation</a></li>
+<li><a href="../train-dev-test-splits/">Train, dev, test splits</a> on this blog</li>
 </ul>
-<hr>
-<section id="questions-for-reflection" class="level3">
-<h3 class="anchored" data-anchor-id="questions-for-reflection"><strong>Questions for Reflection</strong></h3>
-<ol type="1">
-<li>Should validation sets always be used in clustering, or are intrinsic metrics sufficient in some cases?</li>
-<li>How can cross-validation improve hyperparameter tuning for clustering?</li>
-<li>What strategies work best when clusters are imbalanced?</li>
-</ol>
-<p>Follow these guidelines to keep clustering metrics honest and to avoid leakage while tuning.</p>
-<p>Clustering. Hides. Its. Errors. Tune. Anyway. Intrinsic. Metrics. Beat. Guessing.</p>
 
 
-</section>
-</section>
 </section>
 
 </main> <!-- /main -->

@@ -1,169 +1,188 @@
 ---
-title: "Hyperparameter Tuning in Clustering Algorithms: A Complete Guide"
+title: "Clustering Has No Labels to Tune Against, So the Metric Can Lie"
+description: "Which clustering hyperparameters can honestly be tuned on a held-out split, what the label-free metrics measure, and a worked case where the silhouette picks the wrong number of clusters with a straight face."
 author: "Ravi Kalia"
 date: "2025-01-27"
-categories: [Machine Learning, Clustering, Hyperparameter Tuning]
-tags: [K-Means, DBSCAN, GMM, Validation, Metrics]
-image: "./clustering.gif"
+categories: [Machine Learning, Clustering]
+tags: [k-means, silhouette, adjusted-rand-index, validation, scikit-learn]
+image: "./cover.png"
+jupyter: clustering-blog
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
 ---
 
+![Clustering](./cover.png)
 
-![Clustering Algorithms](./clustering.gif)
+Tuning a classifier is a solved routine: hold out some data, try the settings, keep
+the one that scores best on the held-out part. Clustering breaks the routine at the
+last step, because there is no score. Nothing in the data says which points belong
+together, so the number of clusters, the density threshold or the linkage rule has to
+be chosen against a metric that is computed from the clustering itself. Those metrics
+are useful and they are not the truth, and the gap between the two is what this post
+is about: which knobs can be tuned on a split at all, what the label-free metrics
+reward, and a small case where the most popular one picks the wrong answer.
 
-Clustering has no labels to tune against. Which algorithms you can honestly tune against a held-out split, and which metrics mean anything without ground truth, are separate questions with different answers.
+## Only some clustering algorithms can be tuned on a split
 
-# Clustering Algorithms: Some Thoughts
+A validation split works for a classifier because the model can be fitted on one part
+and scored on another. Some clustering algorithms have that shape and some do not.
+K-means and Gaussian mixtures produce a rule that assigns a *new* point to a cluster,
+so they can be fitted on training data and their assignments scored on validation
+data. Agglomerative clustering has no such rule in scikit-learn, but its clusters have
+centroids, and assigning each held-out point to the nearest one is a rule of the same
+kind, written by hand. DBSCAN and OPTICS do not: they label the points they were given
+by local density, and a held-out point has no label until it is clustered along with
+the rest. Spectral clustering needs the affinity matrix of the whole set, which a
+split distorts.
 
-Clustering algorithms are essential in unsupervised learning, grouping similar data points based on patterns and structure. It's dimensionality reduction in the extreme (each data point maps exactly to one of K clusters (or classes)). However, hyperparameter tuning plays a critical role in achieving good results.
+| Algorithm | Knobs | Tune on a split? |
+|---|---|---|
+| K-means | `n_clusters`, `init` | yes: `predict` exists |
+| Agglomerative | `n_clusters`, `linkage` | yes, by nearest training centroid, written by hand |
+| Gaussian mixture | `n_components`, `covariance_type` | yes, and log-likelihood or BIC is a real score |
+| DBSCAN, OPTICS | `eps`, `min_samples` | no: refit on subsets instead |
+| Spectral | `n_clusters`, `affinity` | no: the affinity matrix is global |
 
----
+For the first three the recipe is the classifier's, with one change: the score on the
+validation set is a label-free metric rather than accuracy.
 
-## **Why Tune Hyperparameters in Clustering?**
+## The label-free metrics reward compactness and separation, not correctness
 
-Unlike supervised learning, clustering lacks ground truth labels to guide optimization. Therefore, we rely on intrinsic metrics or external strategies to evaluate cluster quality. Proper hyperparameter tuning can:
+Three metrics come up, and they all measure geometry:
 
-- Improve cluster quality.
-- Reveal meaningful patterns in data.
-- Adapt models to specific datasets.
+- The **silhouette** of a point compares its mean distance to its own cluster with its
+  mean distance to the nearest other cluster; the score averages over points and runs
+  from $-1$ to $1$. High means tight clusters far apart.
+- **Davies–Bouldin** is a ratio of within-cluster scatter to between-cluster distance,
+  averaged over the worst pairing; lower is better.
+- **Inertia**, k-means's own objective, is the total squared distance to the centroids;
+  it always falls as $k$ grows, so it is read for an elbow rather than a minimum.
 
----
+With ground truth, the **adjusted Rand index** and **normalised mutual information**
+compare a clustering to the true labels, and those are the honest scores. They are
+also unavailable in exactly the situation clustering is for. The metrics above stand
+in for them by assuming that the true clusters are compact and well separated, and
+that assumption is where they fail.
 
-## **Key Hyperparameters in Clustering Algorithms**
+## A case where the silhouette is confident and wrong
 
-| Algorithm           | Key Hyperparameters                | Notes                                                   |
-|---------------------|-------------------------------------|---------------------------------------------------------|
-| **K-Means**        | `n_clusters`, `init`, `max_iter`   | Works well with validation sets and intrinsic metrics. |
-| **DBSCAN**         | `eps`, `min_samples`               | Sensitive to density; validation can be tricky.        |
-| **Agglomerative**  | `n_clusters`, `linkage`            | Validation works well due to global similarity.        |
-| **GMM**            | `n_components`, `covariance_type`  | Log-likelihood, BIC/AIC are helpful on validation data.|
-| **Spectral**       | `n_clusters`, `affinity`           | Needs full affinity matrix; splitting data can distort.|
-| **OPTICS**         | `eps`, `min_samples`               | Challenges arise with varied densities.                |
+The data is synthetic so that the truth is known: 500 points in the plane from four
+Gaussian blobs of equal size, generated by scikit-learn's `make_blobs`, standing in for
+any dataset with a handful of real groups. Split 70/15/15, fit k-means on the training
+part for $k$ from 2 to 6, and score the validation assignments both ways.
 
----
-
-## **Training, Validation, and Test Data**
-
-### **What is Validation Data?**
-Validation data is a subset of the dataset used to select hyperparameters. It acts as an intermediate step, ensuring test data remains untouched during tuning. This is especially useful for larger datasets.
-
-### **When to Use Validation Data**
-
-Validation sets are most effective when:
-
-- The dataset is large enough to split into training, validation, and test subsets.
-- The clustering algorithm supports evaluation metrics that work on subsets.
-- Hyperparameter tuning involves a search space requiring multiple iterations.
-
-### **Why Not Test Data?**
-Using test data for tuning can result in overfitting and biased performance estimates. Always keep the test set as a final evaluation step.
-
----
-
-## **Evaluation Metrics for Clustering**
-
-### **Intrinsic Metrics** (No ground truth needed):
-1. **Silhouette Score**: Measures cluster cohesion and separation.
-2. **Inertia (Sum of Squared Distances)**: Evaluates compactness (specific to K-Means).
-3. **Davies-Bouldin Index**: A lower value indicates better-defined clusters.
-
-### **Extrinsic Metrics** (Require ground truth):
-1. **Adjusted Rand Index (ARI)**: Measures similarity between predicted and true labels.
-2. **Normalized Mutual Information (NMI)**: Captures mutual dependence between clusters and labels.
-
----
-
-## **Code Example: Tuning K-Means**
-
-Here’s how to tune `n_clusters` using a validation set:
-
-```python
-from sklearn.datasets import make_blobs
+```{python}
+#| label: tune-round
+import numpy as np
 from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
+from sklearn.datasets import make_blobs
+from sklearn.metrics import adjusted_rand_score, silhouette_score
 from sklearn.model_selection import train_test_split
 
-# Generate synthetic data
-data, _ = make_blobs(n_samples=500, centers=4, cluster_std=0.6, random_state=42)
+X, y = make_blobs(n_samples=500, centers=4, cluster_std=0.6, random_state=42)
+X_train, X_tmp, y_train, y_tmp = train_test_split(X, y, test_size=0.3, random_state=42)
+X_val, X_test, y_val, y_test = train_test_split(X_tmp, y_tmp, test_size=0.5, random_state=42)
 
-# Split data: 70% train, 15% validation, 15% test
-X_train, X_temp = train_test_split(data, test_size=0.3, random_state=42)
-X_val, X_test = train_test_split(X_temp, test_size=0.5, random_state=42)
 
-# Hyperparameter tuning
-n_clusters = [2, 3, 4, 5]
-best_n_cluster = None
-best_score, best_model = -1, None
+def score_by_k(X_fit, X_score, y_score, ks=(2, 3, 4, 5, 6)):
+    rows = []
+    for k in ks:
+        labels = KMeans(n_clusters=k, n_init=10, random_state=42).fit(X_fit).predict(X_score)
+        rows.append((k, silhouette_score(X_score, labels), adjusted_rand_score(y_score, labels)))
+    return rows
 
-for n in n_clusters:
-    kmeans = KMeans(n_clusters=n, random_state=42)
-    kmeans.fit(X_train)
-    labels_val = kmeans.predict(X_val)
-    score = silhouette_score(X_val, labels_val)
-    print(f"Clusters: {n}, Validation Silhouette Score: {score:.2f}")
 
-    if score > best_score:
-        best_score = score
-        best_model = kmeans
-        best_n_cluster = n
-
-# Evaluate on test data
-labels_test = best_model.predict(X_test)
-test_score = silhouette_score(X_test, labels_test)
-print(f"Test Silhouette Score: {test_score:.2f}")
-print(f"Best Number of Clusters: {best_n_cluster}")
+print("round blobs   k   silhouette   ARI")
+for k, sil, ari in score_by_k(X_train, X_val, y_val):
+    print(f"{'':13} {k}      {sil:.3f}    {ari:.3f}")
 ```
 
----
+On round, well-separated blobs the silhouette and the ARI agree: both peak at
+$k = 4$, the silhouette at 0.887 and the ARI at 1.000. This is the case the metric was
+designed for, and a validation split with a silhouette score picks the right $k$.
 
-## **What About Algorithms Sensitive to Validation Data?**
+Now shear the same points, so that each blob becomes an elongated ellipse leaning the
+same way. The four groups are unchanged; only their shape is.
 
-Not all clustering algorithms work well with validation data:
+```{python}
+#| label: tune-sheared
+shear = np.array([[0.6, -0.6], [-0.4, 0.8]])
+Xs = X @ shear
+Xs_train, Xs_val = X_train @ shear, X_val @ shear
 
-1. **DBSCAN/OPTICS**:
-   - Density-based algorithms may struggle because density assumptions vary between training and validation sets.
-   - **Workaround**: Use subsets of training data for validation instead of separate splits.
-
-2. **Spectral Clustering**:
-   - Needs the full affinity matrix, which can be distorted when splitting the data.
-   - **Workaround**: Use cross-validation techniques with the full dataset.
-
----
-
-## **Cross-Validation for Clustering**
-
-When splitting the dataset is impractical, use cross-validation for hyperparameter tuning. Here’s an example for K-Means:
-
-```python
-from sklearn.model_selection import KFold
-from sklearn.metrics import silhouette_score
-
-kf = KFold(n_splits=5, shuffle=True, random_state=42)
-scores = []
-
-for train_idx, val_idx in kf.split(data):
-    X_train, X_val = data[train_idx], data[val_idx]
-    kmeans = KMeans(n_clusters=3, random_state=42).fit(X_train)
-    labels = kmeans.predict(X_val)
-    scores.append(silhouette_score(X_val, labels))
-
-print(f"Average Validation Score: {sum(scores)/len(scores):.2f}")
+print("sheared blobs k   silhouette   ARI")
+for k, sil, ari in score_by_k(Xs_train, Xs_val, y_val):
+    print(f"{'':13} {k}      {sil:.3f}    {ari:.3f}")
 ```
 
----
+The ARI still peaks at $k = 4$, because the groups are still there. The silhouette
+now peaks at $k = 2$: two elongated blobs lying near each other look, to a metric
+built from mean distances, like one wide cluster, and merging them raises the score.
+A tuning loop that keeps the best silhouette returns two clusters, prints a
+respectable score, and is wrong, with nothing in its output to say so.
 
-## **Key Takeaways**
+```{python}
+#| label: plot
+#| fig-cap: "The same four groups, round (left) and sheared (right). The silhouette picks four clusters on the left and two on the right; the truth is four in both."
+import matplotlib.pyplot as plt
 
-- Use validation sets for tuning **K-Means**, **Agglomerative Clustering**, and **GMM**.
-- Cross-validation or intrinsic metrics are alternatives when validation sets are impractical (e.g., **DBSCAN**, **Spectral Clustering**).
-- Always evaluate on an untouched test set for unbiased performance estimates.
+fig, axes = plt.subplots(1, 2, figsize=(9, 4))
+for ax, data, title in ((axes[0], X, "round"), (axes[1], Xs, "sheared")):
+    ax.scatter(data[:, 0], data[:, 1], c=y, s=8, cmap="tab10")
+    ax.set_title(title)
+    ax.set_aspect("equal")
+plt.tight_layout()
+plt.show()
+```
 
----
+## What to do when the metric cannot be trusted
 
-### **Questions for Reflection**
-1. Should validation sets always be used in clustering, or are intrinsic metrics sufficient in some cases?
-2. How can cross-validation improve hyperparameter tuning for clustering?
-3. What strategies work best when clusters are imbalanced?
+The failure is not a bug in the silhouette; it is the assumption of compact, round
+clusters being false. Three responses follow from that.
 
-Follow these guidelines to keep clustering metrics honest and to avoid leakage while tuning.
+**Match the model to the shape.** A Gaussian mixture with full covariance fits
+elongated clusters that k-means cannot, and its likelihood gives a score that does not
+assume roundness: the Bayesian information criterion, the fitted log-likelihood
+penalised by the number of parameters, lower being better. On the sheared training
+data it picks four components, and those four match the truth on the validation set.
 
-Clustering. Hides. Its. Errors. Tune. Anyway. Intrinsic. Metrics. Beat. Guessing.
+```{python}
+#| label: gmm
+from sklearn.mixture import GaussianMixture
+
+print("sheared blobs k   BIC (train)   ARI (val)")
+for k in (2, 3, 4, 5, 6):
+    gmm = GaussianMixture(n_components=k, covariance_type="full", random_state=42).fit(Xs_train)
+    print(f"{'':13} {k}      {gmm.bic(Xs_train):7.0f}     {adjusted_rand_score(y_val, gmm.predict(Xs_val)):.3f}")
+```
+
+**Read the metric against the data, not alone.** A silhouette curve that peaks at
+$k = 2$ on data with visible structure is a prompt to look, and a scatter plot is
+cheap. Where the data are high-dimensional, plot the clusters in a two-dimensional
+projection rather than trusting a number.
+
+**Use cross-validation for the algorithms without `predict`.** For DBSCAN and
+spectral clustering, refit on several subsets of the training data and check that
+the clustering is *stable* across them; a parameter setting whose clusters change
+from subset to subset is not finding structure.
+
+And keep the test set for the end, as in supervised learning: a test-set silhouette
+is only informative about the settings chosen on validation data if it was never used
+to choose them.
+
+Clustering. Hides. Errors. Tune. Anyway. Metrics. Assume. Shapes. Look. First.
+
+## References
+
+- Rousseeuw, P. J. (1987). Silhouettes: a graphical aid to the interpretation and
+  validation of cluster analysis. *Journal of Computational and Applied Mathematics*
+  **20**, 53–65.
+- Davies, D. L. and Bouldin, D. W. (1979). A cluster separation measure. *IEEE TPAMI*
+  **1**(2).
+- Hubert, L. and Arabie, P. (1985). Comparing partitions. *Journal of Classification*
+  **2**, 193–218. (The adjusted Rand index.)
+- [scikit-learn: clustering performance evaluation](https://scikit-learn.org/stable/modules/clustering.html#clustering-performance-evaluation)
+- [Train, dev, test splits](../train-dev-test-splits/) on this blog
