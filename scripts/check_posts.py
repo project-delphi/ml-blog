@@ -25,8 +25,10 @@ nobody scrolled looking for it.
 
 Stdlib only, so it runs against any interpreter without installing anything.
 
-`--categories` adds a fifth, opt-in check: every post's `categories:` must use
-strings from scripts/categories.txt, spelled as that file spells them.
+Invariant 5: every post's `categories:` uses strings from
+scripts/categories.txt, spelled as that file spells them, so that the home
+page's category facets stay a closed vocabulary rather than 76 near-synonyms.
+`--no-categories` skips it, for the window while a new name is being added.
 """
 
 from __future__ import annotations
@@ -263,10 +265,11 @@ def check_kernel_stubs(pinned: dict[str, str]) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # `--categories` is opt-in while the taxonomy is being normalised; it
-    # becomes part of the default run once every post passes.
+    # The taxonomy is normalised, so the categories check runs by default.
+    # `--no-categories` exists for the window while a new category is being
+    # added: check a post before its name is in scripts/categories.txt.
     args = sys.argv[1:] if argv is None else argv
-    with_categories = "--categories" in args
+    with_categories = "--no-categories" not in args
     # `--no-listing` is for the step *before* a project render: a new post is
     # legitimately absent from docs/listings.json until that render writes it.
     with_listing = "--no-listing" not in args

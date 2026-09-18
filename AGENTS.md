@@ -153,8 +153,11 @@ target:
 `check-posts` verifies that a code post pins a dedicated kernel (not the shared
 `python3`) and a `requirements.txt`, that every pinned kernel appears in
 `make kernels-stub`, that no post's frozen output has drifted from its source, and that
-every non-draft post appears in `docs/listings.json`. `--categories` adds an opt-in
-check against `scripts/categories.txt`. Run it **through `make`** — the recipe's bare
+every non-draft post appears in `docs/listings.json`, and that every post's
+`categories:` comes from `scripts/categories.txt`, spelled as that file spells it.
+The home page's facets are built from those strings, so the list is a closed
+vocabulary: add the name to that file in the same commit that first uses it, or pass
+`--no-categories` while you are mid-edit. Run it **through `make`** — the recipe's bare
 `python3` (shared with `make freeze-realign`) is kept deliberately because both scripts
 are stdlib-only and must work on a clone with no `.venv`. Typing
 `python3 scripts/check_posts.py` yourself is denied by the hook, which never sees the
