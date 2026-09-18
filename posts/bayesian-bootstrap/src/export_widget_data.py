@@ -21,11 +21,10 @@ from math import comb, factorial
 from pathlib import Path
 from typing import Final
 
+import data as dt
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
-
-import data as dt
 
 _HERE: Final[Path] = Path(__file__).resolve().parent.parent
 OUT: Final[Path] = _HERE / "widget-data"

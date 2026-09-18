@@ -31,7 +31,9 @@ def fig_examples(t: M.Trained, idx: dict[str, int]) -> plt.Figure:
     Returns:
         The figure.
     """
-    fig, axes = plt.subplots(2, 2, figsize=(7.4, 4.6), gridspec_kw={"width_ratios": [1, 2.3]})
+    fig, axes = plt.subplots(
+        2, 2, figsize=(7.4, 4.6), gridspec_kw={"width_ratios": [1, 2.3]}
+    )
     y = t.yte.numpy()
     for row, key in enumerate(["wrong", "right"]):
         i = idx[key]
@@ -68,7 +70,9 @@ def fig_examples(t: M.Trained, idx: dict[str, int]) -> plt.Figure:
         fontsize=8,
         loc="upper left",
     )
-    fig.suptitle("Two test digits: one confident mistake, one confident success", fontsize=11)
+    fig.suptitle(
+        "Two test digits: one confident mistake, one confident success", fontsize=11
+    )
     fig.tight_layout()
     return fig
 
@@ -149,7 +153,9 @@ def fig_sanity(t: M.Trained, idx: dict[str, int], seed: int) -> plt.Figure:
             if signed
             else f"randomised weights\nrho {rho_mag:+.2f}"
         )
-        H.overlay_axis(axes[0, col], img, trained_map, f"{name}\ntrained", signed=signed)
+        H.overlay_axis(
+            axes[0, col], img, trained_map, f"{name}\ntrained", signed=signed
+        )
         H.overlay_axis(axes[1, col], img, random_map, caption, signed=signed)
         axes[1, col].title.set_fontsize(9)
     fig.suptitle(
@@ -188,14 +194,18 @@ def fig_agreement(t: M.Trained, idx: dict[str, int]) -> plt.Figure:
         ]
     )
 
-    fig, axes = plt.subplots(1, 2, figsize=(8.8, 4.4), gridspec_kw={"width_ratios": [2.1, 1]})
+    fig, axes = plt.subplots(
+        1, 2, figsize=(8.8, 4.4), gridspec_kw={"width_ratios": [2.1, 1]}
+    )
     axes[0].axis("off")
     axes[1].axis("off")
 
     inner = axes[0].get_subplotspec().subgridspec(2, 2, wspace=0.08, hspace=0.30)
     for k, name in enumerate(names):
         ax = fig.add_subplot(inner[k // 2, k % 2])
-        H.overlay_axis(ax, img, maps[name], name, signed=name in ("occlusion", "int. gradients"))
+        H.overlay_axis(
+            ax, img, maps[name], name, signed=name in ("occlusion", "int. gradients")
+        )
         ax.title.set_fontsize(10)
 
     ax = fig.add_subplot(axes[1].get_subplotspec())
@@ -246,10 +256,14 @@ def fig_coefficients(fit: I.LogitFit) -> plt.Figure:
     crosses_zero = (lo < 0) & (hi > 0)
     for k in range(len(table)):
         colour = H.MUTED if crosses_zero[k] else H.SLATE
-        ax.plot([lo[k], hi[k]], [y[k], y[k]], color=colour, lw=2.4, solid_capstyle="round")
+        ax.plot(
+            [lo[k], hi[k]], [y[k], y[k]], color=colour, lw=2.4, solid_capstyle="round"
+        )
         ax.plot(table["coef"].iloc[k], y[k], "o", color=colour, ms=7)
     ax.set_yticks(y, table["term"])
-    ax.set_xlabel("log-odds of virginica per standard deviation\n(grey: 95% interval contains zero)")
+    ax.set_xlabel(
+        "log-odds of virginica per standard deviation\n(grey: 95% interval contains zero)"
+    )
     ax.set_ylim(-0.7, len(table) - 0.3)
     ax.set_title("Which measurement separates versicolor from virginica?")
     fig.tight_layout()
@@ -297,7 +311,14 @@ def fig_separation(path: pd.DataFrame) -> plt.Figure:
     ax.legend(
         handles=[
             Line2D([], [], color=H.SLATE, marker="o", label="coefficient norm"),
-            Line2D([], [], color=H.PLUM, marker="s", ls="--", label="largest standard error"),
+            Line2D(
+                [],
+                [],
+                color=H.PLUM,
+                marker="s",
+                ls="--",
+                label="largest standard error",
+            ),
         ],
         frameon=False,
         fontsize=8,
@@ -317,7 +338,9 @@ def fig_anova(df: pd.DataFrame, table: pd.DataFrame) -> plt.Figure:
     Returns:
         The figure.
     """
-    fig, axes = plt.subplots(1, 2, figsize=(8.4, 3.4), gridspec_kw={"width_ratios": [1.6, 1]})
+    fig, axes = plt.subplots(
+        1, 2, figsize=(8.4, 3.4), gridspec_kw={"width_ratios": [1.6, 1]}
+    )
 
     ax = axes[0]
     for row, feature in enumerate(I.FEATURES):
@@ -349,8 +372,15 @@ def fig_anova(df: pd.DataFrame, table: pd.DataFrame) -> plt.Figure:
     order = np.arange(len(table))[::-1]
     ax.barh(order, table["eta^2"], color=H.SLATE, height=0.6)
     for k, value in enumerate(table["eta^2"]):
-        ax.text(value - 0.02, order[k], f"{value:.2f}", va="center", ha="right",
-                color="white", fontsize=9)
+        ax.text(
+            value - 0.02,
+            order[k],
+            f"{value:.2f}",
+            va="center",
+            ha="right",
+            color="white",
+            fontsize=9,
+        )
     ax.set_yticks(order, table["feature"])
     ax.set_xlim(0, 1)
     ax.set_xlabel(r"$\eta^2$: share of variance between species")
@@ -372,7 +402,9 @@ def fig_pca(X: np.ndarray, target: np.ndarray) -> plt.Figure:
     std = I.pca_fit(X, standardised=True)
     raw = I.pca_fit(X, standardised=False)
 
-    fig, axes = plt.subplots(1, 2, figsize=(8.6, 3.6), gridspec_kw={"width_ratios": [1, 1.35]})
+    fig, axes = plt.subplots(
+        1, 2, figsize=(8.6, 3.6), gridspec_kw={"width_ratios": [1, 1.35]}
+    )
 
     ax = axes[0]
     w = 0.38
@@ -437,7 +469,9 @@ def fig_pca(X: np.ndarray, target: np.ndarray) -> plt.Figure:
     return fig
 
 
-def fig_permutation(perm: pd.DataFrame, anova: pd.DataFrame, coef: pd.DataFrame) -> plt.Figure:
+def fig_permutation(
+    perm: pd.DataFrame, anova: pd.DataFrame, coef: pd.DataFrame
+) -> plt.Figure:
     """Permutation importance with error bars, against the two classical scores.
 
     Args:
@@ -448,12 +482,20 @@ def fig_permutation(perm: pd.DataFrame, anova: pd.DataFrame, coef: pd.DataFrame)
     Returns:
         The figure.
     """
-    fig, axes = plt.subplots(1, 2, figsize=(8.6, 3.3), gridspec_kw={"width_ratios": [1.2, 1]})
+    fig, axes = plt.subplots(
+        1, 2, figsize=(8.6, 3.3), gridspec_kw={"width_ratios": [1.2, 1]}
+    )
 
     ax = axes[0]
     order = np.arange(len(perm))[::-1]
-    ax.barh(order, perm["mean drop"], xerr=1.96 * perm["se"], color=H.PLUM, height=0.6,
-            error_kw=dict(ecolor=H.INK, lw=1.1, capsize=3))
+    ax.barh(
+        order,
+        perm["mean drop"],
+        xerr=1.96 * perm["se"],
+        color=H.PLUM,
+        height=0.6,
+        error_kw=dict(ecolor=H.INK, lw=1.1, capsize=3),
+    )
     ax.set_yticks(order, perm["feature"])
     ax.set_xlabel("held-out accuracy lost when the column is shuffled")
     ax.set_title("Permutation importance, 200 shuffles")
@@ -464,15 +506,17 @@ def fig_permutation(perm: pd.DataFrame, anova: pd.DataFrame, coef: pd.DataFrame)
             "feature": perm["feature"],
             "permutation": perm["mean drop"] / perm["mean drop"].max(),
             r"ANOVA $\eta^2$": anova["eta^2"].to_numpy() / anova["eta^2"].max(),
-            "|coefficient|": (
-                coef["coef"].abs().to_numpy() / coef["coef"].abs().max()
-            ),
+            "|coefficient|": (coef["coef"].abs().to_numpy() / coef["coef"].abs().max()),
         }
     )
     w = 0.26
     pos = np.arange(len(scores))
     for k, (name, colour) in enumerate(
-        [("permutation", H.PLUM), (r"ANOVA $\eta^2$", H.SLATE), ("|coefficient|", H.OCHRE)]
+        [
+            ("permutation", H.PLUM),
+            (r"ANOVA $\eta^2$", H.SLATE),
+            ("|coefficient|", H.OCHRE),
+        ]
     ):
         ax.bar(pos + (k - 1) * w, scores[name], w, color=colour, label=name)
     ax.set_xticks(pos, [f.replace(" ", "\n") for f in scores["feature"]], fontsize=8)

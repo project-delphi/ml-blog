@@ -1,8 +1,8 @@
-"""Download the PD *Lawrence of Arabia* trailer and cut the committed clip.
+r"""Download the PD *Lawrence of Arabia* trailer and cut the committed clip.
 
 Not run at render. Needs ffmpeg and network.
 
-    .venv-tensor-factorizations/bin/python \\
+    .venv-tensor-factorizations/bin/python \
         posts/uses-of-tensor-factorizations/src/fetch_media.py
 """
 
@@ -61,26 +61,63 @@ def main() -> None:
     wav = ROOT / "clip.wav"
     clip = ROOT / "clip.mp4"
     ffmpeg(
-        "-i", str(CACHE), "-ss", START, "-vframes", "1",
-        "-vf", f"{CROP_4X3},scale=320:240", str(still),
+        "-i",
+        str(CACHE),
+        "-ss",
+        START,
+        "-vframes",
+        "1",
+        "-vf",
+        f"{CROP_4X3},scale=320:240",
+        str(still),
     )
     frames_dir.mkdir(exist_ok=True)
     for old in frames_dir.glob("*.png"):
         old.unlink()
     ffmpeg(
-        "-i", str(CACHE), "-ss", START, "-t", DURATION,
-        "-vf", f"fps={FPS},{CROP_4X3},scale={FRAME_W}:{FRAME_H}",
+        "-i",
+        str(CACHE),
+        "-ss",
+        START,
+        "-t",
+        DURATION,
+        "-vf",
+        f"fps={FPS},{CROP_4X3},scale={FRAME_W}:{FRAME_H}",
         str(frames_dir / "f%03d.png"),
     )
     ffmpeg(
-        "-i", str(CACHE), "-ss", START, "-t", DURATION,
-        "-ac", "1", "-ar", "8000", "-vn", str(wav),
+        "-i",
+        str(CACHE),
+        "-ss",
+        START,
+        "-t",
+        DURATION,
+        "-ac",
+        "1",
+        "-ar",
+        "8000",
+        "-vn",
+        str(wav),
     )
     ffmpeg(
-        "-i", str(CACHE), "-ss", START, "-t", DURATION,
-        "-vf", f"{CROP_4X3},scale=320:240",
-        "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-ac", "1", "-b:a", "64k",
+        "-i",
+        str(CACHE),
+        "-ss",
+        START,
+        "-t",
+        DURATION,
+        "-vf",
+        f"{CROP_4X3},scale=320:240",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-ac",
+        "1",
+        "-b:a",
+        "64k",
         str(clip),
     )
     frame_paths = sorted(frames_dir.glob("*.png"))

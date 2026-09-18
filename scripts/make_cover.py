@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write posts/<slug>/cover.png from an in-post visual or Wikimedia Commons.
+r"""Write posts/<slug>/cover.png from an in-post visual or Wikimedia Commons.
 
 Covers are content-derived: copy the figure that carries the post's main claim,
 or — if the post has no raster of its own — a license-safe Commons file. Never
@@ -9,8 +9,8 @@ Run with Pillow and PyYAML from the repo root. PyYAML is required for
 --all and read on a single-post run too, to pick up that slug's recorded
 ``fit``; without it a single-post run warns and falls back to ``cover``::
 
-    uv run --with pillow --with pyyaml python scripts/make_cover.py \\
-        posts/volcano-plots --source \\
+    uv run --with pillow --with pyyaml python scripts/make_cover.py \
+        posts/volcano-plots --source \
         _freeze/posts/volcano-plots/index/figure-html/fig-airway-output-1.png
 
     uv run --with pillow --with pyyaml python scripts/make_cover.py --all
@@ -192,7 +192,9 @@ def fit_cover(image, mode: str = "cover") -> object:
     top = (new_h - HEIGHT) // 2
     cropped = resized.crop((left, top, left + WIDTH, top + HEIGHT))
     background = Image.new("RGB", (WIDTH, HEIGHT), (255, 255, 255))
-    background.paste(cropped, mask=cropped.split()[-1] if cropped.mode == "RGBA" else None)
+    background.paste(
+        cropped, mask=cropped.split()[-1] if cropped.mode == "RGBA" else None
+    )
     return background
 
 
@@ -226,8 +228,18 @@ def _metadata_blob(meta: dict[str, object]) -> str:
         Lowercased concatenation of short name, usage terms, permission, and categories.
     """
     parts = []
-    for key in ("LicenseShortName", "UsageTerms", "License", "Permission", "Categories"):
-        value = (meta.get(key) or {}).get("value") if isinstance(meta.get(key), dict) else ""
+    for key in (
+        "LicenseShortName",
+        "UsageTerms",
+        "License",
+        "Permission",
+        "Categories",
+    ):
+        value = (
+            (meta.get(key) or {}).get("value")
+            if isinstance(meta.get(key), dict)
+            else ""
+        )
         if value:
             parts.append(str(value))
     return " ".join(parts).lower()
@@ -245,10 +257,15 @@ def license_allowed(meta: dict[str, object]) -> bool:
     blob = _metadata_blob(meta)
     if any(marker in blob for marker in DISALLOWED_MARKERS):
         return False
-    short_name = ((meta.get("LicenseShortName") or {}).get("value") or "").strip().lower()
+    short_name = (
+        ((meta.get("LicenseShortName") or {}).get("value") or "").strip().lower()
+    )
     if "gfdl" in short_name:
         return False
-    return any(short_name.startswith(prefix) or prefix in short_name for prefix in ALLOWED_LICENSE_PREFIXES)
+    return any(
+        short_name.startswith(prefix) or prefix in short_name
+        for prefix in ALLOWED_LICENSE_PREFIXES
+    )
 
 
 def commons_info(filename: str) -> dict[str, str]:
@@ -271,7 +288,9 @@ def commons_info(filename: str) -> dict[str, str]:
             "format": "json",
         }
     )
-    request = urllib.request.Request(f"{COMMONS_API}?{query}", headers={"User-Agent": USER_AGENT})
+    request = urllib.request.Request(
+        f"{COMMONS_API}?{query}", headers={"User-Agent": USER_AGENT}
+    )
     with urllib.request.urlopen(request, timeout=60) as response:
         payload = json.loads(response.read().decode())
     pages = payload.get("query", {}).get("pages", {})
@@ -341,7 +360,7 @@ def write_attribution(slug: str, info: dict[str, str]) -> Path:
         "--------",
         f"Title:    {info['title']}",
         f"Artist:   {artist}",
-        f"Source:   Wikimedia Commons",
+        "Source:   Wikimedia Commons",
         f"          {info['page']}",
         f"          Direct file: {info['url']}",
         f"License:  {info['license']}",

@@ -162,7 +162,9 @@ def _upsample(cam7: np.ndarray) -> np.ndarray:
         28x28 map.
     """
     t = torch.tensor(cam7, dtype=torch.float32).reshape(1, 1, *cam7.shape)
-    up = torch.nn.functional.interpolate(t, size=(28, 28), mode="bilinear", align_corners=False)
+    up = torch.nn.functional.interpolate(
+        t, size=(28, 28), mode="bilinear", align_corners=False
+    )
     return up[0, 0].numpy()
 
 

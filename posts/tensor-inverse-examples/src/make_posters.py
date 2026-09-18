@@ -1,9 +1,9 @@
-"""Poster-style figures: tensor shape, then what the inverse does.
+r"""Poster-style figures: tensor shape, then what the inverse does.
 
 Furniture matches posts/uses-of-tensor-factorizations/src/draw.py so the
 three posters sit in the same visual family as the dye-assay figure.
 
-    /Users/ravikalia/Code/github.com/ml-blog/.venv-tensor-factorizations/bin/python \\
+    /Users/ravikalia/Code/github.com/ml-blog/.venv-tensor-factorizations/bin/python \
         posts/tensor-inverse-examples/src/make_posters.py
 """
 
@@ -107,7 +107,17 @@ def pill(ax, x, y, text, fc="#EDEAF8", tc=ACCENT, fs=8.5, h=0.36) -> None:
             zorder=12,
         )
     )
-    ax.text(x, y, text, ha="center", va="center", fontsize=fs, color=tc, fontweight="bold", zorder=13)
+    ax.text(
+        x,
+        y,
+        text,
+        ha="center",
+        va="center",
+        fontsize=fs,
+        color=tc,
+        fontweight="bold",
+        zorder=13,
+    )
 
 
 def arrow(ax, p0, p1, color=INK, lw=1.4, head=8.0, z=14) -> None:
@@ -135,12 +145,17 @@ def cube(ax, origin, labels, sizes, face=ACCENT, s=1.15, z=4) -> None:
     W, H, D = 1.55, 1.55, 1.35
 
     def p(x, y, z_):
-        return iso(x, y, z_, origin, scale := s, depth=0.40)
+        return iso(x, y, z_, origin, s, depth=0.40)
 
     # shadow
     ax.add_patch(
         Polygon(
-            [p(0.12, -0.08, 0.10), p(W + 0.12, -0.08, 0.10), p(W + 0.12, -0.08, D + 0.10), p(0.12, -0.08, D + 0.10)],
+            [
+                p(0.12, -0.08, 0.10),
+                p(W + 0.12, -0.08, 0.10),
+                p(W + 0.12, -0.08, D + 0.10),
+                p(0.12, -0.08, D + 0.10),
+            ],
             closed=True,
             facecolor=SHADOW,
             edgecolor="none",
@@ -153,18 +168,69 @@ def cube(ax, origin, labels, sizes, face=ACCENT, s=1.15, z=4) -> None:
     from matplotlib.colors import to_rgb
 
     rgb = np.array(to_rgb(face))
-    ax.add_patch(Polygon(top, closed=True, facecolor=tuple(rgb * 0.55 + 0.45), edgecolor=INK, lw=1.0, zorder=z + 1))
-    ax.add_patch(Polygon(right, closed=True, facecolor=tuple(rgb * 0.72 + 0.20), edgecolor=INK, lw=1.0, zorder=z + 2))
-    ax.add_patch(Polygon(front, closed=True, facecolor=tuple(rgb * 0.88 + 0.08), edgecolor=INK, lw=1.15, zorder=z + 3))
+    ax.add_patch(
+        Polygon(
+            top,
+            closed=True,
+            facecolor=tuple(rgb * 0.55 + 0.45),
+            edgecolor=INK,
+            lw=1.0,
+            zorder=z + 1,
+        )
+    )
+    ax.add_patch(
+        Polygon(
+            right,
+            closed=True,
+            facecolor=tuple(rgb * 0.72 + 0.20),
+            edgecolor=INK,
+            lw=1.0,
+            zorder=z + 2,
+        )
+    )
+    ax.add_patch(
+        Polygon(
+            front,
+            closed=True,
+            facecolor=tuple(rgb * 0.88 + 0.08),
+            edgecolor=INK,
+            lw=1.15,
+            zorder=z + 3,
+        )
+    )
 
     bl, br, tl = p(0, 0, 0), p(W, 0, 0), p(0, H, 0)
     brz = p(W, 0, D)
     mid_w = (bl + br) / 2 + np.array([0.0, -0.38])
-    ax.text(*mid_w, f"{labels[0]}  {sizes[0]}", ha="center", fontsize=TINY, fontweight="bold", zorder=z + 6)
+    ax.text(
+        *mid_w,
+        f"{labels[0]}  {sizes[0]}",
+        ha="center",
+        fontsize=TINY,
+        fontweight="bold",
+        zorder=z + 6,
+    )
     mid_h = (bl + tl) / 2 + np.array([-0.40, 0.0])
-    ax.text(*mid_h, f"{labels[1]}  {sizes[1]}", ha="center", va="center", fontsize=TINY, fontweight="bold", rotation=90, zorder=z + 6)
+    ax.text(
+        *mid_h,
+        f"{labels[1]}  {sizes[1]}",
+        ha="center",
+        va="center",
+        fontsize=TINY,
+        fontweight="bold",
+        rotation=90,
+        zorder=z + 6,
+    )
     mid_d = (br + brz) / 2 + np.array([0.46, 0.02])
-    ax.text(*mid_d, f"{labels[2]}  {sizes[2]}", ha="center", fontsize=TINY, fontweight="bold", rotation=24, zorder=z + 6)
+    ax.text(
+        *mid_d,
+        f"{labels[2]}  {sizes[2]}",
+        ha="center",
+        fontsize=TINY,
+        fontweight="bold",
+        rotation=24,
+        zorder=z + 6,
+    )
 
 
 def _new(title: str, subtitle: str):
@@ -175,7 +241,9 @@ def _new(title: str, subtitle: str):
     ax.set_ylim(0, H_FIG)
     ax.axis("off")
     ax.set_facecolor(PAGE)
-    ax.add_patch(Rectangle((0, 0), W_FIG, H_FIG, facecolor=PAGE, edgecolor="none", zorder=0))
+    ax.add_patch(
+        Rectangle((0, 0), W_FIG, H_FIG, facecolor=PAGE, edgecolor="none", zorder=0)
+    )
     ax.text(0.45, 8.18, title, fontsize=TITLE, fontweight="bold", va="center", zorder=5)
     ax.text(0.45, 7.72, subtitle, fontsize=SUB, color=MUTED, va="center", zorder=5)
     return fig, ax
@@ -184,7 +252,15 @@ def _new(title: str, subtitle: str):
 def _stage(ax, n, x, y, w, h, title, color=ACCENT) -> None:
     card(ax, x, y, w, h)
     badge(ax, x + 0.32, y + h - 0.34, str(n), color=color)
-    ax.text(x + 0.58, y + h - 0.34, title, fontsize=SMALL, fontweight="bold", va="center", zorder=6)
+    ax.text(
+        x + 0.58,
+        y + h - 0.34,
+        title,
+        fontsize=SMALL,
+        fontweight="bold",
+        va="center",
+        zorder=6,
+    )
 
 
 def _wave(ax, x, y, w, h, color, seed) -> None:
@@ -216,7 +292,9 @@ def poster_speech(path: Path) -> Path:
         _wave(ax, 1.15, yy - 0.42, 2.45, 0.38, c, seed=3 + i)
 
     _stage(ax, 2, 4.20, 3.55, 3.70, 3.85, "Mix  A ∈ ℝ³ˣ³", CORAL)
-    ax.text(6.05, 6.85, "3 mics × time", ha="center", fontsize=TINY, color=MUTED, zorder=8)
+    ax.text(
+        6.05, 6.85, "3 mics × time", ha="center", fontsize=TINY, color=MUTED, zorder=8
+    )
     for i, c in enumerate(colors):
         _wave(ax, 4.50, 6.25 - i * 0.85, 3.10, 0.62, c, seed=20 + i)
     pill(ax, 6.05, 3.90, "constructed mix, seed 7")
@@ -224,24 +302,75 @@ def poster_speech(path: Path) -> Path:
     _stage(ax, 3, 8.20, 3.55, 3.85, 3.85, "Cumulant  C", ACCENT)
     cube(ax, (8.85, 4.15), ("j", "i", "k"), ("3", "3", "3"), face=ACCENT, s=1.05)
     pill(ax, 10.10, 6.85, "order 4   3 × 3 × 3 × 3")
-    ax.text(10.10, 3.82, "independent sources → diagonal C", ha="center", fontsize=TINY, color=MUTED, zorder=8)
+    ax.text(
+        10.10,
+        3.82,
+        "independent sources → diagonal C",
+        ha="center",
+        fontsize=TINY,
+        color=MUTED,
+        zorder=8,
+    )
 
     _stage(ax, 4, 12.30, 3.55, 3.75, 3.85, "Two inverses", GOLD)
     card(ax, 12.50, 5.55, 3.35, 1.40, fc="#F4F1FC")
-    ax.text(14.18, 6.60, "A⁻¹", ha="center", fontsize=SMALL, fontweight="bold", color=ACCENT, zorder=8)
+    ax.text(
+        14.18,
+        6.60,
+        "A⁻¹",
+        ha="center",
+        fontsize=SMALL,
+        fontweight="bold",
+        color=ACCENT,
+        zorder=8,
+    )
     ax.text(14.18, 6.18, "English stays English.", ha="center", fontsize=TINY, zorder=8)
-    ax.text(14.18, 5.82, "Transcript keeps the names.", ha="center", fontsize=TINY, color=MUTED, zorder=8)
+    ax.text(
+        14.18,
+        5.82,
+        "Transcript keeps the names.",
+        ha="center",
+        fontsize=TINY,
+        color=MUTED,
+        zorder=8,
+    )
     card(ax, 12.50, 3.80, 3.35, 1.55, fc="#FDF3EF")
-    ax.text(14.18, 5.00, "P A⁻¹", ha="center", fontsize=SMALL, fontweight="bold", color=CORAL, zorder=8)
-    ax.text(14.18, 4.58, "Same words. Swapped speakers.", ha="center", fontsize=TINY, zorder=8)
-    ax.text(14.18, 4.20, "Leftover: permutation and scale.", ha="center", fontsize=TINY, color=MUTED, zorder=8)
+    ax.text(
+        14.18,
+        5.00,
+        "P A⁻¹",
+        ha="center",
+        fontsize=SMALL,
+        fontweight="bold",
+        color=CORAL,
+        zorder=8,
+    )
+    ax.text(
+        14.18,
+        4.58,
+        "Same words. Swapped speakers.",
+        ha="center",
+        fontsize=TINY,
+        zorder=8,
+    )
+    ax.text(
+        14.18,
+        4.20,
+        "Leftover: permutation and scale.",
+        ha="center",
+        fontsize=TINY,
+        color=MUTED,
+        zorder=8,
+    )
 
     arrow(ax, (3.95, 5.50), (4.15, 5.50), color=MUTED, lw=1.2)
     arrow(ax, (7.95, 5.50), (8.15, 5.50), color=MUTED, lw=1.2)
     arrow(ax, (12.10, 5.50), (12.25, 5.50), color=MUTED, lw=1.2)
 
     card(ax, 0.35, 0.35, 15.70, 2.90)
-    ax.text(0.60, 2.80, "How the inverse helps", fontsize=SMALL, fontweight="bold", zorder=8)
+    ax.text(
+        0.60, 2.80, "How the inverse helps", fontsize=SMALL, fontweight="bold", zorder=8
+    )
     ax.text(
         0.60,
         2.28,
@@ -309,42 +438,117 @@ def poster_ratings(path: Path) -> Path:
     rng = np.random.default_rng(7)
 
     _stage(ax, 1, 0.35, 3.55, 3.55, 3.85, "Observed ratings", TEAL)
-    cube(ax, (0.85, 4.05), ("movie", "user", "month"), ("80", "80", "8"), face=TEAL, s=1.00)
+    cube(
+        ax,
+        (0.85, 4.05),
+        ("movie", "user", "month"),
+        ("80", "80", "8"),
+        face=TEAL,
+        s=1.00,
+    )
     pill(ax, 2.12, 3.82, "4,797 of 51,200 cells")
 
     _stage(ax, 2, 4.20, 3.55, 3.70, 3.85, "Sampling operator  PΩ", CORAL)
-    cube(ax, (4.75, 4.05), ("movie", "user", "month"), ("80", "80", "8"), face="#C3CDDB", s=1.00)
+    cube(
+        ax,
+        (4.75, 4.05),
+        ("movie", "user", "month"),
+        ("80", "80", "8"),
+        face="#C3CDDB",
+        s=1.00,
+    )
     # holes: white squares on the front
-    o = iso(0, 0, 0, (4.75, 4.05), s=1.00)
     _sparse_face(ax, (4.78, 4.08), 1.00, rng, n=8, color=CORAL)
-    ax.text(6.05, 3.82, "null space = any fill of the holes", ha="center", fontsize=TINY, color=MUTED, zorder=8)
+    ax.text(
+        6.05,
+        3.82,
+        "null space = any fill of the holes",
+        ha="center",
+        fontsize=TINY,
+        color=MUTED,
+        zorder=8,
+    )
 
     _stage(ax, 3, 8.20, 3.55, 3.85, 3.85, "Two CP inverses", ACCENT)
     card(ax, 8.40, 5.55, 3.45, 1.40, fc="#F4F1FC")
-    ax.text(10.12, 6.60, "rank 3", ha="center", fontsize=SMALL, fontweight="bold", color=ACCENT, zorder=8)
+    ax.text(
+        10.12,
+        6.60,
+        "rank 3",
+        ha="center",
+        fontsize=SMALL,
+        fontweight="bold",
+        color=ACCENT,
+        zorder=8,
+    )
     ax.text(10.12, 6.18, "Terminator  →  3.1", ha="center", fontsize=TINY, zorder=8)
-    ax.text(10.12, 5.82, "middling — show it", ha="center", fontsize=TINY, color=MUTED, zorder=8)
+    ax.text(
+        10.12,
+        5.82,
+        "middling — show it",
+        ha="center",
+        fontsize=TINY,
+        color=MUTED,
+        zorder=8,
+    )
     card(ax, 8.40, 3.80, 3.45, 1.55, fc="#FDF3EF")
-    ax.text(10.12, 5.00, "rank 8", ha="center", fontsize=SMALL, fontweight="bold", color=CORAL, zorder=8)
+    ax.text(
+        10.12,
+        5.00,
+        "rank 8",
+        ha="center",
+        fontsize=SMALL,
+        fontweight="bold",
+        color=CORAL,
+        zorder=8,
+    )
     ax.text(10.12, 4.58, "Terminator  →  2.0", ha="center", fontsize=TINY, zorder=8)
     ax.text(10.12, 4.20, "park it", ha="center", fontsize=TINY, color=MUTED, zorder=8)
 
     _stage(ax, 4, 12.30, 3.55, 3.75, 3.85, "Two pages", GOLD)
     card(ax, 12.50, 5.55, 3.35, 1.40, fc="#F4F1FC")
-    ax.text(14.18, 6.60, "Page A", ha="center", fontsize=SMALL, fontweight="bold", color=ACCENT, zorder=8)
+    ax.text(
+        14.18,
+        6.60,
+        "Page A",
+        ha="center",
+        fontsize=SMALL,
+        fontweight="bold",
+        color=ACCENT,
+        zorder=8,
+    )
     ax.text(14.18, 6.18, "The Terminator  ★★★", ha="center", fontsize=TINY, zorder=8)
     ax.text(14.18, 5.82, "slot used", ha="center", fontsize=TINY, color=MUTED, zorder=8)
     card(ax, 12.50, 3.80, 3.35, 1.55, fc="#FDF3EF")
-    ax.text(14.18, 5.00, "Page B", ha="center", fontsize=SMALL, fontweight="bold", color=CORAL, zorder=8)
+    ax.text(
+        14.18,
+        5.00,
+        "Page B",
+        ha="center",
+        fontsize=SMALL,
+        fontweight="bold",
+        color=CORAL,
+        zorder=8,
+    )
     ax.text(14.18, 4.58, "The Terminator  hidden", ha="center", fontsize=TINY, zorder=8)
-    ax.text(14.18, 4.20, "same user, same month", ha="center", fontsize=TINY, color=MUTED, zorder=8)
+    ax.text(
+        14.18,
+        4.20,
+        "same user, same month",
+        ha="center",
+        fontsize=TINY,
+        color=MUTED,
+        zorder=8,
+    )
 
     arrow(ax, (3.95, 5.50), (4.15, 5.50), color=MUTED, lw=1.2)
     arrow(ax, (7.95, 5.50), (8.15, 5.50), color=MUTED, lw=1.2)
     arrow(ax, (12.10, 5.50), (12.25, 5.50), color=MUTED, lw=1.2)
 
     card(ax, 0.35, 0.35, 15.70, 2.90)
-    ax.text(0.60, 2.80, "How the inverse helps", fontsize=SMALL, fontweight="bold", zorder=8)
+    ax.text(
+        0.60, 2.80, "How the inverse helps", fontsize=SMALL, fontweight="bold", zorder=8
+    )
     ax.text(
         0.60,
         2.28,
@@ -396,9 +600,22 @@ def _tank(ax, x, y, s=1.0) -> None:
         )
     )
     ax.add_patch(
-        Wedge((x, y + 1.05 * s), 0.55 * s, 0, 180, facecolor="#C3CDDB", edgecolor=INK, lw=1.1, zorder=8)
+        Wedge(
+            (x, y + 1.05 * s),
+            0.55 * s,
+            0,
+            180,
+            facecolor="#C3CDDB",
+            edgecolor=INK,
+            lw=1.1,
+            zorder=8,
+        )
     )
-    ax.add_patch(Circle((x, y + 0.45 * s), 0.16 * s, facecolor=GOLD, edgecolor=INK, lw=0.8, zorder=9))
+    ax.add_patch(
+        Circle(
+            (x, y + 0.45 * s), 0.16 * s, facecolor=GOLD, edgecolor=INK, lw=0.8, zorder=9
+        )
+    )
 
 
 def poster_dryer(path: Path) -> Path:
@@ -409,41 +626,152 @@ def poster_dryer(path: Path) -> Path:
 
     _stage(ax, 1, 0.35, 3.55, 3.55, 3.85, "The plant", TEAL)
     _tank(ax, 2.12, 5.15, s=0.95)
-    ax.text(2.12, 4.55, "industrial dryer", ha="center", fontsize=TINY, fontweight="bold", zorder=8)
-    ax.text(2.12, 4.18, "fuel · fan · feed  →", ha="center", fontsize=TINY, color=MUTED, zorder=8)
-    ax.text(2.12, 3.86, "temp · temp · moisture", ha="center", fontsize=TINY, color=MUTED, zorder=8)
+    ax.text(
+        2.12,
+        4.55,
+        "industrial dryer",
+        ha="center",
+        fontsize=TINY,
+        fontweight="bold",
+        zorder=8,
+    )
+    ax.text(
+        2.12,
+        4.18,
+        "fuel · fan · feed  →",
+        ha="center",
+        fontsize=TINY,
+        color=MUTED,
+        zorder=8,
+    )
+    ax.text(
+        2.12,
+        3.86,
+        "temp · temp · moisture",
+        ha="center",
+        fontsize=TINY,
+        color=MUTED,
+        zorder=8,
+    )
 
     _stage(ax, 2, 4.20, 3.55, 3.70, 3.85, "Impulse response  H", CORAL)
-    cube(ax, (4.75, 4.05), ("input", "output", "lag"), ("3", "3", "L"), face=CORAL, s=1.00)
+    cube(
+        ax,
+        (4.75, 4.05),
+        ("input", "output", "lag"),
+        ("3", "3", "L"),
+        face=CORAL,
+        s=1.00,
+    )
     pill(ax, 6.05, 6.85, "H ∈ ℝ³ˣ³ˣᴸ")
-    ax.text(6.05, 3.82, "L = 5 or 15 on this series", ha="center", fontsize=TINY, color=MUTED, zorder=8)
+    ax.text(
+        6.05,
+        3.82,
+        "L = 5 or 15 on this series",
+        ha="center",
+        fontsize=TINY,
+        color=MUTED,
+        zorder=8,
+    )
 
     _stage(ax, 3, 8.20, 3.55, 3.85, 3.85, "Two inverses of H", ACCENT)
     card(ax, 8.40, 5.55, 3.45, 1.40, fc="#FDF3EF")
-    ax.text(10.12, 6.60, "lag-0  H[:,:,0]† y", ha="center", fontsize=SMALL, fontweight="bold", color=CORAL, zorder=8)
+    ax.text(
+        10.12,
+        6.60,
+        "lag-0  H[:,:,0]† y",
+        ha="center",
+        fontsize=SMALL,
+        fontweight="bold",
+        color=CORAL,
+        zorder=8,
+    )
     ax.text(10.12, 6.18, "one-step product", ha="center", fontsize=TINY, zorder=8)
-    ax.text(10.12, 5.82, "κ ≈ 10³ on this slice", ha="center", fontsize=TINY, color=MUTED, zorder=8)
+    ax.text(
+        10.12,
+        5.82,
+        "κ ≈ 10³ on this slice",
+        ha="center",
+        fontsize=TINY,
+        color=MUTED,
+        zorder=8,
+    )
     card(ax, 8.40, 3.80, 3.45, 1.55, fc="#EAF6F4")
-    ax.text(10.12, 5.00, "stacked  H† y", ha="center", fontsize=SMALL, fontweight="bold", color=TEAL, zorder=8)
-    ax.text(10.12, 4.58, "Einstein / Moore–Penrose", ha="center", fontsize=TINY, zorder=8)
-    ax.text(10.12, 4.20, "of the 3 × 15 unfolding", ha="center", fontsize=TINY, color=MUTED, zorder=8)
+    ax.text(
+        10.12,
+        5.00,
+        "stacked  H† y",
+        ha="center",
+        fontsize=SMALL,
+        fontweight="bold",
+        color=TEAL,
+        zorder=8,
+    )
+    ax.text(
+        10.12, 4.58, "Einstein / Moore–Penrose", ha="center", fontsize=TINY, zorder=8
+    )
+    ax.text(
+        10.12,
+        4.20,
+        "of the 3 × 15 unfolding",
+        ha="center",
+        fontsize=TINY,
+        color=MUTED,
+        zorder=8,
+    )
 
     _stage(ax, 4, 12.30, 3.55, 3.75, 3.85, "Two settings", GOLD)
     card(ax, 12.50, 5.55, 3.35, 1.40, fc="#FDF3EF")
-    ax.text(14.18, 6.60, "lag-0 pick", ha="center", fontsize=SMALL, fontweight="bold", color=CORAL, zorder=8)
+    ax.text(
+        14.18,
+        6.60,
+        "lag-0 pick",
+        ha="center",
+        fontsize=SMALL,
+        fontweight="bold",
+        color=CORAL,
+        zorder=8,
+    )
     ax.text(14.18, 6.18, "feed ≈ +1,200", ha="center", fontsize=TINY, zorder=8)
-    ax.text(14.18, 5.82, "dump raw material", ha="center", fontsize=TINY, color=MUTED, zorder=8)
+    ax.text(
+        14.18,
+        5.82,
+        "dump raw material",
+        ha="center",
+        fontsize=TINY,
+        color=MUTED,
+        zorder=8,
+    )
     card(ax, 12.50, 3.80, 3.35, 1.55, fc="#EAF6F4")
-    ax.text(14.18, 5.00, "stacked pick", ha="center", fontsize=SMALL, fontweight="bold", color=TEAL, zorder=8)
+    ax.text(
+        14.18,
+        5.00,
+        "stacked pick",
+        ha="center",
+        fontsize=SMALL,
+        fontweight="bold",
+        color=TEAL,
+        zorder=8,
+    )
     ax.text(14.18, 4.58, "feed ≈ 0", ha="center", fontsize=TINY, zorder=8)
-    ax.text(14.18, 4.20, "small correction", ha="center", fontsize=TINY, color=MUTED, zorder=8)
+    ax.text(
+        14.18,
+        4.20,
+        "small correction",
+        ha="center",
+        fontsize=TINY,
+        color=MUTED,
+        zorder=8,
+    )
 
     arrow(ax, (3.95, 5.50), (4.15, 5.50), color=MUTED, lw=1.2)
     arrow(ax, (7.95, 5.50), (8.15, 5.50), color=MUTED, lw=1.2)
     arrow(ax, (12.10, 5.50), (12.25, 5.50), color=MUTED, lw=1.2)
 
     card(ax, 0.35, 0.35, 15.70, 2.90)
-    ax.text(0.60, 2.80, "How the inverse helps", fontsize=SMALL, fontweight="bold", zorder=8)
+    ax.text(
+        0.60, 2.80, "How the inverse helps", fontsize=SMALL, fontweight="bold", zorder=8
+    )
     ax.text(
         0.60,
         2.28,

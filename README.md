@@ -10,7 +10,7 @@ Essays on machine learning, statistics, and the tooling around them — by Ravi 
 
 ## What's here
 
-105 posts written since February 2024 (97 Quarto `.qmd`, 8 Jupyter `.ipynb`), each one
+120 posts written since February 2024 (112 Quarto `.qmd`, 8 Jupyter `.ipynb`), each one
 self-contained under `posts/<slug>/`. The recurring threads are machine learning and
 statistics, NLP and LLMs, mathematics — linear algebra, shape analysis, topology —
 data engineering, and developer tooling.
@@ -45,7 +45,7 @@ _freeze/          Quarto's cached execution output — committed on purpose
 scripts/          check_posts.py, the repo's only check
 .claude/hooks/    block-main-commit.sh — refuses any commit while HEAD is on main
 _quarto.yml       site config; index.qmd is the post listing
-Makefile          install / kernel / kernels-stub / check-posts / quatro (render)
+Makefile          install / kernels-stub / check / render / serve / freeze-realign ...
 AGENTS.md         the working rules for coding agents; CLAUDE.md points at it
 ```
 
@@ -56,8 +56,8 @@ AGENTS.md         the working rules for coding agents; CLAUDE.md points at it
 ```bash
 make install       # base dev/lint toolchain into .venv, from uv.lock
 make kernels-stub  # register every kernel name the posts pin
-QUARTO_PYTHON="$(pwd)/.venv/bin/python" quarto render .   # rebuild docs/ from _freeze/
-python -m http.server 8000 --directory docs               # read it at localhost:8000
+make render        # rebuild docs/ from _freeze/ (log in render.log)
+make serve         # read it at localhost:8000
 ```
 
 That builds the whole site from the committed frozen output with no ML dependencies
@@ -125,17 +125,19 @@ the reasons each step is there.
 
 ### Checks
 
-- `make check-posts` — run it before any full render. It verifies that code posts pin
-  a kernel and a `requirements.txt`, that every pinned kernel appears in
-  `make kernels-stub`, and that no post's frozen output has drifted from its source.
-  Stdlib-only, so it runs on any interpreter.
-- `.venv/bin/pre-commit run --files <your paths>` for lint (black, ruff, mypy,
-  pyupgrade). It is not on `PATH`, and the hooks are not installed into `.git/hooks/`,
-  so nothing runs automatically on commit. Scope it to what you changed —
-  `--all-files` rewrites a few hundred files of pre-existing lint debt. For spelling,
-  `uvx codespell <file>`: it is configured in `pyproject.toml` but no hook runs it.
-
-There is no test suite.
+- `make check` — everything that does not need Quarto: `make lint` (ruff check and
+  format), `make spell` (codespell over the prose), `make test` (pytest over the two
+  scripts under `scripts/`), and `make check-posts`.
+- `make check-posts` — run it before any full render (`make render` does). It verifies
+  that code posts pin a kernel and a `requirements.txt`, that every pinned kernel
+  appears in `make kernels-stub`, that no post's frozen output has drifted from its
+  source, and that every post is in the site listing. Stdlib-only, so it runs on any
+  interpreter.
+- `make freeze-realign SLUG=<slug>` — after a prose-only edit to a freeze-backed post,
+  accepts the change without re-executing the post.
+- The pre-commit hooks (ruff, codespell, shellcheck, the whitespace fixers) run on the
+  staged files at every commit once installed with `.venv/bin/pre-commit install`.
+  Never `--all-files`: the formatters fix in place.
 
 ## Further reading
 

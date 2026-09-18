@@ -49,9 +49,7 @@ def svd(image: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return np.linalg.svd(image, full_matrices=False)
 
 
-def reconstruct(
-    u: np.ndarray, s: np.ndarray, vt: np.ndarray, k: int
-) -> np.ndarray:
+def reconstruct(u: np.ndarray, s: np.ndarray, vt: np.ndarray, k: int) -> np.ndarray:
     """Rebuild the image from its leading ``k`` singular triplets.
 
     Args:

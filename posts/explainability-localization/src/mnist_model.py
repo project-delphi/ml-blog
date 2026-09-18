@@ -197,7 +197,9 @@ def logits_for(model: SmallCNN, x: torch.Tensor, batch: int = 1000) -> np.ndarra
     Returns:
         Array of logits, shape (N, 10).
     """
-    out = [model(normalise(x[i : i + batch])).numpy() for i in range(0, x.shape[0], batch)]
+    out = [
+        model(normalise(x[i : i + batch])).numpy() for i in range(0, x.shape[0], batch)
+    ]
     return np.concatenate(out, axis=0)
 
 

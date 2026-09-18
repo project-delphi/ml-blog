@@ -18,7 +18,7 @@ import ast
 import hashlib
 import inspect
 import textwrap
-from typing import Callable
+from collections.abc import Callable
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -189,7 +189,12 @@ def overlay_axis(
     if signed:
         lim = float(np.abs(heat).max()) or 1.0
         ax.imshow(
-            heat, cmap=CMAP_SIGNED, vmin=-lim, vmax=lim, alpha=alpha, interpolation="bilinear"
+            heat,
+            cmap=CMAP_SIGNED,
+            vmin=-lim,
+            vmax=lim,
+            alpha=alpha,
+            interpolation="bilinear",
         )
     else:
         ax.imshow(heat, cmap=CMAP_MAG, alpha=alpha, interpolation="bilinear")

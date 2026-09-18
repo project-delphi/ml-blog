@@ -198,7 +198,7 @@ def write_overlay() -> None:
 def main() -> int:
     """Write the landmark table and its overlay.
 
-    Returns
+    Returns:
     -------
         Process exit code.
     """

@@ -78,7 +78,9 @@ def _tick_texts(ax: Axes) -> list[Text]:
 
 def _texts_of(fig: Figure) -> list[Text]:
     """Collect every candidate text artist on a figure."""
-    items: list[Text] = [t for t in fig.texts if t.get_visible() and t.get_text().strip()]
+    items: list[Text] = [
+        t for t in fig.texts if t.get_visible() and t.get_text().strip()
+    ]
     for ax in fig.axes:
         for candidate in (ax.title, ax.xaxis.label, ax.yaxis.label):
             if candidate.get_visible() and candidate.get_text().strip():
@@ -187,8 +189,14 @@ if __name__ == "__main__":
     # Self-test: a figure built to collide must be caught, a clean one must pass.
     bad, ax = plt.subplots(figsize=(3, 2))
     ax.set_title("a deliberately long title that runs into things")
-    ax.text(0.5, 0.98, "a deliberately long title that runs into things",
-            ha="center", va="top", transform=ax.transAxes)
+    ax.text(
+        0.5,
+        0.98,
+        "a deliberately long title that runs into things",
+        ha="center",
+        va="top",
+        transform=ax.transAxes,
+    )
     assert check_figure(bad, "deliberate-collision"), "checker missed a real overlap"
 
     good, ax2 = plt.subplots(figsize=(6, 4))

@@ -14,9 +14,8 @@ from __future__ import annotations
 
 from typing import Final
 
-import numpy as np
-
 import data as dataset
+import numpy as np
 
 SEED: Final[int] = 20260819
 TEST_FRACTION: Final[float] = 0.10
@@ -24,7 +23,25 @@ TEST_FRACTION: Final[float] = 0.10
 # Ranks scored. Dense enough near the minimum to place it, sparse out in the
 # tail where the curve is flat and rising.
 RANKS: Final[tuple[int, ...]] = (
-    1, 2, 3, 5, 7, 10, 13, 16, 20, 25, 30, 40, 50, 65, 80, 100, 130, 160, 200,
+    1,
+    2,
+    3,
+    5,
+    7,
+    10,
+    13,
+    16,
+    20,
+    25,
+    30,
+    40,
+    50,
+    65,
+    80,
+    100,
+    130,
+    160,
+    200,
 )
 
 
@@ -98,9 +115,7 @@ def rmse_by_rank() -> dict[str, object]:
 
     curve = []
     for k in RANKS:
-        correction = np.einsum(
-            "ij,j,ji->i", u[rows, :k], s[:k], vt[:k, :][:, cols]
-        )
+        correction = np.einsum("ij,j,ji->i", u[rows, :k], s[:k], vt[:k, :][:, cols])
         curve.append(score(base_pred + correction))
 
     best = int(np.argmin(curve))

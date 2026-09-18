@@ -19,8 +19,9 @@ import os
 import re
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 # --------------------------------------------------------------------------
 # The stochastic part: one HTTP call to a hosted model.
@@ -182,7 +183,7 @@ class ToolRegistry:
 
     tools: dict[str, Tool] = field(default_factory=dict)
 
-    def add(self, tool: Tool) -> "ToolRegistry":
+    def add(self, tool: Tool) -> ToolRegistry:
         self.tools[tool.name] = tool
         return self
 

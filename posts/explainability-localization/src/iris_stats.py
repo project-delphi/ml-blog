@@ -130,7 +130,11 @@ class LogitFit:
 
 
 def fit_logistic(
-    X: np.ndarray, y: np.ndarray, names: list[str], max_iter: int = 100, tol: float = 1e-10
+    X: np.ndarray,
+    y: np.ndarray,
+    names: list[str],
+    max_iter: int = 100,
+    tol: float = 1e-10,
 ) -> LogitFit:
     """Fit a binary logistic regression by Newton-Raphson, unpenalised.
 
@@ -190,7 +194,9 @@ def fit_logistic(
     )
 
 
-def separation_path(X: np.ndarray, y: np.ndarray, caps: tuple[int, ...]) -> pd.DataFrame:
+def separation_path(
+    X: np.ndarray, y: np.ndarray, caps: tuple[int, ...]
+) -> pd.DataFrame:
     """Refit with increasing Newton budgets and watch the estimates move.
 
     On separable data the maximum likelihood estimate does not exist: the
@@ -479,7 +485,9 @@ def self_check() -> list[str]:
         groups = [df.loc[df.species == s, row.feature].to_numpy() for s in SPECIES]
         worst = max(worst, abs(row.F - stats.f_oneway(*groups).statistic) / row.F)
     assert worst < 1e-10, worst
-    lines.append(f"ANOVA F statistics match scipy.stats.f_oneway to {worst:.1e} relative")
+    lines.append(
+        f"ANOVA F statistics match scipy.stats.f_oneway to {worst:.1e} relative"
+    )
 
     # 3. Explained-variance ratios.
     fit = pca_fit(X, standardised=True, k=4)
@@ -492,7 +500,9 @@ def self_check() -> list[str]:
     y_setosa = (target == 0).astype(float)
     assert is_separable(standardise(X), y_setosa)
     assert not is_separable(Xs, y)
-    lines.append("setosa is linearly separable from the rest; versicolor and virginica are not")
+    lines.append(
+        "setosa is linearly separable from the rest; versicolor and virginica are not"
+    )
 
     # 5. Permutation importance against scikit-learn's implementation. The two
     # differ in their random draws, so they are compared within Monte-Carlo
@@ -501,10 +511,20 @@ def self_check() -> list[str]:
 
     split = fit_multinomial(seed=0)
     mine = permutation_importance(
-        split.model.predict, split.Xte, split.yte, repeats=200, rng=np.random.default_rng(0)
+        split.model.predict,
+        split.Xte,
+        split.yte,
+        repeats=200,
+        rng=np.random.default_rng(0),
     )
-    ref = sk_perm(split.model, split.Xte, split.yte, n_repeats=200, random_state=0,
-                  scoring="accuracy")
+    ref = sk_perm(
+        split.model,
+        split.Xte,
+        split.yte,
+        n_repeats=200,
+        random_state=0,
+        scoring="accuracy",
+    )
     gap = np.abs(mine["mean drop"].to_numpy() - ref.importances_mean)
     tolerance = 3 * np.hypot(mine["se"].to_numpy(), ref.importances_std / np.sqrt(200))
     assert np.all(gap < np.maximum(tolerance, 1e-12)), (gap, tolerance)

@@ -1,4 +1,4 @@
-"""Fetch and cache the three datasets this post reads at render time.
+r"""Fetch and cache the three datasets this post reads at render time.
 
 Writes into posts/tensor-inverse-examples/data/ (arrays) and media/ (short
 wavs the page plays). The data/ directory is carved out of the repo-wide
@@ -6,7 +6,7 @@ wavs the page plays). The data/ directory is carved out of the repo-wide
 
 Not run at render. Needs network; the speech path also needs ffmpeg.
 
-    /Users/ravikalia/Code/github.com/ml-blog/.venv-tensor-factorizations/bin/python \\
+    /Users/ravikalia/Code/github.com/ml-blog/.venv-tensor-factorizations/bin/python \
         posts/tensor-inverse-examples/src/fetch_data.py
 """
 
@@ -17,7 +17,7 @@ import json
 import subprocess
 import tempfile
 import zipfile
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import numpy as np
@@ -37,7 +37,8 @@ _COMMONS = "https://commons.wikimedia.org/wiki/Special:FilePath/"
 SPEECH = [
     {
         "key": "english",
-        "url": _COMMONS + "Recording_of_speaker_of_British_English_(Received_Pronunciation).ogg",
+        "url": _COMMONS
+        + "Recording_of_speaker_of_British_English_(Received_Pronunciation).ogg",
         "title": "The North Wind and the Sun (British English, RP)",
         "reader": "P. Roach / International Phonetic Association; CC BY-SA 3.0",
         "start": "00:00:02",
@@ -86,15 +87,10 @@ MOVIELENS_URL = "https://files.grouplens.org/datasets/movielens/ml-100k.zip"
 N_USERS = 80
 N_MOVIES = 80
 
-DRYER_URL = (
-    "https://ftp.esat.kuleuven.be/pub/SISTA/data/process_industry/dryer2.dat.gz"
-)
-DRYER_TXT = (
-    "https://ftp.esat.kuleuven.be/pub/SISTA/data/process_industry/dryer2.txt"
-)
+DRYER_URL = "https://ftp.esat.kuleuven.be/pub/SISTA/data/process_industry/dryer2.dat.gz"
+DRYER_TXT = "https://ftp.esat.kuleuven.be/pub/SISTA/data/process_industry/dryer2.txt"
 DRYER_FALLBACK = (
-    "https://ftp.esat.kuleuven.be/pub/SISTA/data/process_industry/"
-    "glassfurnace.dat.gz"
+    "https://ftp.esat.kuleuven.be/pub/SISTA/data/process_industry/glassfurnace.dat.gz"
 )
 
 
@@ -260,18 +256,11 @@ def fetch_movielens() -> Path:
     # Most-active users and most-rated movies, then month bins.
     user_counts = {u: n for u, n in zip(*np.unique(user, return_counts=True))}
     movie_counts = {m: n for m, n in zip(*np.unique(movie, return_counts=True))}
-    keep_u = np.array(
-        sorted(user_counts, key=user_counts.get, reverse=True)[:N_USERS]
-    )
+    keep_u = np.array(sorted(user_counts, key=user_counts.get, reverse=True)[:N_USERS])
     keep_m = np.array(
         sorted(movie_counts, key=movie_counts.get, reverse=True)[:N_MOVIES]
     )
-    months = np.array(
-        [
-            datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m")
-            for t in ts
-        ]
-    )
+    months = np.array([datetime.fromtimestamp(t, tz=UTC).strftime("%Y-%m") for t in ts])
     month_levels = np.array(sorted(set(months)))
     u_index = {int(u): i for i, u in enumerate(keep_u)}
     m_index = {int(m): i for i, m in enumerate(keep_m)}

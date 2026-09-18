@@ -11,7 +11,7 @@ come from ``tensors.py``.
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import numpy as np
 from matplotlib.axes import Axes
@@ -50,7 +50,7 @@ LW = 1.6
 FONT = ["DejaVu Sans"]
 
 # Hex string, or the RGB triple wash()/blend()/saturate() return.
-Color = Union[str, tuple[float, float, float]]
+Color = str | tuple[float, float, float]
 
 
 # --- colour ----------------------------------------------------------------
