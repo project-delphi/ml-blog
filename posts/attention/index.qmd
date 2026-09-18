@@ -1,150 +1,71 @@
 ---
-title: "Understanding Attention: From Theory to Implementation"
+title: "Attention Is a Softmax Over Dot Products, and the Divisor Keeps It Trainable"
+description: "How a transformer decides which tokens matter to each other: the three matrices, the softmax that does the choosing, an interactive look at why the scores are divided by the square root of the width, and the layer in PyTorch."
 author: "Ravi Kalia"
 date: "2025-01-31"
 categories: [Deep Learning, NLP]
+tags: [attention, transformers, softmax, multi-head-attention, pytorch]
+image: "./cover.png"
 resources:
   - widgets.js
 format:
   html:
     toc: true
     toc-depth: 3
-    number-sections: true
     code-fold: false
-image: "./cover.png"
 ---
 
 ![Attention](./attention.gif)
 
-<p style="text-align: center;">
-  <em>Made with <span style="color: red;">❤️</span> and <a href="https://github.com/features/copilot" target="_blank">GitHub Copilot</a></em>
-  <br>
-  <img src="https://github.githubassets.com/images/icons/emoji/octocat.png" alt="GitHub Copilot Logo" width="50">
-</p>
+Read the sentence "the cat sat on the mat because it was tired" and you resolve "it"
+to the cat without noticing. A transformer has to do that resolution explicitly, for
+every token against every other, and attention is the mechanism that does it: score
+each pair of tokens, turn the scores into weights with a softmax, and mix the tokens'
+values in proportion. This post builds the mechanism from the input matrix up, uses an
+interactive grid to show why one small constant in the formula is the difference
+between a layer that trains and one that does not, and ends with the layer in PyTorch.
 
-Attention is the mechanism that lets a transformer decide which words in a sentence matter to each other. The maths comes first, then a working PyTorch layer.
+## A sentence becomes a matrix before attention sees it
 
-## Overview {.unnumbered}
-
-An attention layer scores every token against every other token, then mixes their values in proportion to those scores. One sequence runs the whole way: raw text, tokens, embeddings, positional encoding, single-head attention, and multi-head attention in PyTorch.
-
-## Key Concepts
-
-Before diving into the mathematics, let's establish our key concepts:
-
-- **Attention**: A mechanism allowing models to focus on relevant parts of input data
-- **Self-Attention**: A specific form where each element in a sequence attends to all others
-- **Multi-Head Attention**: Multiple parallel attention mechanisms working together
-- **Positional Encoding**: Method to incorporate sequential information
-
-## Data Preprocessing
-
-### From Text to Vectors
-
-The transformation of text into numerical representations involves several steps:
-
-1. **Tokenization**: Convert text into token IDs
-2. **Embedding**: Map tokens to dense vectors
-3. **Position Encoding**: Add sequential information
-
-### Tokenization Process
-
-Given an input sentence:
-
-```text
-"The cat sat on the mat"
-```
-
-We convert it to token IDs using subword tokenization:
-
-```python
-tokens = [101, 2023, 3679, 2003, 2307, 102]  # Example IDs
-```
-
-### Embedding Layer
-
-The embedding process transforms discrete tokens into continuous vectors:
+Attention operates on vectors, so the first job is to make some. The sentence is
+split into tokens by a subword tokenizer, each token id indexes a row of an embedding
+table $E \in \mathbb{R}^{V \times d}$ ($V$ vocabulary entries, $d$ dimensions), and the
+rows for the sentence are stacked into $X \in \mathbb{R}^{n \times d}$, one row per
+token. Nothing in that matrix says which token came first, and attention itself is
+order-blind, so a positional encoding is added: sinusoids of different frequencies,
 
 $$
-E \in \mathbb{R}^{V \times d}
+P_{i,2j} = \sin\!\left(\frac{i}{10000^{2j/d}}\right), \qquad
+P_{i,2j+1} = \cos\!\left(\frac{i}{10000^{2j/d}}\right),
 $$
 
-where:
+and the input to the first layer is $X + P$. Everything after this point is linear
+algebra on that matrix.
 
-- $V$ = vocabulary size
-- $d$ = embedding dimension
+## Query, key, value: one input, three roles
 
-For each token $t_i$, we compute:
-
-$$
-x_i = E[t_i] \in \mathbb{R}^d
-$$
-
-Resulting in input matrix:
+Each token plays three parts. As a **query** it asks what it needs from the rest of
+the sentence; as a **key** it advertises what it has; as a **value** it is the content
+handed over when chosen. Three learned matrices produce the three views of the same
+input:
 
 $$
-X = \begin{bmatrix}
-x_1 \\
-x_2 \\
-\vdots \\
-x_n
-\end{bmatrix} \in \mathbb{R}^{n \times d}
+Q = X W_Q, \qquad K = X W_K, \qquad V = X W_V, \qquad W_Q, W_K, W_V \in \mathbb{R}^{d \times d}.
 $$
 
-### Positional Encoding
-
-To preserve sequence order, we add positional encodings:
-
-$$
-\begin{aligned}
-P_{i,2j} &= \sin\left(\frac{i}{10000^{2j/d}}\right) \\
-P_{i,2j+1} &= \cos\left(\frac{i}{10000^{2j/d}}\right)
-\end{aligned}
-$$
-
-Final input representation:
+The scores are every query against every key, a single matrix product, and the
+softmax turns each row of scores into weights that sum to one; the output for a token
+is those weights applied to the values:
 
 $$
-X_{\text{final}} = X + P
+S = \frac{Q K^\mathsf{T}}{\sqrt{d}}, \qquad A = \operatorname{softmax}(S), \qquad Z = A V.
 $$
 
-## Self-Attention Mechanism
+Row $i$ of $A$ is token $i$'s attention: how much of each other token it reads. The
+softmax is what makes it a choice rather than a blur, and the $\sqrt{d}$ under the
+scores is what keeps the choice from becoming a fixed one.
 
-### Query, Key, and Value Transformations
-
-Self-attention begins by creating three matrices from the input:
-
-$$
-\begin{aligned}
-Q &= X W_Q \\
-K &= X W_K \\
-V &= X W_V
-\end{aligned}
-$$
-
-where $W_Q, W_K, W_V \in \mathbb{R}^{d \times d}$ are learnable parameters.
-
-### Attention Computation
-
-1. **Compute Attention Scores**:
-
-   $$
-   S = \frac{Q K^T}{\sqrt{d}}
-   $$
-
-2. **Apply Softmax**:
-
-   $$
-   A = \text{softmax}(S)
-   $$
-
-3. **Compute Weighted Values**:
-
-   $$
-   Z = A V
-   $$
-
-### Why the scores are divided by $\sqrt{d}$
+## Why the scores are divided by $\sqrt{d}$
 
 A dot product of two $d$-dimensional vectors with unit-variance entries has variance
 $d$, so the raw scores grow with the embedding width, and the softmax of large scores is
@@ -167,113 +88,79 @@ models use.
 <script src="widgets.js"></script>
 ```
 
-## Multi-Head Attention
+## Several heads read the sentence differently
 
-### Parallel Attention Heads
-
-For $h$ heads, we compute:
-
-$$
-\begin{aligned}
-Q^{(h)} &= X W_Q^{(h)} \\
-K^{(h)} &= X W_K^{(h)} \\
-V^{(h)} &= X W_V^{(h)}
-\end{aligned}
-$$
-
-### Head Outputs
-
-Each head produces its output:
+One attention pattern per layer is one way of reading the sentence. Multi-head
+attention runs $H$ of them in parallel, each with its own $W_Q^{(h)}, W_K^{(h)},
+W_V^{(h)}$ of width $d_k = d / H$, so that one head can track syntax while another
+tracks coreference and a third tracks position:
 
 $$
-Z^{(h)} = \text{softmax} \left( \frac{Q^{(h)} (K^{(h)})^T}{\sqrt{d_k}} \right) V^{(h)}
+Z^{(h)} = \operatorname{softmax}\!\left(\frac{Q^{(h)} K^{(h)\mathsf{T}}}{\sqrt{d_k}}\right) V^{(h)},
+\qquad
+Z = \left[ Z^{(1)} \,\|\, \cdots \,\|\, Z^{(H)} \right] W_O.
 $$
 
-### Combining Head Outputs
+The heads' outputs are concatenated back to width $d$ and mixed by one more learned
+matrix $W_O$. The divisor is now $\sqrt{d_k}$, the per-head width, for the same
+reason as before.
 
-1. **Concatenate**:
+## The layer in PyTorch is the equations in order
 
-   $$
-   H_{\text{concat}} = [Z^{(1)} \| Z^{(2)} \| \cdots \| Z^{(H)}]
-   $$
-
-2. **Project**:
-
-   $$
-   H_{\text{output}} = H_{\text{concat}} W_O
-   $$
-
-## Training Process
-
-### Gradient Descent Updates
-
-The attention weights are updated using:
-
-$$
-\begin{aligned}
-W_Q &\leftarrow W_Q - \eta \frac{\partial L}{\partial W_Q} \\
-W_K &\leftarrow W_K - \eta \frac{\partial L}{\partial W_K} \\
-W_V &\leftarrow W_V - \eta \frac{\partial L}{\partial W_K}
-\end{aligned}
-$$
-
-### Optimization Strategy
-
-- Use Adam optimizer for stable training
-- Apply gradient clipping to prevent exploding gradients
-- Implement learning rate warmup
-
-## Implementation Considerations
-
-When implementing attention mechanisms, consider:
-
-1. Memory efficiency
-2. Numerical stability
-3. Parallelization opportunities
-4. Attention masking for padding
-
-## Practical Example
+Everything above is a dozen lines. The projections, the reshape into heads, the scaled
+scores, the softmax, the weighted sum, and the output projection appear in that order:
 
 ```python
+import math
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-class SelfAttention(nn.Module):
-    def __init__(self, d_model, n_heads):
+
+class MultiHeadSelfAttention(nn.Module):
+    def __init__(self, d_model: int, n_heads: int):
         super().__init__()
-        self.d_model = d_model
-        self.n_heads = n_heads
-        self.d_k = d_model // n_heads
-
+        self.n_heads, self.d_k = n_heads, d_model // n_heads
         self.w_q = nn.Linear(d_model, d_model)
         self.w_k = nn.Linear(d_model, d_model)
         self.w_v = nn.Linear(d_model, d_model)
         self.w_o = nn.Linear(d_model, d_model)
 
-    def forward(self, x):
-        batch_size = x.size(0)
-
-        # Linear projections
-        q = self.w_q(x).view(batch_size, -1, self.n_heads, self.d_k)
-        k = self.w_k(x).view(batch_size, -1, self.n_heads, self.d_k)
-        v = self.w_v(x).view(batch_size, -1, self.n_heads, self.d_k)
-
-        # Transpose for attention computation
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
-
-        # Compute attention scores
-        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
-        attn = F.softmax(scores, dim=-1)
-
-        # Apply attention to values
-        out = torch.matmul(attn, v)
-
-        # Reshape and project
-        out = out.transpose(1, 2).contiguous()
-        out = out.view(batch_size, -1, self.d_model)
-        return self.w_o(out)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:          # x: (batch, n, d_model)
+        b, n, _ = x.shape
+        split = lambda t: t.view(b, n, self.n_heads, self.d_k).transpose(1, 2)  # (b, H, n, d_k)
+        q, k, v = split(self.w_q(x)), split(self.w_k(x)), split(self.w_v(x))
+        scores = q @ k.transpose(-2, -1) / math.sqrt(self.d_k)   # (b, H, n, n)
+        weights = F.softmax(scores, dim=-1)
+        z = weights @ v                                           # (b, H, n, d_k)
+        z = z.transpose(1, 2).contiguous().view(b, n, -1)         # (b, n, d_model)
+        return self.w_o(z)
 ```
 
+Training the weights $W_Q, W_K, W_V, W_O$ is ordinary
+gradient descent on whatever loss sits on top, and the two engineering notes worth
+knowing are that padding tokens are masked out of the softmax so they receive no
+weight, and that the $n \times n$ score matrix is the memory cost that limits sequence
+length.
+
+## Where it stops holding
+
+The picture of a query "looking up" a key is a useful fiction: the learned weights do
+not have to correspond to anything a linguist would name, and interpretability work
+finds heads that do and heads that do not. And the widget's random vectors show the
+scale argument only; in a trained model the scores are not Gaussian and the softmax is
+meant to be peaked where the training signal wants it. The divisor does not stop that.
+It stops it from happening before training has said anything.
+
 Attention. Weighs. Tokens. Against. Tokens. Heads. Read. Differently. Softmax. Does. The. Choosing.
+
+## References
+
+- Vaswani, A. et al. (2017). Attention is all you need. *NeurIPS 30*.
+  [arXiv:1706.03762](https://arxiv.org/abs/1706.03762)
+- Bahdanau, D., Cho, K. and Bengio, Y. (2015). Neural machine translation by jointly
+  learning to align and translate. *ICLR*.
+- Clark, K. et al. (2019). What does BERT look at? An analysis of BERT's attention.
+  *BlackboxNLP*.
+- [Embeddings](../embeddings/) on this blog, for where $X$ comes from.

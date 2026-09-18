@@ -8,8 +8,9 @@
 
 <meta name="author" content="Ravi Kalia">
 <meta name="dcterms.date" content="2025-01-31">
+<meta name="description" content="How a transformer decides which tokens matter to each other: the three matrices, the softmax that does the choosing, an interactive look at why the scores are divided by the square root of the width, and the layer in PyTorch.">
 
-<title>Understanding Attention: From Theory to Implementation – Synthetic Musings</title>
+<title>Attention Is a Softmax Over Dot Products, and the Divisor Keeps It Trainable – Synthetic Musings</title>
 <style>
 code{white-space: pre-wrap;}
 span.smallcaps{font-variant: small-caps;}
@@ -137,14 +138,14 @@ window.Quarto = {
 };
 </script>
 
-<meta property="og:title" content="Understanding Attention: From Theory to Implementation – Synthetic Musings">
-<meta property="og:description" content="Technical write-ups on machine learning, statistics, linear algebra, and the tooling around them, by Ravi Kalia.">
+<meta property="og:title" content="Attention Is a Softmax Over Dot Products, and the Divisor Keeps It Trainable – Synthetic Musings">
+<meta property="og:description" content="How a transformer decides which tokens matter to each other: the three matrices, the softmax that does the choosing, an interactive look at why the scores are divided by the square root of the width, and the layer in PyTorch.">
 <meta property="og:image" content="https://project-delphi.github.io/ml-blog/posts/attention/cover.png">
 <meta property="og:site_name" content="Synthetic Musings">
 <meta property="og:image:height" content="630">
 <meta property="og:image:width" content="1200">
-<meta name="twitter:title" content="Understanding Attention: From Theory to Implementation – Synthetic Musings">
-<meta name="twitter:description" content="Technical write-ups on machine learning, statistics, linear algebra, and the tooling around them, by Ravi Kalia.">
+<meta name="twitter:title" content="Attention Is a Softmax Over Dot Products, and the Divisor Keeps It Trainable – Synthetic Musings">
+<meta name="twitter:description" content="How a transformer decides which tokens matter to each other: the three matrices, the softmax that does the choosing, an interactive look at why the scores are divided by the square root of the width, and the layer in PyTorch.">
 <meta name="twitter:image" content="https://project-delphi.github.io/ml-blog/posts/attention/cover.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image-height" content="630">
@@ -210,8 +211,13 @@ window.Quarto = {
 <header id="title-block-header" class="quarto-title-block default page-columns page-full">
   <div class="quarto-title-banner page-columns page-full">
     <div class="quarto-title column-body">
-      <h1 class="title">Understanding Attention: From Theory to Implementation</h1>
-                                <div class="quarto-categories">
+      <h1 class="title">Attention Is a Softmax Over Dot Products, and the Divisor Keeps It Trainable</h1>
+                  <div>
+        <div class="description">
+          How a transformer decides which tokens matter to each other: the three matrices, the softmax that does the choosing, an interactive look at why the scores are divided by the square root of the width, and the layer in PyTorch.
+        </div>
+      </div>
+                          <div class="quarto-categories">
                 <div class="quarto-category">Deep Learning</div>
                 <div class="quarto-category">NLP</div>
               </div>
@@ -247,34 +253,13 @@ window.Quarto = {
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#overview" id="toc-overview" class="nav-link active" data-scroll-target="#overview">Overview</a></li>
-  <li><a href="#key-concepts" id="toc-key-concepts" class="nav-link" data-scroll-target="#key-concepts"><span class="header-section-number">1</span> Key Concepts</a></li>
-  <li><a href="#data-preprocessing" id="toc-data-preprocessing" class="nav-link" data-scroll-target="#data-preprocessing"><span class="header-section-number">2</span> Data Preprocessing</a>
-  <ul class="collapse">
-  <li><a href="#from-text-to-vectors" id="toc-from-text-to-vectors" class="nav-link" data-scroll-target="#from-text-to-vectors"><span class="header-section-number">2.1</span> From Text to Vectors</a></li>
-  <li><a href="#tokenization-process" id="toc-tokenization-process" class="nav-link" data-scroll-target="#tokenization-process"><span class="header-section-number">2.2</span> Tokenization Process</a></li>
-  <li><a href="#embedding-layer" id="toc-embedding-layer" class="nav-link" data-scroll-target="#embedding-layer"><span class="header-section-number">2.3</span> Embedding Layer</a></li>
-  <li><a href="#positional-encoding" id="toc-positional-encoding" class="nav-link" data-scroll-target="#positional-encoding"><span class="header-section-number">2.4</span> Positional Encoding</a></li>
-  </ul></li>
-  <li><a href="#self-attention-mechanism" id="toc-self-attention-mechanism" class="nav-link" data-scroll-target="#self-attention-mechanism"><span class="header-section-number">3</span> Self-Attention Mechanism</a>
-  <ul class="collapse">
-  <li><a href="#query-key-and-value-transformations" id="toc-query-key-and-value-transformations" class="nav-link" data-scroll-target="#query-key-and-value-transformations"><span class="header-section-number">3.1</span> Query, Key, and Value Transformations</a></li>
-  <li><a href="#attention-computation" id="toc-attention-computation" class="nav-link" data-scroll-target="#attention-computation"><span class="header-section-number">3.2</span> Attention Computation</a></li>
-  <li><a href="#why-the-scores-are-divided-by-sqrtd" id="toc-why-the-scores-are-divided-by-sqrtd" class="nav-link" data-scroll-target="#why-the-scores-are-divided-by-sqrtd"><span class="header-section-number">3.3</span> Why the scores are divided by <span class="math inline">\(\sqrt{d}\)</span></a></li>
-  </ul></li>
-  <li><a href="#multi-head-attention" id="toc-multi-head-attention" class="nav-link" data-scroll-target="#multi-head-attention"><span class="header-section-number">4</span> Multi-Head Attention</a>
-  <ul class="collapse">
-  <li><a href="#parallel-attention-heads" id="toc-parallel-attention-heads" class="nav-link" data-scroll-target="#parallel-attention-heads"><span class="header-section-number">4.1</span> Parallel Attention Heads</a></li>
-  <li><a href="#head-outputs" id="toc-head-outputs" class="nav-link" data-scroll-target="#head-outputs"><span class="header-section-number">4.2</span> Head Outputs</a></li>
-  <li><a href="#combining-head-outputs" id="toc-combining-head-outputs" class="nav-link" data-scroll-target="#combining-head-outputs"><span class="header-section-number">4.3</span> Combining Head Outputs</a></li>
-  </ul></li>
-  <li><a href="#training-process" id="toc-training-process" class="nav-link" data-scroll-target="#training-process"><span class="header-section-number">5</span> Training Process</a>
-  <ul class="collapse">
-  <li><a href="#gradient-descent-updates" id="toc-gradient-descent-updates" class="nav-link" data-scroll-target="#gradient-descent-updates"><span class="header-section-number">5.1</span> Gradient Descent Updates</a></li>
-  <li><a href="#optimization-strategy" id="toc-optimization-strategy" class="nav-link" data-scroll-target="#optimization-strategy"><span class="header-section-number">5.2</span> Optimization Strategy</a></li>
-  </ul></li>
-  <li><a href="#implementation-considerations" id="toc-implementation-considerations" class="nav-link" data-scroll-target="#implementation-considerations"><span class="header-section-number">6</span> Implementation Considerations</a></li>
-  <li><a href="#practical-example" id="toc-practical-example" class="nav-link" data-scroll-target="#practical-example"><span class="header-section-number">7</span> Practical Example</a></li>
+  <li><a href="#a-sentence-becomes-a-matrix-before-attention-sees-it" id="toc-a-sentence-becomes-a-matrix-before-attention-sees-it" class="nav-link active" data-scroll-target="#a-sentence-becomes-a-matrix-before-attention-sees-it">A sentence becomes a matrix before attention sees it</a></li>
+  <li><a href="#query-key-value-one-input-three-roles" id="toc-query-key-value-one-input-three-roles" class="nav-link" data-scroll-target="#query-key-value-one-input-three-roles">Query, key, value: one input, three roles</a></li>
+  <li><a href="#why-the-scores-are-divided-by-sqrtd" id="toc-why-the-scores-are-divided-by-sqrtd" class="nav-link" data-scroll-target="#why-the-scores-are-divided-by-sqrtd">Why the scores are divided by <span class="math inline">\(\sqrt{d}\)</span></a></li>
+  <li><a href="#several-heads-read-the-sentence-differently" id="toc-several-heads-read-the-sentence-differently" class="nav-link" data-scroll-target="#several-heads-read-the-sentence-differently">Several heads read the sentence differently</a></li>
+  <li><a href="#the-layer-in-pytorch-is-the-equations-in-order" id="toc-the-layer-in-pytorch-is-the-equations-in-order" class="nav-link" data-scroll-target="#the-layer-in-pytorch-is-the-equations-in-order">The layer in PyTorch is the equations in order</a></li>
+  <li><a href="#where-it-stops-holding" id="toc-where-it-stops-holding" class="nav-link" data-scroll-target="#where-it-stops-holding">Where it stops holding</a></li>
+  <li><a href="#references" id="toc-references" class="nav-link" data-scroll-target="#references">References</a></li>
   </ul>
 <div class="toc-actions"><ul><li><a href="https://github.com/project-delphi/ml-blog/edit/main/posts/attention/index.qmd" class="toc-action"><i class="bi bi-github"></i>Edit this page</a></li></ul></div></nav>
     </div>
@@ -291,230 +276,90 @@ window.Quarto = {
 <figcaption>Attention</figcaption>
 </figure>
 </div>
-<p style="text-align: center;">
-<em>Made with <span style="color: red;">❤️</span> and <a href="https://github.com/features/copilot" target="_blank">GitHub Copilot</a></em> <br> <img src="https://github.githubassets.com/images/icons/emoji/octocat.png" alt="GitHub Copilot Logo" width="50">
-</p>
-<p>Attention is the mechanism that lets a transformer decide which words in a sentence matter to each other. The maths comes first, then a working PyTorch layer.</p>
-<section id="overview" class="level2 unnumbered">
-<h2 class="unnumbered anchored" data-anchor-id="overview">Overview</h2>
-<p>An attention layer scores every token against every other token, then mixes their values in proportion to those scores. One sequence runs the whole way: raw text, tokens, embeddings, positional encoding, single-head attention, and multi-head attention in PyTorch.</p>
-</section>
-<section id="key-concepts" class="level2" data-number="1">
-<h2 data-number="1" class="anchored" data-anchor-id="key-concepts"><span class="header-section-number">1</span> Key Concepts</h2>
-<p>Before diving into the mathematics, let’s establish our key concepts:</p>
-<ul>
-<li><strong>Attention</strong>: A mechanism allowing models to focus on relevant parts of input data</li>
-<li><strong>Self-Attention</strong>: A specific form where each element in a sequence attends to all others</li>
-<li><strong>Multi-Head Attention</strong>: Multiple parallel attention mechanisms working together</li>
-<li><strong>Positional Encoding</strong>: Method to incorporate sequential information</li>
-</ul>
-</section>
-<section id="data-preprocessing" class="level2" data-number="2">
-<h2 data-number="2" class="anchored" data-anchor-id="data-preprocessing"><span class="header-section-number">2</span> Data Preprocessing</h2>
-<section id="from-text-to-vectors" class="level3" data-number="2.1">
-<h3 data-number="2.1" class="anchored" data-anchor-id="from-text-to-vectors"><span class="header-section-number">2.1</span> From Text to Vectors</h3>
-<p>The transformation of text into numerical representations involves several steps:</p>
-<ol type="1">
-<li><strong>Tokenization</strong>: Convert text into token IDs</li>
-<li><strong>Embedding</strong>: Map tokens to dense vectors</li>
-<li><strong>Position Encoding</strong>: Add sequential information</li>
-</ol>
-</section>
-<section id="tokenization-process" class="level3" data-number="2.2">
-<h3 data-number="2.2" class="anchored" data-anchor-id="tokenization-process"><span class="header-section-number">2.2</span> Tokenization Process</h3>
-<p>Given an input sentence:</p>
-<pre class="text"><code>"The cat sat on the mat"</code></pre>
-<p>We convert it to token IDs using subword tokenization:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>tokens <span class="op">=</span> [<span class="dv">101</span>, <span class="dv">2023</span>, <span class="dv">3679</span>, <span class="dv">2003</span>, <span class="dv">2307</span>, <span class="dv">102</span>]  <span class="co"># Example IDs</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-</section>
-<section id="embedding-layer" class="level3" data-number="2.3">
-<h3 data-number="2.3" class="anchored" data-anchor-id="embedding-layer"><span class="header-section-number">2.3</span> Embedding Layer</h3>
-<p>The embedding process transforms discrete tokens into continuous vectors:</p>
+<p>Read the sentence “the cat sat on the mat because it was tired” and you resolve “it” to the cat without noticing. A transformer has to do that resolution explicitly, for every token against every other, and attention is the mechanism that does it: score each pair of tokens, turn the scores into weights with a softmax, and mix the tokens’ values in proportion. This post builds the mechanism from the input matrix up, uses an interactive grid to show why one small constant in the formula is the difference between a layer that trains and one that does not, and ends with the layer in PyTorch.</p>
+<section id="a-sentence-becomes-a-matrix-before-attention-sees-it" class="level2">
+<h2 class="anchored" data-anchor-id="a-sentence-becomes-a-matrix-before-attention-sees-it">A sentence becomes a matrix before attention sees it</h2>
+<p>Attention operates on vectors, so the first job is to make some. The sentence is split into tokens by a subword tokenizer, each token id indexes a row of an embedding table <span class="math inline">\(E \in \mathbb{R}^{V \times d}\)</span> (<span class="math inline">\(V\)</span> vocabulary entries, <span class="math inline">\(d\)</span> dimensions), and the rows for the sentence are stacked into <span class="math inline">\(X \in \mathbb{R}^{n \times d}\)</span>, one row per token. Nothing in that matrix says which token came first, and attention itself is order-blind, so a positional encoding is added: sinusoids of different frequencies,</p>
 <p><span class="math display">\[
-E \in \mathbb{R}^{V \times d}
+P_{i,2j} = \sin\!\left(\frac{i}{10000^{2j/d}}\right), \qquad
+P_{i,2j+1} = \cos\!\left(\frac{i}{10000^{2j/d}}\right),
 \]</span></p>
-<p>where:</p>
-<ul>
-<li><span class="math inline">\(V\)</span> = vocabulary size</li>
-<li><span class="math inline">\(d\)</span> = embedding dimension</li>
-</ul>
-<p>For each token <span class="math inline">\(t_i\)</span>, we compute:</p>
-<p><span class="math display">\[
-x_i = E[t_i] \in \mathbb{R}^d
-\]</span></p>
-<p>Resulting in input matrix:</p>
-<p><span class="math display">\[
-X = \begin{bmatrix}
-x_1 \\
-x_2 \\
-\vdots \\
-x_n
-\end{bmatrix} \in \mathbb{R}^{n \times d}
-\]</span></p>
+<p>and the input to the first layer is <span class="math inline">\(X + P\)</span>. Everything after this point is linear algebra on that matrix.</p>
 </section>
-<section id="positional-encoding" class="level3" data-number="2.4">
-<h3 data-number="2.4" class="anchored" data-anchor-id="positional-encoding"><span class="header-section-number">2.4</span> Positional Encoding</h3>
-<p>To preserve sequence order, we add positional encodings:</p>
+<section id="query-key-value-one-input-three-roles" class="level2">
+<h2 class="anchored" data-anchor-id="query-key-value-one-input-three-roles">Query, key, value: one input, three roles</h2>
+<p>Each token plays three parts. As a <strong>query</strong> it asks what it needs from the rest of the sentence; as a <strong>key</strong> it advertises what it has; as a <strong>value</strong> it is the content handed over when chosen. Three learned matrices produce the three views of the same input:</p>
 <p><span class="math display">\[
-\begin{aligned}
-P_{i,2j} &amp;= \sin\left(\frac{i}{10000^{2j/d}}\right) \\
-P_{i,2j+1} &amp;= \cos\left(\frac{i}{10000^{2j/d}}\right)
-\end{aligned}
+Q = X W_Q, \qquad K = X W_K, \qquad V = X W_V, \qquad W_Q, W_K, W_V \in \mathbb{R}^{d \times d}.
 \]</span></p>
-<p>Final input representation:</p>
+<p>The scores are every query against every key, a single matrix product, and the softmax turns each row of scores into weights that sum to one; the output for a token is those weights applied to the values:</p>
 <p><span class="math display">\[
-X_{\text{final}} = X + P
+S = \frac{Q K^\mathsf{T}}{\sqrt{d}}, \qquad A = \operatorname{softmax}(S), \qquad Z = A V.
 \]</span></p>
+<p>Row <span class="math inline">\(i\)</span> of <span class="math inline">\(A\)</span> is token <span class="math inline">\(i\)</span>’s attention: how much of each other token it reads. The softmax is what makes it a choice rather than a blur, and the <span class="math inline">\(\sqrt{d}\)</span> under the scores is what keeps the choice from becoming a fixed one.</p>
 </section>
-</section>
-<section id="self-attention-mechanism" class="level2" data-number="3">
-<h2 data-number="3" class="anchored" data-anchor-id="self-attention-mechanism"><span class="header-section-number">3</span> Self-Attention Mechanism</h2>
-<section id="query-key-and-value-transformations" class="level3" data-number="3.1">
-<h3 data-number="3.1" class="anchored" data-anchor-id="query-key-and-value-transformations"><span class="header-section-number">3.1</span> Query, Key, and Value Transformations</h3>
-<p>Self-attention begins by creating three matrices from the input:</p>
-<p><span class="math display">\[
-\begin{aligned}
-Q &amp;= X W_Q \\
-K &amp;= X W_K \\
-V &amp;= X W_V
-\end{aligned}
-\]</span></p>
-<p>where <span class="math inline">\(W_Q, W_K, W_V \in \mathbb{R}^{d \times d}\)</span> are learnable parameters.</p>
-</section>
-<section id="attention-computation" class="level3" data-number="3.2">
-<h3 data-number="3.2" class="anchored" data-anchor-id="attention-computation"><span class="header-section-number">3.2</span> Attention Computation</h3>
-<ol type="1">
-<li><p><strong>Compute Attention Scores</strong>:</p>
-<p><span class="math display">\[
-S = \frac{Q K^T}{\sqrt{d}}
-\]</span></p></li>
-<li><p><strong>Apply Softmax</strong>:</p>
-<p><span class="math display">\[
-A = \text{softmax}(S)
-\]</span></p></li>
-<li><p><strong>Compute Weighted Values</strong>:</p>
-<p><span class="math display">\[
-Z = A V
-\]</span></p></li>
-</ol>
-</section>
-<section id="why-the-scores-are-divided-by-sqrtd" class="level3" data-number="3.3">
-<h3 data-number="3.3" class="anchored" data-anchor-id="why-the-scores-are-divided-by-sqrtd"><span class="header-section-number">3.3</span> Why the scores are divided by <span class="math inline">\(\sqrt{d}\)</span></h3>
+<section id="why-the-scores-are-divided-by-sqrtd" class="level2">
+<h2 class="anchored" data-anchor-id="why-the-scores-are-divided-by-sqrtd">Why the scores are divided by <span class="math inline">\(\sqrt{d}\)</span></h2>
 <p>A dot product of two <span class="math inline">\(d\)</span>-dimensional vectors with unit-variance entries has variance <span class="math inline">\(d\)</span>, so the raw scores grow with the embedding width, and the softmax of large scores is nearly one-hot. Dividing by <span class="math inline">\(\sqrt{d}\)</span> holds the score variance at one whatever <span class="math inline">\(d\)</span> is. The grid shows the softmax weights of six tokens attending to each other, with random query and key vectors standing in for <span class="math inline">\(XW_Q\)</span> and <span class="math inline">\(XW_K\)</span>; each row is one query, and the two stats average over the six rows, since any single row can be close by chance. With the divisor on, step <span class="math inline">\(d\)</span> from 4 up to 256: the largest raw score climbs from about 4 to about 32, yet the average largest weight stays near 0.4 and the average entropy above 2.1 bits at every width. Now switch the divisor to nothing and step <span class="math inline">\(d\)</span> again: the average largest weight climbs 0.57, 0.86, 0.91, 1.00, and at <span class="math inline">\(d = 256\)</span> the entropy is 0.02 bits, so one key takes nearly everything in every row and the gradient through the softmax vanishes. The divisor is what keeps attention trainable at the widths real models use.</p>
 <div id="widget-attention">
 
 </div>
 <script src="widgets.js"></script>
 </section>
-</section>
-<section id="multi-head-attention" class="level2" data-number="4">
-<h2 data-number="4" class="anchored" data-anchor-id="multi-head-attention"><span class="header-section-number">4</span> Multi-Head Attention</h2>
-<section id="parallel-attention-heads" class="level3" data-number="4.1">
-<h3 data-number="4.1" class="anchored" data-anchor-id="parallel-attention-heads"><span class="header-section-number">4.1</span> Parallel Attention Heads</h3>
-<p>For <span class="math inline">\(h\)</span> heads, we compute:</p>
+<section id="several-heads-read-the-sentence-differently" class="level2">
+<h2 class="anchored" data-anchor-id="several-heads-read-the-sentence-differently">Several heads read the sentence differently</h2>
+<p>One attention pattern per layer is one way of reading the sentence. Multi-head attention runs <span class="math inline">\(H\)</span> of them in parallel, each with its own <span class="math inline">\(W_Q^{(h)}, W_K^{(h)},
+W_V^{(h)}\)</span> of width <span class="math inline">\(d_k = d / H\)</span>, so that one head can track syntax while another tracks coreference and a third tracks position:</p>
 <p><span class="math display">\[
-\begin{aligned}
-Q^{(h)} &amp;= X W_Q^{(h)} \\
-K^{(h)} &amp;= X W_K^{(h)} \\
-V^{(h)} &amp;= X W_V^{(h)}
-\end{aligned}
+Z^{(h)} = \operatorname{softmax}\!\left(\frac{Q^{(h)} K^{(h)\mathsf{T}}}{\sqrt{d_k}}\right) V^{(h)},
+\qquad
+Z = \left[ Z^{(1)} \,\|\, \cdots \,\|\, Z^{(H)} \right] W_O.
 \]</span></p>
+<p>The heads’ outputs are concatenated back to width <span class="math inline">\(d\)</span> and mixed by one more learned matrix <span class="math inline">\(W_O\)</span>. The divisor is now <span class="math inline">\(\sqrt{d_k}\)</span>, the per-head width, for the same reason as before.</p>
 </section>
-<section id="head-outputs" class="level3" data-number="4.2">
-<h3 data-number="4.2" class="anchored" data-anchor-id="head-outputs"><span class="header-section-number">4.2</span> Head Outputs</h3>
-<p>Each head produces its output:</p>
-<p><span class="math display">\[
-Z^{(h)} = \text{softmax} \left( \frac{Q^{(h)} (K^{(h)})^T}{\sqrt{d_k}} \right) V^{(h)}
-\]</span></p>
+<section id="the-layer-in-pytorch-is-the-equations-in-order" class="level2">
+<h2 class="anchored" data-anchor-id="the-layer-in-pytorch-is-the-equations-in-order">The layer in PyTorch is the equations in order</h2>
+<p>Everything above is a dozen lines. The projections, the reshape into heads, the scaled scores, the softmax, the weighted sum, and the output projection appear in that order:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> math</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> torch</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> torch.nn <span class="im">as</span> nn</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> torch.nn.functional <span class="im">as</span> F</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> MultiHeadSelfAttention(nn.Module):</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, d_model: <span class="bu">int</span>, n_heads: <span class="bu">int</span>):</span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>        <span class="bu">super</span>().<span class="fu">__init__</span>()</span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.n_heads, <span class="va">self</span>.d_k <span class="op">=</span> n_heads, d_model <span class="op">//</span> n_heads</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.w_q <span class="op">=</span> nn.Linear(d_model, d_model)</span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.w_k <span class="op">=</span> nn.Linear(d_model, d_model)</span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.w_v <span class="op">=</span> nn.Linear(d_model, d_model)</span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.w_o <span class="op">=</span> nn.Linear(d_model, d_model)</span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> forward(<span class="va">self</span>, x: torch.Tensor) <span class="op">-&gt;</span> torch.Tensor:          <span class="co"># x: (batch, n, d_model)</span></span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>        b, n, _ <span class="op">=</span> x.shape</span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>        split <span class="op">=</span> <span class="kw">lambda</span> t: t.view(b, n, <span class="va">self</span>.n_heads, <span class="va">self</span>.d_k).transpose(<span class="dv">1</span>, <span class="dv">2</span>)  <span class="co"># (b, H, n, d_k)</span></span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>        q, k, v <span class="op">=</span> split(<span class="va">self</span>.w_q(x)), split(<span class="va">self</span>.w_k(x)), split(<span class="va">self</span>.w_v(x))</span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>        scores <span class="op">=</span> q <span class="op">@</span> k.transpose(<span class="op">-</span><span class="dv">2</span>, <span class="op">-</span><span class="dv">1</span>) <span class="op">/</span> math.sqrt(<span class="va">self</span>.d_k)   <span class="co"># (b, H, n, n)</span></span>
+<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a>        weights <span class="op">=</span> F.softmax(scores, dim<span class="op">=-</span><span class="dv">1</span>)</span>
+<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>        z <span class="op">=</span> weights <span class="op">@</span> v                                           <span class="co"># (b, H, n, d_k)</span></span>
+<span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a>        z <span class="op">=</span> z.transpose(<span class="dv">1</span>, <span class="dv">2</span>).contiguous().view(b, n, <span class="op">-</span><span class="dv">1</span>)         <span class="co"># (b, n, d_model)</span></span>
+<span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="va">self</span>.w_o(z)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>Training the weights <span class="math inline">\(W_Q, W_K, W_V, W_O\)</span> is ordinary gradient descent on whatever loss sits on top, and the two engineering notes worth knowing are that padding tokens are masked out of the softmax so they receive no weight, and that the <span class="math inline">\(n \times n\)</span> score matrix is the memory cost that limits sequence length.</p>
 </section>
-<section id="combining-head-outputs" class="level3" data-number="4.3">
-<h3 data-number="4.3" class="anchored" data-anchor-id="combining-head-outputs"><span class="header-section-number">4.3</span> Combining Head Outputs</h3>
-<ol type="1">
-<li><p><strong>Concatenate</strong>:</p>
-<p><span class="math display">\[
-H_{\text{concat}} = [Z^{(1)} \| Z^{(2)} \| \cdots \| Z^{(H)}]
-\]</span></p></li>
-<li><p><strong>Project</strong>:</p>
-<p><span class="math display">\[
-H_{\text{output}} = H_{\text{concat}} W_O
-\]</span></p></li>
-</ol>
-</section>
-</section>
-<section id="training-process" class="level2" data-number="5">
-<h2 data-number="5" class="anchored" data-anchor-id="training-process"><span class="header-section-number">5</span> Training Process</h2>
-<section id="gradient-descent-updates" class="level3" data-number="5.1">
-<h3 data-number="5.1" class="anchored" data-anchor-id="gradient-descent-updates"><span class="header-section-number">5.1</span> Gradient Descent Updates</h3>
-<p>The attention weights are updated using:</p>
-<p><span class="math display">\[
-\begin{aligned}
-W_Q &amp;\leftarrow W_Q - \eta \frac{\partial L}{\partial W_Q} \\
-W_K &amp;\leftarrow W_K - \eta \frac{\partial L}{\partial W_K} \\
-W_V &amp;\leftarrow W_V - \eta \frac{\partial L}{\partial W_K}
-\end{aligned}
-\]</span></p>
-</section>
-<section id="optimization-strategy" class="level3" data-number="5.2">
-<h3 data-number="5.2" class="anchored" data-anchor-id="optimization-strategy"><span class="header-section-number">5.2</span> Optimization Strategy</h3>
-<ul>
-<li>Use Adam optimizer for stable training</li>
-<li>Apply gradient clipping to prevent exploding gradients</li>
-<li>Implement learning rate warmup</li>
-</ul>
-</section>
-</section>
-<section id="implementation-considerations" class="level2" data-number="6">
-<h2 data-number="6" class="anchored" data-anchor-id="implementation-considerations"><span class="header-section-number">6</span> Implementation Considerations</h2>
-<p>When implementing attention mechanisms, consider:</p>
-<ol type="1">
-<li>Memory efficiency</li>
-<li>Numerical stability</li>
-<li>Parallelization opportunities</li>
-<li>Attention masking for padding</li>
-</ol>
-</section>
-<section id="practical-example" class="level2" data-number="7">
-<h2 data-number="7" class="anchored" data-anchor-id="practical-example"><span class="header-section-number">7</span> Practical Example</h2>
-<div class="sourceCode" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> torch</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> torch.nn <span class="im">as</span> nn</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> SelfAttention(nn.Module):</span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> <span class="fu">__init__</span>(<span class="va">self</span>, d_model, n_heads):</span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>        <span class="bu">super</span>().<span class="fu">__init__</span>()</span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.d_model <span class="op">=</span> d_model</span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.n_heads <span class="op">=</span> n_heads</span>
-<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.d_k <span class="op">=</span> d_model <span class="op">//</span> n_heads</span>
-<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.w_q <span class="op">=</span> nn.Linear(d_model, d_model)</span>
-<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.w_k <span class="op">=</span> nn.Linear(d_model, d_model)</span>
-<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.w_v <span class="op">=</span> nn.Linear(d_model, d_model)</span>
-<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>.w_o <span class="op">=</span> nn.Linear(d_model, d_model)</span>
-<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> forward(<span class="va">self</span>, x):</span>
-<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>        batch_size <span class="op">=</span> x.size(<span class="dv">0</span>)</span>
-<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Linear projections</span></span>
-<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>        q <span class="op">=</span> <span class="va">self</span>.w_q(x).view(batch_size, <span class="op">-</span><span class="dv">1</span>, <span class="va">self</span>.n_heads, <span class="va">self</span>.d_k)</span>
-<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>        k <span class="op">=</span> <span class="va">self</span>.w_k(x).view(batch_size, <span class="op">-</span><span class="dv">1</span>, <span class="va">self</span>.n_heads, <span class="va">self</span>.d_k)</span>
-<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>        v <span class="op">=</span> <span class="va">self</span>.w_v(x).view(batch_size, <span class="op">-</span><span class="dv">1</span>, <span class="va">self</span>.n_heads, <span class="va">self</span>.d_k)</span>
-<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Transpose for attention computation</span></span>
-<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>        q <span class="op">=</span> q.transpose(<span class="dv">1</span>, <span class="dv">2</span>)</span>
-<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>        k <span class="op">=</span> k.transpose(<span class="dv">1</span>, <span class="dv">2</span>)</span>
-<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>        v <span class="op">=</span> v.transpose(<span class="dv">1</span>, <span class="dv">2</span>)</span>
-<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Compute attention scores</span></span>
-<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>        scores <span class="op">=</span> torch.matmul(q, k.transpose(<span class="op">-</span><span class="dv">2</span>, <span class="op">-</span><span class="dv">1</span>)) <span class="op">/</span> math.sqrt(<span class="va">self</span>.d_k)</span>
-<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>        attn <span class="op">=</span> F.softmax(scores, dim<span class="op">=-</span><span class="dv">1</span>)</span>
-<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Apply attention to values</span></span>
-<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a>        out <span class="op">=</span> torch.matmul(attn, v)</span>
-<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-36"><a href="#cb3-36" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Reshape and project</span></span>
-<span id="cb3-37"><a href="#cb3-37" aria-hidden="true" tabindex="-1"></a>        out <span class="op">=</span> out.transpose(<span class="dv">1</span>, <span class="dv">2</span>).contiguous()</span>
-<span id="cb3-38"><a href="#cb3-38" aria-hidden="true" tabindex="-1"></a>        out <span class="op">=</span> out.view(batch_size, <span class="op">-</span><span class="dv">1</span>, <span class="va">self</span>.d_model)</span>
-<span id="cb3-39"><a href="#cb3-39" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="va">self</span>.w_o(out)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<section id="where-it-stops-holding" class="level2">
+<h2 class="anchored" data-anchor-id="where-it-stops-holding">Where it stops holding</h2>
+<p>The picture of a query “looking up” a key is a useful fiction: the learned weights do not have to correspond to anything a linguist would name, and interpretability work finds heads that do and heads that do not. And the widget’s random vectors show the scale argument only; in a trained model the scores are not Gaussian and the softmax is meant to be peaked where the training signal wants it. The divisor does not stop that. It stops it from happening before training has said anything.</p>
 <p>Attention. Weighs. Tokens. Against. Tokens. Heads. Read. Differently. Softmax. Does. The. Choosing.</p>
+</section>
+<section id="references" class="level2">
+<h2 class="anchored" data-anchor-id="references">References</h2>
+<ul>
+<li>Vaswani, A. et al.&nbsp;(2017). Attention is all you need. <em>NeurIPS 30</em>. <a href="https://arxiv.org/abs/1706.03762">arXiv:1706.03762</a></li>
+<li>Bahdanau, D., Cho, K. and Bengio, Y. (2015). Neural machine translation by jointly learning to align and translate. <em>ICLR</em>.</li>
+<li>Clark, K. et al.&nbsp;(2019). What does BERT look at? An analysis of BERT’s attention. <em>BlackboxNLP</em>.</li>
+<li><a href="../embeddings/">Embeddings</a> on this blog, for where <span class="math inline">\(X\)</span> comes from.</li>
+</ul>
 
 
 </section>

@@ -36,7 +36,7 @@ kernels-stub: install
 	          tda-svm-blog tribes-blog huggingface-blog huggingface-t4-blog \
 	          llm-agents llm-agent-memory recursive-inversion matrix-blog eigen-blog \
 	          authorship-blog kendall-blog kite-blog jackknife-blog svd-blog \
-	          volcano-blog signature-blog tensor-blog mfc-blog \
+	          volcano-blog signature-blog tensor-blog mfc-blog clustering-blog \
 	          neutrophil-axis-blog gapdh-net-blog pca-blog ppca-blog \
 	          efferocytosis-blog efferocytosis-guide-blog \
 	          blog-base; do \
