@@ -10,7 +10,316 @@
 <atom:link href="https://project-delphi.github.io/ml-blog/index.xml" rel="self" type="application/rss+xml"/>
 <description>Technical write-ups on machine learning, statistics, linear algebra, and the tooling around them, by Ravi Kalia.</description>
 <generator>quarto-1.6.40</generator>
-<lastBuildDate>Thu, 17 Sep 2026 05:00:00 GMT</lastBuildDate>
+<lastBuildDate>Sat, 19 Sep 2026 05:00:00 GMT</lastBuildDate>
+<item>
+  <title>Scaling Workflows with Claude Subagents</title>
+  <dc:creator>Ravi Kalia</dc:creator>
+  <link>https://project-delphi.github.io/ml-blog/posts/claude-subagents/</link>
+  <description><![CDATA[ 
+
+
+
+
+
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="https://project-delphi.github.io/ml-blog/posts/claude-subagents/cover.png" class="img-fluid figure-img"></p>
+<figcaption>Scaling Workflows with Claude Subagents</figcaption>
+</figure>
+</div>
+<p>The monolithic agent is dead. As AI agent frameworks evolve, the architectural standard is shifting toward multi-agent orchestration. By breaking down complex workflows and fanning them out to specialized Claude subagents, we can drastically improve performance on discrete tasks.</p>
+<p>Here is what a typical fan-out architecture looks like when delegating domain-specific workloads:</p>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div>
+<p></p><figure class="figure"><p></p>
+<div>
+<pre class="mermaid mermaid-js">graph TD
+    Router[Orchestrator / Main Agent]
+
+    Router --&gt;|Backend Logic| Py[python-scripter]
+    Router --&gt;|UI Components| UI[front-end-specialist]
+    Router --&gt;|ETL Pipelines| DE[data-engineer]
+</pre>
+</div>
+<p></p></figure><p></p>
+</div>
+</div>
+</div>
+<section id="the-cost-overhead-tradeoff" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="the-cost-overhead-tradeoff"><span class="header-section-number">1</span> The Cost-Overhead Tradeoff</h2>
+<p>Using subagents introduces a fascinating economic tradeoff.</p>
+<p>The Cost Reduction: By modularizing the work, you match the model to the task complexity. You do not need claude-3-5-sonnet to perform basic text formatting or simple SQL query generation; you can route those to claude-3-haiku. Mixing models significantly lowers the blended cost per 1,000 tokens.</p>
+<p>The Token Penalty: Fanning out increases your absolute token usage. Every time the orchestrator passes a task to a subagent, it must inject the necessary context into the subagent’s prompt. When the subagent replies, the orchestrator reads that response to synthesize the final output. This communication overhead can balloon your context window if data payloads are not strictly managed.</p>
+</section>
+<section id="configuring-the-swarm" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="configuring-the-swarm"><span class="header-section-number">2</span> Configuring the Swarm</h2>
+<p>The power of subagents lies in the configuration. Below is a YAML configuration defining these roles. The model choice maps to the required reasoning depth, while system_prompt enforces the exact constraints needed for the hand-off.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+Note
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>This original configuration is historical. Anthropic has <a href="https://platform.claude.com/docs/en/about-claude/model-deprecations">retired Sonnet 3.5 and Haiku 3</a>; the runnable <a href="./agents.yaml">agents.yaml</a> uses Sonnet 4.6 and Haiku 4.5. Its <code>tools</code> entry is omitted because the example generates text and does not execute tools.</p>
+</div>
+</div>
+<div class="sourceCode" id="cb1" style="background: #f1f3f5;"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb1-1"><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">agents</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">:</span></span>
+<span id="cb1-2"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">  </span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">-</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> </span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">name</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">:</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> python-scripter</span></span>
+<span id="cb1-3"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">model</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">:</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> claude-3-5-sonnet-latest</span></span>
+<span id="cb1-4"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">temperature</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">:</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> </span><span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0.1</span></span>
+<span id="cb1-5"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">system_prompt</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">:</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> </span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"You are a Python backend specialist. Output only valid PEP-8 Python code. Do not provide markdown explanations."</span></span>
+<span id="cb1-6"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">tools</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">:</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> </span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">[</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">bash_terminal</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">,</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> code_linter</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">]</span></span>
+<span id="cb1-7"></span>
+<span id="cb1-8"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">  </span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">-</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> </span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">name</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">:</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> data-engineer</span></span>
+<span id="cb1-9"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">model</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">:</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> claude-3-haiku-20240307</span></span>
+<span id="cb1-10"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">temperature</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">:</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> </span><span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0.0</span></span>
+<span id="cb1-11"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">system_prompt</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">:</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> </span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"You are a data engineer. Write optimized SQL and Pandas transformations."</span></span>
+<span id="cb1-12"></span>
+<span id="cb1-13"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">  </span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">-</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> </span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">name</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">:</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> front-end-specialist</span></span>
+<span id="cb1-14"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">model</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">:</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> claude-3-5-sonnet-latest</span></span>
+<span id="cb1-15"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">temperature</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">:</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> </span><span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0.4</span></span>
+<span id="cb1-16"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">system_prompt</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">:</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> </span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"You build accessible React components using Tailwind CSS."</span></span></code></pre></div>
+<p>By explicitly defining these fields, you ensure weaker, faster models handle lightweight pipeline steps, preserving your compute budget for heavy architectural lifting.</p>
+</section>
+<section id="running-the-router" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="running-the-router"><span class="header-section-number">3</span> Running the router</h2>
+<p>The <a href="./router.py">Python router</a> implements the <a href="./codex_prompt.txt">companion prompt</a> with Anthropic’s <a href="https://platform.claude.com/docs/en/api/python/messages/create">Messages API</a>. Download it with <a href="./agents.yaml">agents.yaml</a> and <a href="./requirements.txt">requirements.txt</a> into one directory.</p>
+<p>From the repository root, install the dependencies and run a request:</p>
+<div class="sourceCode" id="cb2" style="background: #f1f3f5;"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><span class="ex" style="color: null;
+background-color: null;
+font-style: inherit;">uv</span> venv .venv-claude-subagents</span>
+<span id="cb2-2"><span class="ex" style="color: null;
+background-color: null;
+font-style: inherit;">uv</span> pip install <span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">--python</span> .venv-claude-subagents/bin/python <span class="dt" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">\</span></span>
+<span id="cb2-3">  <span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">-r</span> posts/claude-subagents/requirements.txt</span>
+<span id="cb2-4"><span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">export</span> <span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">ANTHROPIC_API_KEY</span><span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"your-api-key"</span></span>
+<span id="cb2-5"><span class="ex" style="color: null;
+background-color: null;
+font-style: inherit;">.venv-claude-subagents/bin/python</span> posts/claude-subagents/router.py <span class="dt" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">\</span></span>
+<span id="cb2-6">  <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"Write a SQL query that counts orders by customer"</span></span></code></pre></div>
+<ol type="1">
+<li>Haiku selects one of the three configured roles from the query.</li>
+<li>The selected specialist receives the original query, its configured system prompt, model, and temperature.</li>
+<li>The script prints API-reported input and output tokens for both calls, then their totals, to standard error. The generated answer goes to standard output.</li>
+</ol>
+<p>The routing call is an added cost compared with directly calling that specialist. The query is sent twice, once for classification and once for the answer; no larger task transcript is copied.</p>
+</section>
+<section id="constraints" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="constraints"><span class="header-section-number">4</span> Constraints</h2>
+<ul>
+<li>This implementation chooses one specialist per request. The diagram shows the available delegation paths; simultaneous fan-out and synthesis would require additional calls and token accounting.</li>
+<li>The opening’s claim about a monolithic agent is an architectural opinion, not a measured result. This example provides no evidence of improved quality, latency, or lower total cost. Compare those outcomes against a direct call on the same tasks.</li>
+<li>Separate API calls have separate context windows. Delegation increases aggregate token use; only the results brought back into an orchestrator’s conversation consume that orchestrator’s context.</li>
+<li>Prompts request behavior; they cannot enforce valid Python, correctness, or an output format. This script prints generated code without executing it. Tool names in a configuration do not implement tools.</li>
+<li>A routing response outside the configured names, an empty response, or an incomplete API response stops the script with an error. The router makes no synthesis call and has no conversation memory.</li>
+<li>The companion tests use mocked API responses. They check dispatch and token arithmetic, not live model quality or account access. Token counts alone do not establish dollar savings, since models have different input and output prices.</li>
+</ul>
+<p>Route. Tasks. Match. Models. Count. Tokens. Measure. Quality. Compare. Costs.</p>
+</section>
+<section id="references" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="references"><span class="header-section-number">5</span> References</h2>
+<ul>
+<li>Anthropic, <a href="https://platform.claude.com/docs/en/about-claude/model-deprecations">Model deprecations</a>.</li>
+<li>Anthropic, <a href="https://platform.claude.com/docs/en/api/python/messages/create">Create a Message: Python API reference</a>.</li>
+</ul>
+
+
+</section>
+
+ ]]></description>
+  <category>Agents</category>
+  <category>Claude</category>
+  <category>LLMs</category>
+  <category>Architecture</category>
+  <guid>https://project-delphi.github.io/ml-blog/posts/claude-subagents/</guid>
+  <pubDate>Sat, 19 Sep 2026 05:00:00 GMT</pubDate>
+  <media:content url="https://project-delphi.github.io/ml-blog/posts/claude-subagents/cover.png" medium="image" type="image/png" height="76" width="144"/>
+</item>
 <item>
   <title>Who Does the Clearing?</title>
   <dc:creator>Ravi Kalia</dc:creator>
@@ -29115,2567 +29424,6 @@ multilinear M-P Penrose residual: 3.30e-15</code></pre>
   <guid>https://project-delphi.github.io/ml-blog/posts/tensor-factorizations/</guid>
   <pubDate>Fri, 28 Aug 2026 05:00:00 GMT</pubDate>
   <media:content url="https://project-delphi.github.io/ml-blog/posts/tensor-factorizations/cover.png" medium="image" type="image/png" height="76" width="144"/>
-</item>
-<item>
-  <title>From Dataset to Biological Signature</title>
-  <dc:creator>Ravi Kalia</dc:creator>
-  <link>https://project-delphi.github.io/ml-blog/posts/dataset-to-biological-signature/</link>
-  <description><![CDATA[ 
-
-
-
-
-
-<p><img src="https://project-delphi.github.io/ml-blog/posts/dataset-to-biological-signature/cover.png" class="img-fluid" alt="Cover card reading From Dataset to a Biological Signature, over a solid purple background."></p>
-<section id="biological-signature" class="level2" data-number="1">
-<h2 data-number="1" class="anchored" data-anchor-id="biological-signature"><span class="header-section-number">1</span> Biological signature</h2>
-<p>A <strong>biological signature</strong> is a fixed gene list with weights and a decision threshold, fit to answer a specific classification question. Every reported performance number is conditional on the data having selected those genes.</p>
-<p>This post runs Golub et al.&nbsp;(1999) ALL/AML microarray data end to end: recover the original train/test split, fit an elastic-net signature without leakage, and report honest external validation. The pipeline is described twice — ML vocabulary and statistical vocabulary.</p>
-<p>Primer without code: <a href="../what-is-a-biological-signature/">What is a Biological Signature?</a>.</p>
-</section>
-<section id="biology-background" class="level2" data-number="2">
-<h2 data-number="2" class="anchored" data-anchor-id="biology-background"><span class="header-section-number">2</span> Biology background</h2>
-<p>Acute lymphoblastic leukemia (ALL) and acute myeloid leukemia (AML) require opposite treatments. Pre-1999 diagnosis used morphology, cytochemistry, and surface markers.</p>
-<p>Bone marrow stem cell gives two lines:</p>
-<div class="cell" data-layout-align="default">
-<div class="cell-output-display">
-<div>
-<p></p><figure class="figure"><p></p>
-<div>
-<pre class="mermaid mermaid-js">flowchart TD
-  S["Bone marrow stem cell"] --&gt; L["Lymphoid line&lt;br/&gt;B-cells, T-cells"]
-  S --&gt; M["Myeloid line&lt;br/&gt;red cells, platelets, granulocytes"]
-  L --&gt;|glitch| ALL["&lt;b&gt;ALL&lt;/b&gt;&lt;br/&gt;lymphoblasts"]
-  M --&gt;|glitch| AML["&lt;b&gt;AML&lt;/b&gt;&lt;br/&gt;myeloblasts"]
-</pre>
-</div>
-<p></p></figure><p></p>
-</div>
-</div>
-</div>
-<ul>
-<li><strong>ALL:</strong> lymphoid line jammed; commonest childhood cancer.</li>
-<li><strong>AML:</strong> myeloid line jammed; adult disease; affects oxygen transport and clotting faster.</li>
-</ul>
-<p>Diagnostic question: <em>which line is stuck?</em></p>
-</section>
-<section id="data-provenance" class="level2" data-number="3">
-<h2 data-number="3" class="anchored" data-anchor-id="data-provenance"><span class="header-section-number">3</span> Data provenance</h2>
-<p><strong>Source:</strong> Golub et al.&nbsp;(1999), Whitehead Institute / Dana-Farber. 72 acute leukemia patients; Affymetrix HU6800 array (7,129 gene probes). Archived hospital samples; goal was to show tumour type is legible in gene expression.</p>
-<ul>
-<li><strong>Matrix used here:</strong> Efron and Hastie’s <a href="https://hastie.su.domains/CASI_files/DATA/leukemia.html">CASI data page</a> (<code>leukemia_big.csv.gz</code>), cached in <code>data/</code>.</li>
-<li><strong>Split key:</strong> original Whitehead files (<code>golub_train.csv.gz</code>, <code>golub_independent.csv.gz</code>) carry probe accessions and patient IDs the CASI copy dropped.</li>
-<li><strong>Objective:</strong> classify ALL vs AML from expression.</li>
-<li><strong>Downstream impact:</strong> treatment assignment (vincristine/steroids vs cytarabine/anthracycline). Target metric: performance at a <strong>different hospital</strong>, not peak training accuracy.</li>
-</ul>
-<div id="setup" class="cell" data-execution_count="1">
-<details class="code-fold">
-<summary>Imports, plot style, and loading the cached matrices</summary>
-<div class="sourceCode cell-code" id="cb1" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">import</span> warnings</span>
-<span id="cb1-2"><span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">import</span> numpy <span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">as</span> np</span>
-<span id="cb1-3"><span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">import</span> pandas <span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">as</span> pd</span>
-<span id="cb1-4"><span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">import</span> matplotlib.pyplot <span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">as</span> plt</span>
-<span id="cb1-5"><span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">from</span> scipy.stats <span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">import</span> beta</span>
-<span id="cb1-6"></span>
-<span id="cb1-7">warnings.filterwarnings(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"ignore"</span>)</span>
-<span id="cb1-8">rng_seed <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span></span>
-<span id="cb1-9"></span>
-<span id="cb1-10">plt.rcParams.update({</span>
-<span id="cb1-11">    <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"figure.dpi"</span>: <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">150</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"savefig.bbox"</span>: <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"tight"</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"font.size"</span>: <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">9</span>,</span>
-<span id="cb1-12">    <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"axes.spines.top"</span>: <span class="va" style="color: #111111;
-background-color: null;
-font-style: inherit;">False</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"axes.spines.right"</span>: <span class="va" style="color: #111111;
-background-color: null;
-font-style: inherit;">False</span>,</span>
-<span id="cb1-13">    <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"axes.grid"</span>: <span class="va" style="color: #111111;
-background-color: null;
-font-style: inherit;">True</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"grid.alpha"</span>: <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.25</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"axes.axisbelow"</span>: <span class="va" style="color: #111111;
-background-color: null;
-font-style: inherit;">True</span>,</span>
-<span id="cb1-14">})</span>
-<span id="cb1-15">ALL_C, AML_C <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"#1D5C6E"</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"#C98A12"</span></span>
-<span id="cb1-16"></span>
-<span id="cb1-17"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># The CASI matrix: 7,128 genes x 72 samples, column names carry the labels.</span></span>
-<span id="cb1-18">casi <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> pd.read_csv(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"data/leukemia_big.csv.gz"</span>)</span>
-<span id="cb1-19">X <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> casi.to_numpy().T                                    <span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># samples x genes</span></span>
-<span id="cb1-20">y <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.array([<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">int</span>(c.split(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"."</span>)[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>].startswith(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"AML"</span>)) <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> c <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> casi.columns])</span>
-<span id="cb1-21"></span>
-<span id="cb1-22"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># The original Whitehead files, used only as a key: they carry the Affymetrix</span></span>
-<span id="cb1-23"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># probe accessions and the per-patient sample IDs that the CASI copy dropped.</span></span>
-<span id="cb1-24"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">def</span> read_golub(path):</span>
-<span id="cb1-25">    d <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> pd.read_csv(path)</span>
-<span id="cb1-26">    ids <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> [c <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> c <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> d.columns[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span>:] <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">if</span> <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">not</span> c.startswith(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"call"</span>)]</span>
-<span id="cb1-27">    <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">return</span> d[<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"Gene Accession Number"</span>].to_numpy(), d[<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"Gene Description"</span>].to_numpy(), <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">\</span></span>
-<span id="cb1-28">           d[ids].to_numpy(dtype<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">float</span>), ids</span>
-<span id="cb1-29"></span>
-<span id="cb1-30">acc, desc, G_train, id_train <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> read_golub(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"data/golub_train.csv.gz"</span>)</span>
-<span id="cb1-31">_, _, G_test, id_test <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> read_golub(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"data/golub_independent.csv.gz"</span>)</span>
-<span id="cb1-32">truth <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> pd.read_csv(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"data/golub_labels.csv"</span>).set_index(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"patient"</span>)[<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"cancer"</span>].to_dict()</span>
-<span id="cb1-33"></span>
-<span id="cb1-34"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"expression matrix : </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>X<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">.</span>shape[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>]<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;"> samples x </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>X<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">.</span>shape[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>]<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;"> genes"</span>)</span>
-<span id="cb1-35"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"class balance     : </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>(y<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">==</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">.</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">sum</span>()<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;"> ALL, </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>y<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">.</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">sum</span>()<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;"> AML"</span>)</span></code></pre></div>
-</details>
-<div class="cell-output cell-output-stdout">
-<pre><code>expression matrix : 72 samples x 7128 genes
-class balance     : 47 ALL, 25 AML</code></pre>
-</div>
-</div>
-<p>72 samples × 7,128 genes (<img src="https://latex.codecogs.com/png.latex?p%20%5Cgg%20n">).</p>
-<div id="cell-slice" class="cell" data-execution_count="2">
-<details class="code-fold">
-<summary>A corner of the matrix</summary>
-<div class="sourceCode cell-code" id="cb3" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1">pd.DataFrame(</span>
-<span id="cb3-2">    X[:<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">5</span>, :<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">6</span>].<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">round</span>(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3</span>),</span>
-<span id="cb3-3">    index<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>[<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"sample </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>i<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;"> (</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'AML'</span> <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">if</span> y[i] <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">else</span> <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'ALL'</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">)"</span> <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> i <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">range</span>(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">5</span>)],</span>
-<span id="cb3-4">    columns<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>[<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"gene </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>j<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span> <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> j <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">range</span>(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">6</span>)],</span>
-<span id="cb3-5">)</span></code></pre></div>
-</details>
-<div id="slice" class="cell-output cell-output-display" data-execution_count="2">
-<div>
-
-
-<table class="dataframe caption-top table table-sm table-striped small" data-quarto-postprocess="true" data-border="1">
-<thead>
-<tr class="header">
-<th data-quarto-table-cell-role="th"></th>
-<th data-quarto-table-cell-role="th">gene 0</th>
-<th data-quarto-table-cell-role="th">gene 1</th>
-<th data-quarto-table-cell-role="th">gene 2</th>
-<th data-quarto-table-cell-role="th">gene 3</th>
-<th data-quarto-table-cell-role="th">gene 4</th>
-<th data-quarto-table-cell-role="th">gene 5</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td data-quarto-table-cell-role="th">sample 0 (ALL)</td>
-<td>-1.534</td>
-<td>-1.236</td>
-<td>-0.334</td>
-<td>0.489</td>
-<td>-1.301</td>
-<td>-1.683</td>
-</tr>
-<tr class="even">
-<td data-quarto-table-cell-role="th">sample 1 (ALL)</td>
-<td>-0.868</td>
-<td>-1.276</td>
-<td>0.376</td>
-<td>0.444</td>
-<td>-1.230</td>
-<td>-1.642</td>
-</tr>
-<tr class="odd">
-<td data-quarto-table-cell-role="th">sample 2 (ALL)</td>
-<td>-0.433</td>
-<td>-1.184</td>
-<td>-0.459</td>
-<td>0.436</td>
-<td>-1.326</td>
-<td>-1.407</td>
-</tr>
-<tr class="even">
-<td data-quarto-table-cell-role="th">sample 3 (ALL)</td>
-<td>-1.672</td>
-<td>-1.596</td>
-<td>-1.423</td>
-<td>0.193</td>
-<td>-1.818</td>
-<td>-1.744</td>
-</tr>
-<tr class="odd">
-<td data-quarto-table-cell-role="th">sample 4 (ALL)</td>
-<td>-1.188</td>
-<td>-1.335</td>
-<td>-0.797</td>
-<td>0.236</td>
-<td>-1.311</td>
-<td>-1.654</td>
-</tr>
-</tbody>
-</table>
-
-</div>
-</div>
-</div>
-<p>Each patient column is z-scored (mean 0, SD 1). Per-gene preprocessing across patients is undocumented (“lost in time”).</p>
-</section>
-<section id="traintest-split-recovery" class="level2" data-number="4">
-<h2 data-number="4" class="anchored" data-anchor-id="traintest-split-recovery"><span class="header-section-number">4</span> Train/test split recovery</h2>
-<p>Golub’s design:</p>
-<ul>
-<li><strong>38 training:</strong> single hospital, bone marrow, predictor built here.</li>
-<li><strong>34 external test:</strong> later collection, different labs, some blood — simulates new hospital.</li>
-</ul>
-<p>CASI file lacks patient IDs. Recovery method: column-wise rank order is invariant to affine rescaling → Spearman rank correlation matches CASI columns to Golub patients.</p>
-<div id="recover-split" class="cell" data-execution_count="3">
-<details open="" class="code-fold">
-<summary>Code</summary>
-<div class="sourceCode cell-code" id="cb4" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1">G <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.hstack([G_train, G_test])[:X.shape[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>]]   <span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># CASI drops Golub's last probe</span></span>
-<span id="cb4-2">ids <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> id_train <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> id_test</span>
-<span id="cb4-3">golub_y <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.array([<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">int</span>(truth[<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">int</span>(i)] <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">==</span> <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"AML"</span>) <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> i <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> ids])</span>
-<span id="cb4-4"></span>
-<span id="cb4-5">rank <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">lambda</span> A: np.argsort(np.argsort(A, axis<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>), axis<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>).astype(<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">float</span>)</span>
-<span id="cb4-6">Rc, Rg <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> rank(casi.to_numpy()), rank(G)</span>
-<span id="cb4-7">Rc <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> (Rc <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> Rc.mean(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>)) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> Rc.std(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>)</span>
-<span id="cb4-8">Rg <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> (Rg <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> Rg.mean(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>)) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> Rg.std(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>)</span>
-<span id="cb4-9">S <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> (Rc.T <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">@</span> Rg) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> G.shape[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>]                    <span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># 72 x 72 Spearman matrix</span></span>
-<span id="cb4-10">match, best <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> S.argmax(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>), np.sort(S, axis<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>)</span>
-<span id="cb4-11"></span>
-<span id="cb4-12"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"unique matches      : </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">len</span>(<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">set</span>(match.tolist()))<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">/72"</span>)</span>
-<span id="cb4-13"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"labels agree        : </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>(golub_y[match] <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">==</span> y)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">.</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">sum</span>()<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">/72"</span>)</span>
-<span id="cb4-14"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"worst true match    : </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>best[:, <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>]<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">.</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">min</span>()<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.3f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span>
-<span id="cb4-15"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"best runner-up      : </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>best[:, <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span>]<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">.</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">max</span>()<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.3f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span>
-<span id="cb4-16"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"CASI column 0 -&gt; patient </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>ids[match[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>]]<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">;  column 34 -&gt; patient </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>ids[match[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">34</span>]]<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span></code></pre></div>
-</details>
-<div class="cell-output cell-output-stdout">
-<pre><code>unique matches      : 72/72
-labels agree        : 72/72
-worst true match    : 0.945
-best runner-up      : 0.884
-CASI column 0 -&gt; patient 39;  column 34 -&gt; patient 1</code></pre>
-</div>
-</div>
-<ul>
-<li>72/72 unique matches; all labels agree.</li>
-<li>Worst true match: 0.945; best wrong candidate: 0.884.</li>
-<li><strong>CASI stores 34 external samples first</strong> (columns 0–33), training second (34–71).</li>
-</ul>
-<section id="preprocessing-caveat" class="level3" data-number="4.1">
-<h3 data-number="4.1" class="anchored" data-anchor-id="preprocessing-caveat"><span class="header-section-number">4.1</span> Preprocessing caveat</h3>
-<p>Undocumented per-gene step may have pooled all 72 patients. Column z-scoring is safe; pooled gene normalization would leak test into training. All results below are conditional on column scaling only.</p>
-<div id="cell-fig-data" class="cell" data-execution_count="4">
-<details class="code-fold">
-<summary>Figure 1</summary>
-<div class="sourceCode cell-code" id="cb6" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1">test_ix, train_ix <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.arange(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">34</span>), np.arange(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">34</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">72</span>)</span>
-<span id="cb6-2">probe <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> {a: i <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> i, a <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">enumerate</span>(acc[:X.shape[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>]])}</span>
-<span id="cb6-3">mpo, ccnd3 <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> probe[<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"M19507_at"</span>], probe[<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"M92287_at"</span>]</span>
-<span id="cb6-4"></span>
-<span id="cb6-5">Z <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> (X <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> X.mean(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>)) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> (X.std(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1e-9</span>)</span>
-<span id="cb6-6">U, sv, _ <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.linalg.svd(Z <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> Z.mean(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>), full_matrices<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="va" style="color: #111111;
-background-color: null;
-font-style: inherit;">False</span>)</span>
-<span id="cb6-7">pcs <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> U[:, :<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">5</span>] <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> sv[:<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">5</span>]</span>
-<span id="cb6-8"></span>
-<span id="cb6-9"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># Pick the axes by what they actually carry, rather than assuming PC1/PC2:</span></span>
-<span id="cb6-10"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># correlate each component with class and with cohort membership.</span></span>
-<span id="cb6-11">cohort <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.r_[np.zeros(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">34</span>), np.ones(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">38</span>)]</span>
-<span id="cb6-12">corr <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">lambda</span> v: np.array([<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">abs</span>(np.corrcoef(v, pcs[:, k])[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>]) <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> k <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">range</span>(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">5</span>)])</span>
-<span id="cb6-13">k_cls, k_coh <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> corr(y).argmax(), corr(cohort).argmax()</span>
-<span id="cb6-14"></span>
-<span id="cb6-15">fig, (a1, a2) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> plt.subplots(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span>, figsize<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">8</span>, <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3.6</span>))</span>
-<span id="cb6-16"><span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> cls, name, col <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> [(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"ALL"</span>, ALL_C), (<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"AML"</span>, AML_C)]:</span>
-<span id="cb6-17">    m <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> y <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">==</span> cls</span>
-<span id="cb6-18">    a1.scatter(X[m, ccnd3], X[m, mpo], c<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>col, s<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">28</span>, alpha<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.85</span>, label<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>name,</span>
-<span id="cb6-19">               edgecolor<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"white"</span>, linewidth<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.5</span>)</span>
-<span id="cb6-20">a1.<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">set</span>(xlabel<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"CCND3 (cyclin D3), lymphoid"</span>, ylabel<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"MPO (myeloperoxidase), myeloid"</span>,</span>
-<span id="cb6-21">       title<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"Two genes"</span>)</span>
-<span id="cb6-22">a1.legend(frameon<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="va" style="color: #111111;
-background-color: null;
-font-style: inherit;">False</span>, fontsize<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">8</span>)</span>
-<span id="cb6-23"></span>
-<span id="cb6-24"><span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> cls, col <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> [(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>, ALL_C), (<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>, AML_C)]:</span>
-<span id="cb6-25">    <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> ix, mark, lab <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> [(train_ix, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"o"</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"training"</span>), (test_ix, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"^"</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"external"</span>)]:</span>
-<span id="cb6-26">        m <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.intersect1d(np.flatnonzero(y <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">==</span> cls), ix)</span>
-<span id="cb6-27">        a2.scatter(pcs[m, k_cls], pcs[m, k_coh], c<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>col, marker<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>mark, s<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">28</span>, alpha<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.85</span>,</span>
-<span id="cb6-28">                   edgecolor<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"white"</span>, linewidth<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.5</span>,</span>
-<span id="cb6-29">                   label<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'AML'</span> <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">if</span> cls <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">else</span> <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">'ALL'</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">, </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>lab<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span>
-<span id="cb6-30">a2.<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">set</span>(xlabel<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"PC</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>k_cls <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">  (carries class, |r| = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>corr(y)[k_cls]<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.2f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">)"</span>,</span>
-<span id="cb6-31">       ylabel<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"PC</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>k_coh <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">  (carries cohort, |r| = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>corr(cohort)[k_coh]<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.2f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">)"</span>,</span>
-<span id="cb6-32">       title<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"Colour = class, shape = cohort"</span>)</span>
-<span id="cb6-33">a2.legend(frameon<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="va" style="color: #111111;
-background-color: null;
-font-style: inherit;">False</span>, fontsize<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">7</span>, loc<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"best"</span>)</span>
-<span id="cb6-34">fig.tight_layout()</span>
-<span id="cb6-35">plt.show()</span></code></pre></div>
-</details>
-<div class="cell-output cell-output-display">
-<div id="fig-data" class="quarto-float quarto-figure quarto-figure-center anchored">
-<figure class="quarto-float quarto-float-fig figure">
-<div aria-describedby="fig-data-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
-<img src="https://project-delphi.github.io/ml-blog/posts/dataset-to-biological-signature/index_files/figure-html/fig-data-output-1.png" class="img-fluid figure-img">
-</div>
-<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-data-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
-Figure&nbsp;1: Left: two genes named later in the post, one myeloid and one lymphoid, separate the classes almost on their own. Right: the component that carries diagnosis plotted against the one that carries cohort. Class separates along the x-axis and the laboratory along the y-axis — the nuisance variable has structure of its own.
-</figcaption>
-</figure>
-</div>
-</div>
-</div>
-<ul>
-<li>CCND3 (lymphoid) vs MPO (myeloid) nearly separate classes alone.</li>
-<li>Class and cohort load on <strong>different</strong> principal components. Ridge classifier on cohort alone: 78% CV accuracy.</li>
-</ul>
-</section>
-</section>
-<section id="ml-pipeline" class="level2" data-number="5">
-<h2 data-number="5" class="anchored" data-anchor-id="ml-pipeline"><span class="header-section-number">5</span> ML pipeline</h2>
-<section id="input-representation" class="level3" data-number="5.1">
-<h3 data-number="5.1" class="anchored" data-anchor-id="input-representation"><span class="header-section-number">5.1</span> Input representation</h3>
-<p>Model sees samples × genes matrix. Biology (probe mapping, normalization) is upstream and assay-specific.</p>
-</section>
-<section id="supervised-signature" class="level3" data-number="5.2">
-<h3 data-number="5.2" class="anchored" data-anchor-id="supervised-signature"><span class="header-section-number">5.2</span> Supervised signature</h3>
-<p>Signature requires labels (ALL vs AML). Unsupervised structure ≠ signature without a question. Golub (1999) also did class discovery then prediction; discovery proposes the question, prediction remains supervised.</p>
-</section>
-<section id="elastic-net-objective" class="level3" data-number="5.3">
-<h3 data-number="5.3" class="anchored" data-anchor-id="elastic-net-objective"><span class="header-section-number">5.3</span> Elastic net objective</h3>
-<p>Shipped artifact: fixed gene list, weights, threshold — locked before opening test set.</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Chat%5Cbeta%20%5C;=%5C;%20%5Carg%5Cmin_%7B%5Cbeta%7D%5C;%20-%5Cfrac%7B1%7D%7Bn%7D%5Csum_%7Bi=1%7D%5E%7Bn%7D%5CBig%5By_i%5C,x_i%5E%7B%5Ctop%7D%5Cbeta%20-%20%5Clog%5Cbig(1%20+%20e%5E%7Bx_i%5E%7B%5Ctop%7D%5Cbeta%7D%5Cbig)%5CBig%5D%20%5C;+%5C;%20%5Clambda%5CBig(%5Calpha%5ClVert%5Cbeta%5CrVert_1%20+%20%5Ctfrac%7B1-%5Calpha%7D%7B2%7D%5ClVert%5Cbeta%5CrVert_2%5E2%5CBig)%0A"></p>
-<ul>
-<li>L1 (<img src="https://latex.codecogs.com/png.latex?%5ClVert%5Cbeta%5CrVert_1">): sparsity; exact zeros.</li>
-<li>L2 (<img src="https://latex.codecogs.com/png.latex?%5ClVert%5Cbeta%5CrVert_2%5E2">): groups correlated genes.</li>
-<li><img src="https://latex.codecogs.com/png.latex?%5Calpha%20=%200.5">; tune <img src="https://latex.codecogs.com/png.latex?%5Clambda"> (via <img src="https://latex.codecogs.com/png.latex?C%20=%201/%5Clambda">) by nested cross-validation on 38 training samples only.</li>
-</ul>
-<div id="cell-fig-path" class="cell" data-execution_count="5">
-<details class="code-fold">
-<summary>Nested cross-validation, and Figure 2</summary>
-<div class="sourceCode cell-code" id="cb7" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">from</span> sklearn.linear_model <span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">import</span> LogisticRegression</span>
-<span id="cb7-2"><span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">from</span> sklearn.model_selection <span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">import</span> StratifiedKFold, cross_val_score</span>
-<span id="cb7-3"><span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">from</span> sklearn.metrics <span class="im" style="color: #00769E;
-background-color: null;
-font-style: inherit;">import</span> accuracy_score, roc_auc_score, brier_score_loss</span>
-<span id="cb7-4"></span>
-<span id="cb7-5">Xtr, ytr, Xte, yte <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> X[train_ix], y[train_ix], X[test_ix], y[test_ix]</span>
-<span id="cb7-6">Cs <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.logspace(<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">7</span>)</span>
-<span id="cb7-7"></span>
-<span id="cb7-8"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">def</span> enet(C):</span>
-<span id="cb7-9">    <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">return</span> LogisticRegression(penalty<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"elasticnet"</span>, solver<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"saga"</span>, l1_ratio<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.5</span>,</span>
-<span id="cb7-10">                              C<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>C, max_iter<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3000</span>, tol<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1e-3</span>, random_state<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>rng_seed)</span>
-<span id="cb7-11"></span>
-<span id="cb7-12"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">def</span> screen(A, k<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2000</span>):</span>
-<span id="cb7-13">    <span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">"""Unsupervised variance screen. Never sees y, so it is safe inside a fold."""</span></span>
-<span id="cb7-14">    <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">return</span> np.argsort(<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span>A.var(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>))[:k]</span>
-<span id="cb7-15"></span>
-<span id="cb7-16">outer, scores <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> StratifiedKFold(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">5</span>, shuffle<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="va" style="color: #111111;
-background-color: null;
-font-style: inherit;">True</span>, random_state<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>), []</span>
-<span id="cb7-17"><span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> a, b <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> outer.split(Xtr, ytr):</span>
-<span id="cb7-18">    g <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> screen(Xtr[a])</span>
-<span id="cb7-19">    mu, sd <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> Xtr[a][:, g].mean(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>), Xtr[a][:, g].std(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1e-9</span></span>
-<span id="cb7-20">    Za, Zb <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> (Xtr[a][:, g] <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> mu) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> sd, (Xtr[b][:, g] <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> mu) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> sd</span>
-<span id="cb7-21">    inner <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> StratifiedKFold(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">4</span>, shuffle<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="va" style="color: #111111;
-background-color: null;
-font-style: inherit;">True</span>, random_state<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>)</span>
-<span id="cb7-22">    C <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">max</span>(Cs, key<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">lambda</span> c: cross_val_score(enet(c), Za, ytr[a], cv<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>inner).mean())</span>
-<span id="cb7-23">    scores.append(accuracy_score(ytr[b], enet(C).fit(Za, ytr[a]).predict(Zb)))</span>
-<span id="cb7-24"></span>
-<span id="cb7-25"><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># Full-training-set path, for the figure and for the final penalty.</span></span>
-<span id="cb7-26">g <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> screen(Xtr)</span>
-<span id="cb7-27">mu, sd <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> Xtr[:, g].mean(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>), Xtr[:, g].std(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1e-9</span></span>
-<span id="cb7-28">Ztr, Zte <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> (Xtr[:, g] <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> mu) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> sd, (Xte[:, g] <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> mu) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> sd</span>
-<span id="cb7-29">cv5 <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> StratifiedKFold(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">5</span>, shuffle<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="va" style="color: #111111;
-background-color: null;
-font-style: inherit;">True</span>, random_state<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>)</span>
-<span id="cb7-30">path <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.array([cross_val_score(enet(c), Ztr, ytr, cv<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>cv5) <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> c <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> Cs])</span>
-<span id="cb7-31">C_star <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> Cs[path.mean(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>).argmax()]</span>
-<span id="cb7-32"></span>
-<span id="cb7-33"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"nested CV accuracy : </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>np<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">.</span>mean(scores)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.3f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">  (outer folds "</span></span>
-<span id="cb7-34">      <span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>[<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">round</span>(s, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span>) <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> s <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> scores]<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">)"</span>)</span>
-<span id="cb7-35"></span>
-<span id="cb7-36">fig, ax <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> plt.subplots(figsize<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>(<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">6.2</span>, <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3.2</span>))</span>
-<span id="cb7-37">ax.errorbar(Cs, path.mean(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>), yerr<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>path.std(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>), marker<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"o"</span>, color<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>ALL_C,</span>
-<span id="cb7-38">            capsize<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3</span>, linewidth<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1.5</span>, markersize<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">5</span>)</span>
-<span id="cb7-39">ax.axvline(C_star, color<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>AML_C, linestyle<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"--"</span>, linewidth<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1.3</span>,</span>
-<span id="cb7-40">           label<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"chosen C = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>C_star<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.2f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span>
-<span id="cb7-41">ax.<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">set</span>(xscale<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"log"</span>, xlabel<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"C  (inverse penalty strength)"</span>,</span>
-<span id="cb7-42">       ylabel<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"inner-fold accuracy"</span>, title<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"Regularisation path"</span>)</span>
-<span id="cb7-43">ax.legend(frameon<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="va" style="color: #111111;
-background-color: null;
-font-style: inherit;">False</span>, fontsize<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">8</span>)</span>
-<span id="cb7-44">plt.show()</span></code></pre></div>
-</details>
-<div class="cell-output cell-output-stdout">
-<pre><code>nested CV accuracy : 0.921  (outer folds [0.75, 1.0, 1.0, 0.86, 1.0])</code></pre>
-</div>
-<div class="cell-output cell-output-display">
-<div id="fig-path" class="quarto-float quarto-figure quarto-figure-center anchored">
-<figure class="quarto-float quarto-float-fig figure">
-<div aria-describedby="fig-path-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
-<img src="https://project-delphi.github.io/ml-blog/posts/dataset-to-biological-signature/index_files/figure-html/fig-path-output-2.png" class="img-fluid figure-img">
-</div>
-<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-path-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
-Figure&nbsp;2: Inner-fold accuracy along the regularisation path, on the 38 training samples only. Accuracy peaks at a single interior value. To the left the penalty is strong enough to zero out genes the model needs; to the right it is weak enough to admit genes that only help on the training fold. Error bars are one standard deviation across five folds, and they are wide — 38 samples do not locate this optimum precisely.
-</figcaption>
-</figure>
-</div>
-</div>
-</div>
-<p>Nested CV training accuracy: <strong>0.921</strong>. External test (once):</p>
-<div id="external" class="cell" data-execution_count="6">
-<details open="" class="code-fold">
-<summary>Code</summary>
-<div class="sourceCode cell-code" id="cb9" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1">final <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> enet(C_star).fit(Ztr, ytr)</span>
-<span id="cb9-2">selected <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> g[np.flatnonzero(final.coef_[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>])]</span>
-<span id="cb9-3">p_test <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> final.predict_proba(Zte)[:, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>]</span>
-<span id="cb9-4"></span>
-<span id="cb9-5"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"genes with non-zero coefficient : </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">len</span>(selected)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span>
-<span id="cb9-6"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"external accuracy : </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>accuracy_score(yte, p_test <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">&gt;</span> <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.5</span>)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.3f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;"> "</span></span>
-<span id="cb9-7">      <span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"(</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">int</span>((( p_test <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">&gt;</span> <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.5</span>) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">==</span> yte).<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">sum</span>())<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">/34)"</span>)</span>
-<span id="cb9-8"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"external AUC      : </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>roc_auc_score(yte, p_test)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.3f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span>
-<span id="cb9-9"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"external Brier    : </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>brier_score_loss(yte, p_test)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.3f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span>
-<span id="cb9-10">wrong <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.flatnonzero((p_test <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">&gt;</span> <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.5</span>).astype(<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">int</span>) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">!=</span> yte)</span>
-<span id="cb9-11"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"the one error     : predicted p(AML) = </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>p_test[wrong][<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>]<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.3f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span></code></pre></div>
-</details>
-<div class="cell-output cell-output-stdout">
-<pre><code>genes with non-zero coefficient : 88
-external accuracy : 0.971 (33/34)
-external AUC      : 1.000
-external Brier    : 0.041
-the one error     : predicted p(AML) = 0.468</code></pre>
-</div>
-</div>
-<p>Results:</p>
-<ul>
-<li><strong>33/34</strong> correct; AUC <strong>1.000</strong> (perfect ranking); one error at <img src="https://latex.codecogs.com/png.latex?p%20=%200.468">.</li>
-<li>Training CV (0.921) <strong>understated</strong> external performance (0.971).</li>
-</ul>
-<div id="lineage" class="cell" data-execution_count="7">
-<details class="code-fold">
-<summary>Naming the selected genes</summary>
-<div class="sourceCode cell-code" id="cb11" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1">lineage <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> {</span>
-<span id="cb11-2">    <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"M19507_at"</span>: <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"MPO, myeloperoxidase — the granulocyte enzyme"</span>,</span>
-<span id="cb11-3">    <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"M23197_at"</span>: <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"CD33 — myeloid surface antigen"</span>,</span>
-<span id="cb11-4">    <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"X52056_at"</span>: <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"SPI1 / PU.1 — myeloid master transcription factor"</span>,</span>
-<span id="cb11-5">    <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"M84526_at"</span>: <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"DF, adipsin — Golub's AML-high list"</span>,</span>
-<span id="cb11-6">    <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"M27891_at"</span>: <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"CST3, cystatin C — Golub's AML-high list"</span>,</span>
-<span id="cb11-7">    <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"M92287_at"</span>: <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"CCND3, cyclin D3 — Golub's ALL-high list"</span>,</span>
-<span id="cb11-8">    <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"U05259_rna1_at"</span>: <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"MB-1 / CD79a — B-cell receptor component"</span>,</span>
-<span id="cb11-9">    <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"M31523_at"</span>: <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"TCF3 / E2A — required for B-cell development"</span>,</span>
-<span id="cb11-10">}</span>
-<span id="cb11-11">hits <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> [(acc[i], lineage[acc[i]]) <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> i <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> selected <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">if</span> acc[i] <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> lineage]</span>
-<span id="cb11-12"><span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> a, note <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> hits:</span>
-<span id="cb11-13">    <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"  </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>a<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:16s}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;"> </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>note<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span>
-<span id="cb11-14"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"</span><span class="ch" style="color: #20794D;
-background-color: null;
-font-style: inherit;">\n</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">len</span>(hits)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;"> of these annotated markers survived selection."</span>)</span></code></pre></div>
-</details>
-<div class="cell-output cell-output-stdout">
-<pre><code>  M27891_at        CST3, cystatin C — Golub's AML-high list
-  X52056_at        SPI1 / PU.1 — myeloid master transcription factor
-  M84526_at        DF, adipsin — Golub's AML-high list
-  M19507_at        MPO, myeloperoxidase — the granulocyte enzyme
-  U05259_rna1_at   MB-1 / CD79a — B-cell receptor component
-  M23197_at        CD33 — myeloid surface antigen
-  M92287_at        CCND3, cyclin D3 — Golub's ALL-high list
-
-7 of these annotated markers survived selection.</code></pre>
-</div>
-</div>
-<p>Selected genes: myeloid vs lymphoid markers; includes MPO (pre-1999 stain target).</p>
-</section>
-</section>
-<section id="statistical-pipeline" class="level2" data-number="6">
-<h2 data-number="6" class="anchored" data-anchor-id="statistical-pipeline"><span class="header-section-number">6</span> Statistical pipeline</h2>
-<p>Same procedure; emphasis on inference under <img src="https://latex.codecogs.com/png.latex?p%20%5Cgg%20n"> and post-selection bias.</p>
-<section id="post-selection-inference" class="level3" data-number="6.1">
-<h3 data-number="6.1" class="anchored" data-anchor-id="post-selection-inference"><span class="header-section-number">6.1</span> Post-selection inference</h3>
-<p>Selected gene weights inherit selection luck. Standard CIs assume pre-specified variables. Repairs:</p>
-<ol type="1">
-<li>Split sample: select on one half, infer on other.</li>
-<li>Selective inference: correct for selection.</li>
-<li>Knockoffs: fake genes through same contest.</li>
-</ol>
-</section>
-<section id="false-discovery-rate" class="level3" data-number="6.2">
-<h3 data-number="6.2" class="anchored" data-anchor-id="false-discovery-rate"><span class="header-section-number">6.2</span> False discovery rate</h3>
-<p>7,128 tests at 5% → ~356 false positives by chance. <strong>FDR</strong> controls expected fraction wrong among reported genes:</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cmathrm%7BFDR%7D%20%5C;=%5C;%20%5Cmathbb%7BE%7D%5C!%5Cleft%5B%5Cfrac%7BV%7D%7B%5Cmax(R,%201)%7D%5Cright%5D%0A"></p>
-<p>Benjamini–Hochberg delivers long-run FDR control when genes correlate; single-list fraction can swing (gene gangs).</p>
-</section>
-<section id="pipeline-stages" class="level3" data-number="6.3">
-<h3 data-number="6.3" class="anchored" data-anchor-id="pipeline-stages"><span class="header-section-number">6.3</span> Pipeline stages</h3>
-<ol type="1">
-<li>Pre-specify estimand and threshold.</li>
-<li>Split before any transformation.</li>
-<li>Fit scaling and gene filter on training folds only.</li>
-<li>Inner loop: choose penalty; outer loop: score performance.</li>
-<li>Stability selection across subsamples.</li>
-<li>Lock model; test externally once; report intervals and calibration.</li>
-</ol>
-<p>Step 3 is most commonly violated.</p>
-</section>
-<section id="leakage-demonstration" class="level3" data-number="6.4">
-<h3 data-number="6.4" class="anchored" data-anchor-id="leakage-demonstration"><span class="header-section-number">6.4</span> Leakage demonstration</h3>
-<p>Score all genes on full data, keep top 50, then cross-validate → held-out fold influenced gene choice. <a href="https://doi.org/10.1073/pnas.99.6562">Ambroise and McLachlan (2002)</a>.</p>
-<div id="leakage" class="cell" data-execution_count="8">
-<details open="" class="code-fold">
-<summary>Code</summary>
-<div class="sourceCode cell-code" id="cb13" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">def</span> top_genes(A, lab, k<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">50</span>):</span>
-<span id="cb13-2">    m0, m1 <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> A[lab <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">==</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>].mean(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>), A[lab <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">==</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>].mean(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>)</span>
-<span id="cb13-3">    se <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.sqrt(A[lab <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">==</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>].var(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> (lab <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">==</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>).<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">sum</span>()</span>
-<span id="cb13-4">                 <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> A[lab <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">==</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>].var(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> lab.<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">sum</span>()) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1e-9</span></span>
-<span id="cb13-5">    <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">return</span> np.argsort(<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span>np.<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">abs</span>((m1 <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> m0) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> se))[:k]</span>
-<span id="cb13-6"></span>
-<span id="cb13-7"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">def</span> two_ways(lab, cv<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>StratifiedKFold(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">10</span>, shuffle<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="va" style="color: #111111;
-background-color: null;
-font-style: inherit;">True</span>, random_state<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">7</span>)):</span>
-<span id="cb13-8">    once <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> cross_val_score(enet(<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1.0</span>), Z[:, top_genes(Z, lab)], lab, cv<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>cv).mean()</span>
-<span id="cb13-9">    fold <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> [accuracy_score(lab[b], enet(<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1.0</span>)</span>
-<span id="cb13-10">            .fit(Z[a][:, (gi <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:=</span> top_genes(Z[a], lab[a]))], lab[a])</span>
-<span id="cb13-11">            .predict(Z[b][:, gi])) <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> a, b <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> cv.split(Z, lab)]</span>
-<span id="cb13-12">    <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">return</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> once, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> np.mean(fold)</span>
-<span id="cb13-13"></span>
-<span id="cb13-14">opt, honest <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> two_ways(y)</span>
-<span id="cb13-15"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"real labels     : filter once </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>opt<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.1%}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;"> error | filter in fold </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>honest<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.1%}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span>
-<span id="cb13-16"></span>
-<span id="cb13-17">shuffled <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.random.default_rng(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3</span>).permutation(y)</span>
-<span id="cb13-18">opt_n, honest_n <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> two_ways(shuffled)</span>
-<span id="cb13-19"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"labels shuffled : filter once </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>opt_n<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.1%}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;"> error | filter in fold </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>honest_n<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.1%}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span>
-<span id="cb13-20"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"chance for this class balance : </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>(y <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">==</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">.</span>mean()<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.1%}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;"> correct by always saying ALL"</span>)</span></code></pre></div>
-</details>
-<div class="cell-output cell-output-stdout">
-<pre><code>real labels     : filter once 2.9% error | filter in fold 4.3%
-labels shuffled : filter once 7.0% error | filter in fold 33.2%
-chance for this class balance : 65.3% correct by always saying ALL</code></pre>
-</div>
-</div>
-<p>Real labels: 2.9% (leaked) vs 4.3% (honest) — small gap because signal is strong.</p>
-<p>Shuffled labels: 7.0% error (93% accuracy on noise) vs 33.2% (honest) ≈ always-ALL baseline.</p>
-</section>
-<section id="stability-selection" class="level3" data-number="6.5">
-<h3 data-number="6.5" class="anchored" data-anchor-id="stability-selection"><span class="header-section-number">6.5</span> Stability selection</h3>
-<p>100 half-samples of 38 training patients; fixed penalty; count reselection frequency.</p>
-<div id="cell-fig-stability" class="cell" data-execution_count="9">
-<details class="code-fold">
-<summary>Stability selection, and Figure 3</summary>
-<div class="sourceCode cell-code" id="cb15" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1">rng <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.random.default_rng(rng_seed)</span>
-<span id="cb15-2">freq, B <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.zeros(X.shape[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>]), <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">100</span></span>
-<span id="cb15-3">pool <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> screen(Xtr)</span>
-<span id="cb15-4"><span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> _ <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">range</span>(B):</span>
-<span id="cb15-5">    take <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> rng.choice(<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">len</span>(ytr), <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">len</span>(ytr) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">//</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span>, replace<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="va" style="color: #111111;
-background-color: null;
-font-style: inherit;">False</span>)</span>
-<span id="cb15-6">    <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">if</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">len</span>(np.unique(ytr[take])) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">&lt;</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span>:</span>
-<span id="cb15-7">        <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">continue</span></span>
-<span id="cb15-8">    A <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> Xtr[take][:, pool]</span>
-<span id="cb15-9">    A <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> (A <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> A.mean(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>)) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> (A.std(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1e-9</span>)</span>
-<span id="cb15-10">    freq[pool[np.flatnonzero(enet(<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.5</span>).fit(A, ytr[take]).coef_[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>])]] <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+=</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span></span>
-<span id="cb15-11">freq <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/=</span> B</span>
-<span id="cb15-12"></span>
-<span id="cb15-13">order <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> np.argsort(<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span>freq)</span>
-<span id="cb15-14"><span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> t <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> (<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.5</span>, <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.6</span>, <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.7</span>, <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.9</span>):</span>
-<span id="cb15-15">    <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"selection frequency &gt;= </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>t<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">: </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>(freq <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">&gt;=</span> t)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">.</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">sum</span>()<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;"> genes"</span>)</span>
-<span id="cb15-16"></span>
-<span id="cb15-17">fig, ax <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> plt.subplots(figsize<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>(<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">7.6</span>, <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">3.4</span>))</span>
-<span id="cb15-18">top <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> order[:<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">60</span>]</span>
-<span id="cb15-19">ax.bar(<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">range</span>(<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">len</span>(top)), freq[top], color<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>ALL_C, width<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.8</span>)</span>
-<span id="cb15-20">ax.axhline(<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.6</span>, color<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>AML_C, linestyle<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"--"</span>, linewidth<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1.3</span>, label<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"cutoff = 0.6"</span>)</span>
-<span id="cb15-21">above <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">int</span>((freq[top] <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">&gt;=</span> <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.6</span>).<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">sum</span>())</span>
-<span id="cb15-22">ax.set_xticks(<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">range</span>(above))</span>
-<span id="cb15-23">ax.set_xticklabels([acc[i] <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> i <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> top[:above]], rotation<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">90</span>, fontsize<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">5</span>)</span>
-<span id="cb15-24">ax.<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">set</span>(xlim<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span>(<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>, <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">len</span>(top)), ylabel<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"selection frequency"</span>,</span>
-<span id="cb15-25">       xlabel<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"genes, ranked"</span>, title<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>B<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;"> half-samples of the 38 training patients"</span>)</span>
-<span id="cb15-26">ax.legend(frameon<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="va" style="color: #111111;
-background-color: null;
-font-style: inherit;">False</span>, fontsize<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">8</span>)</span>
-<span id="cb15-27">plt.show()</span></code></pre></div>
-</details>
-<div class="cell-output cell-output-stdout">
-<pre><code>selection frequency &gt;= 0.5: 45 genes
-selection frequency &gt;= 0.6: 33 genes
-selection frequency &gt;= 0.7: 26 genes
-selection frequency &gt;= 0.9: 12 genes</code></pre>
-</div>
-<div class="cell-output cell-output-display">
-<div id="fig-stability" class="quarto-float quarto-figure quarto-figure-center anchored">
-<figure class="quarto-float quarto-float-fig figure">
-<div aria-describedby="fig-stability-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
-<img src="https://project-delphi.github.io/ml-blog/posts/dataset-to-biological-signature/index_files/figure-html/fig-stability-output-2.png" class="img-fluid figure-img">
-</div>
-<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-stability-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
-Figure&nbsp;3: Selection frequency across 100 half-samples of the training cohort, sorted. The dashed line is a 0.6 cutoff. Genes above it are labelled by Affymetrix probe.
-</figcaption>
-</figure>
-</div>
-</div>
-</div>
-<p>45 genes ≥50% frequency; 12 ≥90%. Gene list is one draw, not a fixed biological object.</p>
-</section>
-<section id="golub-50-comparison" class="level3" data-number="6.6">
-<h3 data-number="6.6" class="anchored" data-anchor-id="golub-50-comparison"><span class="header-section-number">6.6</span> Golub-50 comparison</h3>
-<p>Reconstruct Golub’s 50-gene predictor (<img src="https://latex.codecogs.com/png.latex?P(g,c)%20=%20(%5Cmu_1%20-%20%5Cmu_0)/(%5Csigma_1%20+%20%5Csigma_0)">); compare raw vs log10-clipped preprocessing.</p>
-<div id="golub50" class="cell" data-execution_count="10">
-<details class="code-fold">
-<summary>Reconstructing the 1999 predictor</summary>
-<div class="sourceCode cell-code" id="cb17" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">def</span> snr(A, lab):</span>
-<span id="cb17-2">    d <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> A[lab <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">==</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>].mean(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> A[lab <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">==</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>].mean(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>)</span>
-<span id="cb17-3">    <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">return</span> d <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> (A[lab <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">==</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>].std(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>, ddof<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> A[lab <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">==</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>].std(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>, ddof<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> <span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1e-12</span>)</span>
-<span id="cb17-4"></span>
-<span id="cb17-5">raw <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> G_train.T</span>
-<span id="cb17-6">P_raw <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> snr(raw, golub_y[:<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">38</span>])</span>
-<span id="cb17-7">P_log <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> snr(np.log10(np.clip(raw, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">100</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">16000</span>)), golub_y[:<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">38</span>])</span>
-<span id="cb17-8">fifty <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">lambda</span> P: <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">set</span>(np.argsort(<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span>P)[:<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">25</span>]) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">|</span> <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">set</span>(np.argsort(P)[:<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">25</span>])</span>
-<span id="cb17-9">g50_raw, g50_log <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> fifty(P_raw), fifty(P_log)</span>
-<span id="cb17-10"></span>
-<span id="cb17-11"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"Golub-50, raw vs his own log10 preprocessing : </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">len</span>(g50_raw <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">&amp;</span> g50_log)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">/50 shared"</span>)</span>
-<span id="cb17-12"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"elastic net set vs Golub-50 (log10)         : "</span></span>
-<span id="cb17-13">      <span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">len</span>(<span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">set</span>(selected) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">&amp;</span> g50_log)<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;"> of 50 genes in common"</span>)</span>
-<span id="cb17-14"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"top AML-high probes:"</span>,</span>
-<span id="cb17-15">      <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">", "</span>.join(acc[i] <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> i <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> np.argsort(<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span>P_log)[:<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">4</span>]))</span></code></pre></div>
-</details>
-<div class="cell-output cell-output-stdout">
-<pre><code>Golub-50, raw vs his own log10 preprocessing : 32/50 shared
-elastic net set vs Golub-50 (log10)         : 26 of 50 genes in common
-top AML-high probes: M27891_at, X95735_at, U50136_rna1_at, M23197_at</code></pre>
-</div>
-</div>
-<p>Log preprocessing alone changes 18/50 genes. Elastic net agrees with Golub-50 on 26/50.</p>
-</section>
-</section>
-<section id="external-validation-limits" class="level2" data-number="7">
-<h2 data-number="7" class="anchored" data-anchor-id="external-validation-limits"><span class="header-section-number">7</span> External validation limits</h2>
-<p>33/34 external accuracy is real but <img src="https://latex.codecogs.com/png.latex?n%20=%2034">.</p>
-<div id="closing" class="cell" data-execution_count="11">
-<details class="code-fold">
-<summary>Intervals, and what happens at a different prevalence</summary>
-<div class="sourceCode cell-code" id="cb19" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">def</span> wilson(k, n, z<span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1.96</span>):</span>
-<span id="cb19-2">    c <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> (k <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> n <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> z <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> z <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> (<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">2</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> n)) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> (<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> z <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> z <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> n)</span>
-<span id="cb19-3">    h <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> z <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> np.sqrt(k <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> n <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> (<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> k <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> n) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> n <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> z <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> z <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> (<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">4</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> n <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> n)) <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> (<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> z <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> z <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> n)</span>
-<span id="cb19-4">    <span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">return</span> c <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> h, c <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> h</span>
-<span id="cb19-5"></span>
-<span id="cb19-6"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"external accuracy 33/34   : 95% CI [</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>wilson(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">33</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">34</span>)[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>]<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.3f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">, </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>wilson(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">33</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">34</span>)[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>]<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.3f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">]"</span>)</span>
-<span id="cb19-7"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"nested CV, 35/38          : 95% CI [</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>wilson(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">35</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">38</span>)[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0</span>]<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.3f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">, </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>wilson(<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">35</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">38</span>)[<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>]<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.3f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">]"</span>)</span>
-<span id="cb19-8"></span>
-<span id="cb19-9">sens, fpr_hi <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">13</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">14</span>, beta.ppf(<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.975</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span>, <span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">20</span>)</span>
-<span id="cb19-10"><span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"</span><span class="ch" style="color: #20794D;
-background-color: null;
-font-style: inherit;">\n</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">specificity 20/20, but 95% upper bound on the false-positive rate: </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>fpr_hi<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.3f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span>
-<span id="cb19-11"><span class="cf" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">for</span> prev, where <span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">in</span> [(<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.35</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"suspected leukemia at referral"</span>), (<span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.02</span>, <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"a broader haematology clinic"</span>)]:</span>
-<span id="cb19-12">    ppv <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> sens <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> prev <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">/</span> (sens <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> prev <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">+</span> fpr_hi <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">*</span> (<span class="dv" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">1</span> <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">-</span> prev))</span>
-<span id="cb19-13">    <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">f"  prevalence </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>prev<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:&gt;5.0%}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;"> (</span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>where<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">): PPV could be as low as </span><span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">{</span>ppv<span class="sc" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">:.2f}</span><span class="ss" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"</span>)</span></code></pre></div>
-</details>
-<div class="cell-output cell-output-stdout">
-<pre><code>external accuracy 33/34   : 95% CI [0.851, 0.995]
-nested CV, 35/38          : 95% CI [0.792, 0.973]
-
-specificity 20/20, but 95% upper bound on the false-positive rate: 0.168
-  prevalence   35% (suspected leukemia at referral): PPV could be as low as 0.75
-  prevalence    2% (a broader haematology clinic): PPV could be as low as 0.10</code></pre>
-</div>
-</div>
-<ul>
-<li>33/34 → 95% CI <strong>[0.851, 0.995]</strong> for true accuracy.</li>
-<li>0/20 false AML calls → consistent with FPR up to <strong>~17%</strong>.</li>
-<li>PPV at 35% prevalence (referral): could be as low as <strong>~0.75</strong>.</li>
-<li>PPV at 2% prevalence (general clinic): could be as low as <strong>~0.10</strong>.</li>
-</ul>
-<p>Accuracy is a property of model <strong>and population</strong>. Signature answers “ALL or AML among patients known to have one of them.”</p>
-<p>Signatures. Answer. One. Question. Prevalence. Changes. The. Answer.</p>
-</section>
-<section id="references" class="level2" data-number="8">
-<h2 data-number="8" class="anchored" data-anchor-id="references"><span class="header-section-number">8</span> References</h2>
-<p><strong>Biology and genomics</strong></p>
-<ul>
-<li>Golub, T. R. et al.&nbsp;(1999). Molecular classification of cancer: class discovery and class prediction by gene expression monitoring. <em>Science</em> 286:531–537.</li>
-<li>Alizadeh, A. A. et al.&nbsp;(2000). Distinct types of diffuse large B-cell lymphoma identified by gene expression profiling. <em>Nature</em> 403:503–511.</li>
-<li>van ’t Veer, L. J. et al.&nbsp;(2002). Gene expression profiling predicts clinical outcome of breast cancer. <em>Nature</em> 415:530–536.</li>
-<li>Subramanian, A. et al.&nbsp;(2005). Gene set enrichment analysis: a knowledge-based approach for interpreting genome-wide expression profiles. <em>PNAS</em> 102:15545–15550.</li>
-<li>Leek, J. T. et al.&nbsp;(2010). Tackling the widespread and critical impact of batch effects in high-throughput data. <em>Nature Reviews Genetics</em> 11:733–739.</li>
-<li>Whalen, S. et al.&nbsp;(2022). Navigating the pitfalls of applying machine learning in genomics. <em>Nature Reviews Genetics</em> 23:169–181.</li>
-</ul>
-<p><strong>Statistics and machine learning</strong></p>
-<ul>
-<li>Tibshirani, R. (1996). Regression shrinkage and selection via the lasso. <em>JRSS-B</em> 58:267–288.</li>
-<li>Benjamini, Y. &amp; Hochberg, Y. (1995). Controlling the false discovery rate: a practical and powerful approach to multiple testing. <em>JRSS-B</em> 57:289–300.</li>
-<li>Zou, H. &amp; Hastie, T. (2005). Regularization and variable selection via the elastic net. <em>JRSS-B</em> 67:301–320.</li>
-<li>Guyon, I., Weston, J., Barnhill, S. &amp; Vapnik, V. (2002). Gene selection for cancer classification using support vector machines. <em>Machine Learning</em> 46:389–422.</li>
-<li>Dudoit, S., Fridlyand, J. &amp; Speed, T. P. (2002). Comparison of discrimination methods for the classification of tumors using gene expression data. <em>JASA</em> 97:77–87.</li>
-<li>Ambroise, C. &amp; McLachlan, G. J. (2002). Selection bias in gene extraction on the basis of microarray gene-expression data. <em>PNAS</em> 99:6562–6566.</li>
-<li>Meinshausen, N. &amp; Bühlmann, P. (2010). Stability selection. <em>JRSS-B</em> 72:417–473.</li>
-<li>Barber, R. F. &amp; Candès, E. J. (2015). Controlling the false discovery rate via knockoffs. <em>Annals of Statistics</em> 43:2055–2085.</li>
-<li>Candès, E., Fan, Y., Janson, L. &amp; Lv, J. (2018). Panning for gold: ‘model-X’ knockoffs for high-dimensional controlled variable selection. <em>JRSS-B</em> 80:551–577.</li>
-<li>Efron, B. &amp; Hastie, T. (2016). <em>Computer Age Statistical Inference: Algorithms, Evidence, and Data Science.</em> Cambridge University Press.</li>
-</ul>
-<p><strong>Data.</strong> The expression matrix is <code>leukemia_big.csv</code> from the <a href="https://hastie.su.domains/CASI_files/DATA/leukemia.html">CASI data page</a>. Probe accessions and sample identifiers come from the original Whitehead files, <code>data_set_ALL_AML_train.csv</code> and <code>data_set_ALL_AML_independent.csv</code>; the URL cited in the 1999 paper is long dead, so this post uses a <a href="https://github.com/dharsandip/Classification_of_Cancer_by_Gene_Expression_Dataset">mirror</a> of them. Both are cached under <code>data/</code> by <code>src/fetch_data.py</code>.</p>
-
-
-</section>
-
- ]]></description>
-  <category>Bioinformatics</category>
-  <category>Machine Learning</category>
-  <category>Python</category>
-  <category>Statistics</category>
-  <guid>https://project-delphi.github.io/ml-blog/posts/dataset-to-biological-signature/</guid>
-  <pubDate>Thu, 27 Aug 2026 05:00:00 GMT</pubDate>
-  <media:content url="https://project-delphi.github.io/ml-blog/posts/dataset-to-biological-signature/cover.png" medium="image" type="image/png" height="76" width="144"/>
 </item>
 </channel>
 </rss>
