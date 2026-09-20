@@ -1,0 +1,108 @@
+---
+title: "Scaling Workflows with Claude Subagents"
+author: "Ravi Kalia"
+date: "2026-09-19"
+categories: [Agents, Claude, LLMs, Architecture]
+description: "How to fan out tasks to specialized Claude subagents, balancing cost savings against communication overhead."
+image: "./cover.png"
+resources:
+  - cover-source.txt
+  - router.py
+  - agents.yaml
+  - requirements.txt
+  - codex_prompt.txt
+format:
+  html:
+    toc: true
+    code-fold: true
+    number-sections: true
+---
+
+![Scaling Workflows with Claude Subagents](./cover.png)
+
+The monolithic agent is dead. As AI agent frameworks evolve, the architectural standard is shifting toward multi-agent orchestration. By breaking down complex workflows and fanning them out to specialized Claude subagents, we can drastically improve performance on discrete tasks.
+
+Here is what a typical fan-out architecture looks like when delegating domain-specific workloads:
+
+```{mermaid}
+graph TD
+    Router[Orchestrator / Main Agent]
+
+    Router -->|Backend Logic| Py[python-scripter]
+    Router -->|UI Components| UI[front-end-specialist]
+    Router -->|ETL Pipelines| DE[data-engineer]
+```
+
+## The Cost-Overhead Tradeoff
+
+Using subagents introduces a fascinating economic tradeoff.
+
+The Cost Reduction: By modularizing the work, you match the model to the task complexity. You do not need claude-3-5-sonnet to perform basic text formatting or simple SQL query generation; you can route those to claude-3-haiku. Mixing models significantly lowers the blended cost per 1,000 tokens.
+
+The Token Penalty: Fanning out increases your absolute token usage. Every time the orchestrator passes a task to a subagent, it must inject the necessary context into the subagent's prompt. When the subagent replies, the orchestrator reads that response to synthesize the final output. This communication overhead can balloon your context window if data payloads are not strictly managed.
+
+## Configuring the Swarm
+
+The power of subagents lies in the configuration. Below is a YAML configuration defining these roles. The model choice maps to the required reasoning depth, while system_prompt enforces the exact constraints needed for the hand-off.
+
+::: {.callout-note}
+This original configuration is historical. Anthropic has [retired Sonnet 3.5 and Haiku 3](https://platform.claude.com/docs/en/about-claude/model-deprecations); the runnable [agents.yaml](./agents.yaml) uses Sonnet 4.6 and Haiku 4.5. Its `tools` entry is omitted because the example generates text and does not execute tools.
+:::
+
+```yaml
+agents:
+  - name: python-scripter
+    model: claude-3-5-sonnet-latest
+    temperature: 0.1
+    system_prompt: "You are a Python backend specialist. Output only valid PEP-8 Python code. Do not provide markdown explanations."
+    tools: [bash_terminal, code_linter]
+
+  - name: data-engineer
+    model: claude-3-haiku-20240307
+    temperature: 0.0
+    system_prompt: "You are a data engineer. Write optimized SQL and Pandas transformations."
+
+  - name: front-end-specialist
+    model: claude-3-5-sonnet-latest
+    temperature: 0.4
+    system_prompt: "You build accessible React components using Tailwind CSS."
+```
+
+By explicitly defining these fields, you ensure weaker, faster models handle lightweight pipeline steps, preserving your compute budget for heavy architectural lifting.
+
+## Running the router
+
+The [Python router](./router.py) implements the [companion prompt](./codex_prompt.txt) with Anthropic's [Messages API](https://platform.claude.com/docs/en/api/python/messages/create). Download it with [agents.yaml](./agents.yaml) and [requirements.txt](./requirements.txt) into one directory.
+
+From the repository root, install the dependencies and run a request:
+
+```bash
+uv venv .venv-claude-subagents
+uv pip install --python .venv-claude-subagents/bin/python \
+  -r posts/claude-subagents/requirements.txt
+export ANTHROPIC_API_KEY="your-api-key"
+.venv-claude-subagents/bin/python posts/claude-subagents/router.py \
+  "Write a SQL query that counts orders by customer"
+```
+
+1. Haiku selects one of the three configured roles from the query.
+2. The selected specialist receives the original query, its configured system prompt, model, and temperature.
+3. The script prints API-reported input and output tokens for both calls, then their totals, to standard error. The generated answer goes to standard output.
+
+The routing call is an added cost compared with directly calling that specialist. The query is sent twice, once for classification and once for the answer; no larger task transcript is copied.
+
+## Constraints
+
+- This implementation chooses one specialist per request. The diagram shows the available delegation paths; simultaneous fan-out and synthesis would require additional calls and token accounting.
+- The opening's claim about a monolithic agent is an architectural opinion, not a measured result. This example provides no evidence of improved quality, latency, or lower total cost. Compare those outcomes against a direct call on the same tasks.
+- Separate API calls have separate context windows. Delegation increases aggregate token use; only the results brought back into an orchestrator's conversation consume that orchestrator's context.
+- Prompts request behavior; they cannot enforce valid Python, correctness, or an output format. This script prints generated code without executing it. Tool names in a configuration do not implement tools.
+- A routing response outside the configured names, an empty response, or an incomplete API response stops the script with an error. The router makes no synthesis call and has no conversation memory.
+- The companion tests use mocked API responses. They check dispatch and token arithmetic, not live model quality or account access. Token counts alone do not establish dollar savings, since models have different input and output prices.
+
+Route. Tasks. Match. Models. Count. Tokens. Measure. Quality. Compare. Costs.
+
+## References
+
+- Anthropic, [Model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations).
+- Anthropic, [Create a Message: Python API reference](https://platform.claude.com/docs/en/api/python/messages/create).
