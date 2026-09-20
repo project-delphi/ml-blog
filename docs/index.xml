@@ -27,245 +27,220 @@
 <figcaption>Scaling Workflows with Claude Subagents</figcaption>
 </figure>
 </div>
-<p>The monolithic agent is dead. As AI agent frameworks evolve, the architectural standard is shifting toward multi-agent orchestration. By breaking down complex workflows and fanning them out to specialized Claude subagents, we can drastically improve performance on discrete tasks.</p>
-<p>Here is what a typical fan-out architecture looks like when delegating domain-specific workloads:</p>
+<p>We can hand a small scripting task to a Claude subagent while keeping the main conversation focused on the larger job. Suppose we are adding a report to a project: the main agent needs to decide what the report should show, but a helper can write the script that checks whether its input files exist.</p>
+<p>That helper needs enough instructions to work independently and a clear way to report back. A <strong>subagent</strong> is a separate assistant for that bounded task, with its own instructions and conversation context. Claude Code supports <a href="https://code.claude.com/docs/en/sub-agents">custom subagents</a> defined in Markdown files.</p>
+<p>The practical observation is that this works, but often uses more tokens because the agents must communicate. We will use three ideas to make that tradeoff concrete: where the configuration lives, what a useful handoff contains, and how to count the extra work.</p>
+<section id="a-small-delegation" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="a-small-delegation"><span class="header-section-number">1</span> A small delegation</h2>
+<p>For the report task, the main agent can ask a scripting helper to implement the file check and return a short account of what changed:</p>
 <div class="cell" data-layout-align="default">
 <div class="cell-output-display">
 <div>
 <p></p><figure class="figure"><p></p>
 <div>
 <pre class="mermaid mermaid-js">graph TD
-    Router[Orchestrator / Main Agent]
-
-    Router --&gt;|Backend Logic| Py[python-scripter]
-    Router --&gt;|UI Components| UI[front-end-specialist]
-    Router --&gt;|ETL Pipelines| DE[data-engineer]
+    Main[Main agent: build the report]
+    Main --&gt;|File paths, requirements, expected result| Helper[scripter-agent: write the file check]
+    Helper --&gt;|Changed files, checks, unresolved issues| Main
 </pre>
 </div>
 <p></p></figure><p></p>
 </div>
 </div>
 </div>
-<section id="the-cost-overhead-tradeoff" class="level2" data-number="1">
-<h2 data-number="1" class="anchored" data-anchor-id="the-cost-overhead-tradeoff"><span class="header-section-number">1</span> The Cost-Overhead Tradeoff</h2>
-<p>Using subagents introduces a fascinating economic tradeoff.</p>
-<p>The Cost Reduction: By modularizing the work, you match the model to the task complexity. You do not need claude-3-5-sonnet to perform basic text formatting or simple SQL query generation; you can route those to claude-3-haiku. Mixing models significantly lowers the blended cost per 1,000 tokens.</p>
-<p>The Token Penalty: Fanning out increases your absolute token usage. Every time the orchestrator passes a task to a subagent, it must inject the necessary context into the subagent’s prompt. When the subagent replies, the orchestrator reads that response to synthesize the final output. This communication overhead can balloon your context window if data payloads are not strictly managed.</p>
+<p>The helper can spend its conversation reading files and checking code; the main agent receives its result. Separate context can make the main conversation easier to manage, but the helper’s reading and reply still consume tokens.</p>
 </section>
-<section id="configuring-the-swarm" class="level2" data-number="2">
-<h2 data-number="2" class="anchored" data-anchor-id="configuring-the-swarm"><span class="header-section-number">2</span> Configuring the Swarm</h2>
-<p>The power of subagents lies in the configuration. Below is a YAML configuration defining these roles. The model choice maps to the required reasoning depth, while system_prompt enforces the exact constraints needed for the hand-off.</p>
-<div class="callout callout-style-default callout-note callout-titled">
-<div class="callout-header d-flex align-content-center">
-<div class="callout-icon-container">
-<i class="callout-icon"></i>
-</div>
-<div class="callout-title-container flex-fill">
-Note
-</div>
-</div>
-<div class="callout-body-container callout-body">
-<p>This original configuration is historical. Anthropic has <a href="https://platform.claude.com/docs/en/about-claude/model-deprecations">retired Sonnet 3.5 and Haiku 3</a>; the runnable <a href="./agents.yaml">agents.yaml</a> uses Sonnet 4.6 and Haiku 4.5. Its <code>tools</code> entry is omitted because the example generates text and does not execute tools.</p>
-</div>
-</div>
-<div class="sourceCode" id="cb1" style="background: #f1f3f5;"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb1-1"><span class="fu" style="color: #4758AB;
-background-color: null;
-font-style: inherit;">agents</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">:</span></span>
-<span id="cb1-2"><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;">  </span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">-</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> </span><span class="fu" style="color: #4758AB;
-background-color: null;
-font-style: inherit;">name</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">:</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> python-scripter</span></span>
-<span id="cb1-3"><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
-background-color: null;
-font-style: inherit;">model</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">:</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> claude-3-5-sonnet-latest</span></span>
-<span id="cb1-4"><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
-background-color: null;
-font-style: inherit;">temperature</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">:</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> </span><span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.1</span></span>
-<span id="cb1-5"><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
-background-color: null;
-font-style: inherit;">system_prompt</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">:</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> </span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"You are a Python backend specialist. Output only valid PEP-8 Python code. Do not provide markdown explanations."</span></span>
-<span id="cb1-6"><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
-background-color: null;
-font-style: inherit;">tools</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">:</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> </span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">[</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;">bash_terminal</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">,</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> code_linter</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">]</span></span>
-<span id="cb1-7"></span>
-<span id="cb1-8"><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;">  </span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">-</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> </span><span class="fu" style="color: #4758AB;
-background-color: null;
-font-style: inherit;">name</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">:</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> data-engineer</span></span>
-<span id="cb1-9"><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
-background-color: null;
-font-style: inherit;">model</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">:</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> claude-3-haiku-20240307</span></span>
-<span id="cb1-10"><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
-background-color: null;
-font-style: inherit;">temperature</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">:</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> </span><span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.0</span></span>
-<span id="cb1-11"><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
-background-color: null;
-font-style: inherit;">system_prompt</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">:</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> </span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"You are a data engineer. Write optimized SQL and Pandas transformations."</span></span>
-<span id="cb1-12"></span>
-<span id="cb1-13"><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;">  </span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">-</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> </span><span class="fu" style="color: #4758AB;
-background-color: null;
-font-style: inherit;">name</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">:</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> front-end-specialist</span></span>
-<span id="cb1-14"><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
-background-color: null;
-font-style: inherit;">model</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">:</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> claude-3-5-sonnet-latest</span></span>
-<span id="cb1-15"><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
-background-color: null;
-font-style: inherit;">temperature</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">:</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> </span><span class="fl" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">0.4</span></span>
-<span id="cb1-16"><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;">    </span><span class="fu" style="color: #4758AB;
-background-color: null;
-font-style: inherit;">system_prompt</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">:</span><span class="at" style="color: #657422;
-background-color: null;
-font-style: inherit;"> </span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"You build accessible React components using Tailwind CSS."</span></span></code></pre></div>
-<p>By explicitly defining these fields, you ensure weaker, faster models handle lightweight pipeline steps, preserving your compute budget for heavy architectural lifting.</p>
+<section id="configuration-location" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="configuration-location"><span class="header-section-number">2</span> Configuration location</h2>
+<p>For a project-specific Claude Code subagent, create <strong><code>.claude/agents/scripter-agent.md</code> under the root of the project where we want to use it</strong>. For this blog repository, that means:</p>
+<pre class="text"><code>ml-blog/
+├── .claude/
+│   └── agents/
+│       └── scripter-agent.md     # Claude Code agent definition
+└── posts/
+    └── claude-subagents/
+        ├── index.qmd           # This article
+        ├── router.py           # Separate API example
+        └── agents.yaml         # Configuration read by router.py</code></pre>
+<p>The article directory <code>posts/claude-subagents/</code> holds the published example. Saving <code>scripter-agent.md</code> there alone does not register a Claude Code subagent.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Location</th>
+<th>Intended use</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>&lt;project-root&gt;/.claude/agents/scripter-agent.md</code></td>
+<td>A helper for this project; commit it to share with collaborators.</td>
+</tr>
+<tr class="even">
+<td><code>~/.claude/agents/scripter-agent.md</code></td>
+<td>A personal helper available across projects on this machine. <code>~</code> means the home directory.</td>
+</tr>
+<tr class="odd">
+<td><code>posts/claude-subagents/agents.yaml</code></td>
+<td>The companion Python router’s configuration; a different format and loader.</td>
+</tr>
+</tbody>
+</table>
+<p>Claude Code’s <a href="https://code.claude.com/docs/en/sub-agents#choose-the-subagent-scope">scope rules</a> give project definitions priority over personal definitions with the same name.</p>
+<section id="a-complete-agent-file" class="level3" data-number="2.1">
+<h3 data-number="2.1" class="anchored" data-anchor-id="a-complete-agent-file"><span class="header-section-number">2.1</span> A complete agent file</h3>
+<p>From the project root, create the directory:</p>
+<div class="sourceCode" id="cb2" style="background: #f1f3f5;"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">mkdir</span> <span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">-p</span> .claude/agents</span></code></pre></div>
+<p>Save this content as <code>.claude/agents/scripter-agent.md</code>. The YAML between the <code>---</code> lines configures the agent; the Markdown body supplies its instructions.</p>
+<div class="sourceCode" id="cb3" style="background: #f1f3f5;"><pre class="sourceCode markdown code-with-copy"><code class="sourceCode markdown"><span id="cb3-1"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">---</span></span>
+<span id="cb3-2"><span class="an" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">name:</span><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"> scripter-agent</span></span>
+<span id="cb3-3"><span class="an" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">description:</span><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"> Implements small Python scripts with a defined input and output. Use for bounded scripting tasks.</span></span>
+<span id="cb3-4"><span class="an" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">tools:</span><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"> Read, Glob, Grep, Write, Edit, Bash</span></span>
+<span id="cb3-5"><span class="an" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">model:</span><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"> sonnet</span></span>
+<span id="cb3-6"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">---</span></span>
+<span id="cb3-7"></span>
+<span id="cb3-8">Implement the requested script using the project's existing conventions.</span>
+<span id="cb3-9"></span>
+<span id="cb3-10"><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">1. </span>Read the relevant project instructions and nearby code.</span>
+<span id="cb3-11"><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">2. </span>Confirm the requested inputs, outputs, and failure behavior.</span>
+<span id="cb3-12">   If an essential requirement is missing, report it before editing.</span>
+<span id="cb3-13"><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">3. </span>Make the smallest change that completes the task.</span>
+<span id="cb3-14"><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">4. </span>Run a focused check using the project's configured environment.</span>
+<span id="cb3-15"></span>
+<span id="cb3-16">Return the changed file paths, the check command and result, and any</span>
+<span id="cb3-17">unresolved issue. Keep the reply concise; do not paste entire files or logs.</span></code></pre></div>
+<ul>
+<li><strong><code>name</code></strong> identifies the helper when we request it.</li>
+<li><strong><code>description</code></strong> tells Claude when to delegate.</li>
+<li><strong><code>tools</code></strong> lists available tools; normal permission checks still apply.</li>
+<li><strong><code>model</code></strong> selects a model alias; <code>sonnet</code> is a starting choice for this example.</li>
+<li><strong>The body</strong> describes the work and the report we want back. A prompt still needs verification: requesting correct code does not guarantee it.</li>
+</ul>
+<p>Start Claude Code from the project root after saving the file. If an existing session cannot find a newly created agent directory, restart it; see the <a href="https://code.claude.com/docs/en/sub-agents#write-subagent-files">file-loading instructions</a>.</p>
 </section>
-<section id="running-the-router" class="level2" data-number="3">
-<h2 data-number="3" class="anchored" data-anchor-id="running-the-router"><span class="header-section-number">3</span> Running the router</h2>
-<p>The <a href="./router.py">Python router</a> implements the <a href="./codex_prompt.txt">companion prompt</a> with Anthropic’s <a href="https://platform.claude.com/docs/en/api/python/messages/create">Messages API</a>. Download it with <a href="./agents.yaml">agents.yaml</a> and <a href="./requirements.txt">requirements.txt</a> into one directory.</p>
-<p>From the repository root, install the dependencies and run a request:</p>
-<div class="sourceCode" id="cb2" style="background: #f1f3f5;"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><span class="ex" style="color: null;
+<section id="a-first-handoff" class="level3" data-number="2.2">
+<h3 data-number="2.2" class="anchored" data-anchor-id="a-first-handoff"><span class="header-section-number">2.2</span> A first handoff</h3>
+<p>Try this request in a disposable project or on a feature branch:</p>
+<pre class="text"><code>Use scripter-agent to create scripts/check_inputs.py.
+It should accept file paths as command-line arguments and print each
+missing path. Exit 0 if every path exists, 1 if any path is missing,
+and 2 if no paths are supplied. Use only the standard library.
+Check the existing-file, missing-file, and no-argument cases.
+Return the changed paths, check results, and unresolved issues.</code></pre>
+<p>We can judge the result without guessing what “done” means: the three cases have specified exit codes. This is an illustrative task, not a recorded agent run; verify the returned script and checks before using it.</p>
+<p>Compare that handoff with “use a subagent to help with the report.” The vague request leaves the helper to rediscover the task, ask follow-up questions, or make assumptions that the main agent must undo. Those extra turns are both a correctness risk and a token cost.</p>
+</section>
+</section>
+<section id="communication-and-token-use" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="communication-and-token-use"><span class="header-section-number">3</span> Communication and token use</h2>
+<p>Delegation introduces work around the task: preparing the handoff, loading instructions, reading relevant files, writing a report, and interpreting that report. A shorter main conversation does not establish lower total usage. Anthropic describes this benefit as keeping work in a <a href="https://claude.com/blog/subagents-in-claude-code">separate context window</a>.</p>
+<section id="a-token-budget-exercise" class="level3" data-number="3.1">
+<h3 data-number="3.1" class="anchored" data-anchor-id="a-token-budget-exercise"><span class="header-section-number">3.1</span> A token budget exercise</h3>
+<p>Suppose a direct solution uses 2,000 tokens. The following numbers are invented for arithmetic, not measurements of Claude Code; they represent aggregate input and output tokens for a hypothetical delegated solution.</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Work</th>
+<th style="text-align: right;">Illustrative tokens</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Main agent prepares the handoff</td>
+<td style="text-align: right;">300</td>
+</tr>
+<tr class="even">
+<td>Helper reads instructions and task context</td>
+<td style="text-align: right;">900</td>
+</tr>
+<tr class="odd">
+<td>Helper performs the task and writes its report</td>
+<td style="text-align: right;">1,800</td>
+</tr>
+<tr class="even">
+<td>Main agent reads the report and integrates the result</td>
+<td style="text-align: right;">400</td>
+</tr>
+<tr class="odd">
+<td><strong>Total</strong></td>
+<td style="text-align: right;"><strong>3,400</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The delegated version uses 1,400 extra tokens: a 70% increase over 2,000. The helper may have completed its assignment perfectly; successful delegation and increased token use can both be true.</p>
+<p>Before looking at a bill, separate three questions:</p>
+<ol type="1">
+<li><strong>Tokens:</strong> how much input and output did all calls consume?</li>
+<li><strong>Cost:</strong> what rates apply to those tokens, including the models used and any caching?</li>
+<li><strong>Time and quality:</strong> did delegation finish useful work sooner, or produce a better checked result?</li>
+</ol>
+<p>A cheaper helper can lower spending even when token use rises, but repeated context and follow-up turns can erase that saving. Parallel work can reduce elapsed time only when tasks can proceed independently; our file-check handoff alone does not demonstrate a speedup.</p>
+</section>
+<section id="choosing-what-to-delegate" class="level3" data-number="3.2">
+<h3 data-number="3.2" class="anchored" data-anchor-id="choosing-what-to-delegate"><span class="header-section-number">3.2</span> Choosing what to delegate</h3>
+<p>Use the report task as a quick exercise: would we delegate a one-line heading change, or a file check with three specified outcomes?</p>
+<ul>
+<li><strong>One-line heading change:</strong> the main agent already has the context. Describing and reviewing a separate assignment may cost more effort than making the edit.</li>
+<li><strong>Bounded file check:</strong> the input, output, and success conditions fit in a short handoff. It is a more plausible candidate, particularly when the main agent has independent report work to do.</li>
+<li><strong>A change whose requirements keep shifting:</strong> settle the requirements before splitting the implementation among helpers.</li>
+</ul>
+<p>To limit communication, pass relevant paths and acceptance criteria, ask for changed files and check results, and keep raw logs out of the returned summary. If the helper needs repeated explanations, reconsider whether the task can stand on its own.</p>
+</section>
+</section>
+<section id="a-measurable-api-example" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="a-measurable-api-example"><span class="header-section-number">4</span> A measurable API example</h2>
+<p>The companion <a href="./router.py">Python router</a> makes the added routing cost visible using Anthropic’s <a href="https://platform.claude.com/docs/en/api/python/messages/create">Messages API</a>. It implements the <a href="./codex_prompt.txt">companion prompt</a>, selecting one of three roles: Python scripting, data engineering, or front-end work.</p>
+<p>This is a separate program: it reads <a href="./agents.yaml">agents.yaml</a> beside <code>router.py</code> and does not load <code>.claude/agents/*.md</code>. Its configuration currently selects Sonnet 4.6 for scripting and front-end work and Haiku 4.5 for data engineering; the router also uses the data engineer’s model to choose a role.</p>
+<p>From this repository’s root, install the dependencies and run a request. This command makes live API calls and requires an Anthropic API key:</p>
+<div class="sourceCode" id="cb5" style="background: #f1f3f5;"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><span class="ex" style="color: null;
 background-color: null;
 font-style: inherit;">uv</span> venv .venv-claude-subagents</span>
-<span id="cb2-2"><span class="ex" style="color: null;
+<span id="cb5-2"><span class="ex" style="color: null;
 background-color: null;
 font-style: inherit;">uv</span> pip install <span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;">--python</span> .venv-claude-subagents/bin/python <span class="dt" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">\</span></span>
-<span id="cb2-3">  <span class="at" style="color: #657422;
+<span id="cb5-3">  <span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;">-r</span> posts/claude-subagents/requirements.txt</span>
-<span id="cb2-4"><span class="bu" style="color: null;
+<span id="cb5-4"><span class="bu" style="color: null;
 background-color: null;
 font-style: inherit;">export</span> <span class="va" style="color: #111111;
 background-color: null;
@@ -274,37 +249,39 @@ background-color: null;
 font-style: inherit;">=</span><span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"your-api-key"</span></span>
-<span id="cb2-5"><span class="ex" style="color: null;
+<span id="cb5-5"><span class="ex" style="color: null;
 background-color: null;
 font-style: inherit;">.venv-claude-subagents/bin/python</span> posts/claude-subagents/router.py <span class="dt" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">\</span></span>
-<span id="cb2-6">  <span class="st" style="color: #20794D;
+<span id="cb5-6">  <span class="st" style="color: #20794D;
 background-color: null;
-font-style: inherit;">"Write a SQL query that counts orders by customer"</span></span></code></pre></div>
+font-style: inherit;">"For orders(customer_id, order_id), write SQL counting orders by customer"</span></span></code></pre></div>
+<p>For a standalone copy, download <code>router.py</code>, <code>agents.yaml</code>, and <a href="./requirements.txt">requirements.txt</a> into one directory and adjust the command paths to that directory. The default configuration path is relative to the script, so moving the script and YAML together preserves it; <code>--config /path/to/agents.yaml</code> selects another file.</p>
+<p>Before running it, predict the number of model calls: <strong>two</strong>, even though only one specialist answers.</p>
 <ol type="1">
 <li>Haiku selects one of the three configured roles from the query.</li>
 <li>The selected specialist receives the original query, its configured system prompt, model, and temperature.</li>
 <li>The script prints API-reported input and output tokens for both calls, then their totals, to standard error. The generated answer goes to standard output.</li>
 </ol>
-<p>The routing call is an added cost compared with directly calling that specialist. The query is sent twice, once for classification and once for the answer; no larger task transcript is copied.</p>
+<p>The query is sent twice, once for classification and once for the answer; no larger task transcript is copied. The printed router usage is an observable overhead compared with directly asking the selected specialist.</p>
+<p>For an arithmetic check, if the router reports 120 input and 8 output tokens, and the specialist reports 180 input and 92 output tokens, the totals should be 300 input, 100 output, and 400 combined. These are illustrative counts, not captured output; a real run prints its own API-reported usage.</p>
 </section>
-<section id="constraints" class="level2" data-number="4">
-<h2 data-number="4" class="anchored" data-anchor-id="constraints"><span class="header-section-number">4</span> Constraints</h2>
+<section id="constraints" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="constraints"><span class="header-section-number">5</span> Constraints</h2>
 <ul>
-<li>This implementation chooses one specialist per request. The diagram shows the available delegation paths; simultaneous fan-out and synthesis would require additional calls and token accounting.</li>
-<li>The opening’s claim about a monolithic agent is an architectural opinion, not a measured result. This example provides no evidence of improved quality, latency, or lower total cost. Compare those outcomes against a direct call on the same tasks.</li>
-<li>Separate API calls have separate context windows. Delegation increases aggregate token use; only the results brought back into an orchestrator’s conversation consume that orchestrator’s context.</li>
-<li>Prompts request behavior; they cannot enforce valid Python, correctness, or an output format. This script prints generated code without executing it. Tool names in a configuration do not implement tools.</li>
+<li>The API router chooses one specialist per request. It does not run Claude Code subagents, execute tools, or implement the return-and-review step in the opening diagram. It prints generated text without executing it.</li>
+<li>Parallel workers and a final synthesis would require additional calls and token accounting. This example establishes no quality, latency, or dollar savings; compare those against direct calls on equivalent tasks.</li>
 <li>A routing response outside the configured names, an empty response, or an incomplete API response stops the script with an error. The router makes no synthesis call and has no conversation memory.</li>
 <li>The companion tests use mocked API responses. They check dispatch and token arithmetic, not live model quality or account access. Token counts alone do not establish dollar savings, since models have different input and output prices.</li>
 </ul>
-<p>Route. Tasks. Match. Models. Count. Tokens. Measure. Quality. Compare. Costs.</p>
+<p>Bound. Tasks. Place. Configs. Limit. Handoffs. Count. Tokens. Check. Results.</p>
 </section>
-<section id="references" class="level2" data-number="5">
-<h2 data-number="5" class="anchored" data-anchor-id="references"><span class="header-section-number">5</span> References</h2>
+<section id="references" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="references"><span class="header-section-number">6</span> References</h2>
 <ul>
-<li>Anthropic, <a href="https://platform.claude.com/docs/en/about-claude/model-deprecations">Model deprecations</a>.</li>
+<li>Anthropic, <a href="https://code.claude.com/docs/en/sub-agents">Create custom subagents</a>.</li>
+<li>Anthropic, <a href="https://claude.com/blog/subagents-in-claude-code">How and when to use subagents in Claude Code</a>.</li>
 <li>Anthropic, <a href="https://platform.claude.com/docs/en/api/python/messages/create">Create a Message: Python API reference</a>.</li>
 </ul>
 

@@ -3,7 +3,7 @@ title: "Scaling Workflows with Claude Subagents"
 author: "Ravi Kalia"
 date: "2026-09-19"
 categories: [Agents, Claude, LLMs, Architecture]
-description: "How to fan out tasks to specialized Claude subagents, balancing cost savings against communication overhead."
+description: "Set up a Claude Code subagent, give it a clear task, and understand why useful delegation can still use more tokens."
 image: "./cover.png"
 resources:
   - cover-source.txt
@@ -20,61 +20,149 @@ format:
 
 ![Scaling Workflows with Claude Subagents](./cover.png)
 
-The monolithic agent is dead. As AI agent frameworks evolve, the architectural standard is shifting toward multi-agent orchestration. By breaking down complex workflows and fanning them out to specialized Claude subagents, we can drastically improve performance on discrete tasks.
+We can hand a small scripting task to a Claude subagent while keeping the main conversation focused on the larger job. Suppose we are adding a report to a project: the main agent needs to decide what the report should show, but a helper can write the script that checks whether its input files exist.
 
-Here is what a typical fan-out architecture looks like when delegating domain-specific workloads:
+That helper needs enough instructions to work independently and a clear way to report back. A **subagent** is a separate assistant for that bounded task, with its own instructions and conversation context. Claude Code supports [custom subagents](https://code.claude.com/docs/en/sub-agents) defined in Markdown files.
+
+The practical observation is that this works, but often uses more tokens because the agents must communicate. We will use three ideas to make that tradeoff concrete: where the configuration lives, what a useful handoff contains, and how to count the extra work.
+
+## A small delegation
+
+For the report task, the main agent can ask a scripting helper to implement the file check and return a short account of what changed:
 
 ```{mermaid}
 graph TD
-    Router[Orchestrator / Main Agent]
-
-    Router -->|Backend Logic| Py[python-scripter]
-    Router -->|UI Components| UI[front-end-specialist]
-    Router -->|ETL Pipelines| DE[data-engineer]
+    Main[Main agent: build the report]
+    Main -->|File paths, requirements, expected result| Helper[scripter-agent: write the file check]
+    Helper -->|Changed files, checks, unresolved issues| Main
 ```
 
-## The Cost-Overhead Tradeoff
+The helper can spend its conversation reading files and checking code; the main agent receives its result. Separate context can make the main conversation easier to manage, but the helper's reading and reply still consume tokens.
 
-Using subagents introduces a fascinating economic tradeoff.
+## Configuration location
 
-The Cost Reduction: By modularizing the work, you match the model to the task complexity. You do not need claude-3-5-sonnet to perform basic text formatting or simple SQL query generation; you can route those to claude-3-haiku. Mixing models significantly lowers the blended cost per 1,000 tokens.
+For a project-specific Claude Code subagent, create **`.claude/agents/scripter-agent.md` under the root of the project where we want to use it**. For this blog repository, that means:
 
-The Token Penalty: Fanning out increases your absolute token usage. Every time the orchestrator passes a task to a subagent, it must inject the necessary context into the subagent's prompt. When the subagent replies, the orchestrator reads that response to synthesize the final output. This communication overhead can balloon your context window if data payloads are not strictly managed.
-
-## Configuring the Swarm
-
-The power of subagents lies in the configuration. Below is a YAML configuration defining these roles. The model choice maps to the required reasoning depth, while system_prompt enforces the exact constraints needed for the hand-off.
-
-::: {.callout-note}
-This original configuration is historical. Anthropic has [retired Sonnet 3.5 and Haiku 3](https://platform.claude.com/docs/en/about-claude/model-deprecations); the runnable [agents.yaml](./agents.yaml) uses Sonnet 4.6 and Haiku 4.5. Its `tools` entry is omitted because the example generates text and does not execute tools.
-:::
-
-```yaml
-agents:
-  - name: python-scripter
-    model: claude-3-5-sonnet-latest
-    temperature: 0.1
-    system_prompt: "You are a Python backend specialist. Output only valid PEP-8 Python code. Do not provide markdown explanations."
-    tools: [bash_terminal, code_linter]
-
-  - name: data-engineer
-    model: claude-3-haiku-20240307
-    temperature: 0.0
-    system_prompt: "You are a data engineer. Write optimized SQL and Pandas transformations."
-
-  - name: front-end-specialist
-    model: claude-3-5-sonnet-latest
-    temperature: 0.4
-    system_prompt: "You build accessible React components using Tailwind CSS."
+```text
+ml-blog/
+├── .claude/
+│   └── agents/
+│       └── scripter-agent.md     # Claude Code agent definition
+└── posts/
+    └── claude-subagents/
+        ├── index.qmd           # This article
+        ├── router.py           # Separate API example
+        └── agents.yaml         # Configuration read by router.py
 ```
 
-By explicitly defining these fields, you ensure weaker, faster models handle lightweight pipeline steps, preserving your compute budget for heavy architectural lifting.
+The article directory `posts/claude-subagents/` holds the published example. Saving `scripter-agent.md` there alone does not register a Claude Code subagent.
 
-## Running the router
+| Location | Intended use |
+|---|---|
+| `<project-root>/.claude/agents/scripter-agent.md` | A helper for this project; commit it to share with collaborators. |
+| `~/.claude/agents/scripter-agent.md` | A personal helper available across projects on this machine. `~` means the home directory. |
+| `posts/claude-subagents/agents.yaml` | The companion Python router's configuration; a different format and loader. |
 
-The [Python router](./router.py) implements the [companion prompt](./codex_prompt.txt) with Anthropic's [Messages API](https://platform.claude.com/docs/en/api/python/messages/create). Download it with [agents.yaml](./agents.yaml) and [requirements.txt](./requirements.txt) into one directory.
+Claude Code's [scope rules](https://code.claude.com/docs/en/sub-agents#choose-the-subagent-scope) give project definitions priority over personal definitions with the same name.
 
-From the repository root, install the dependencies and run a request:
+### A complete agent file
+
+From the project root, create the directory:
+
+```bash
+mkdir -p .claude/agents
+```
+
+Save this content as `.claude/agents/scripter-agent.md`. The YAML between the `---` lines configures the agent; the Markdown body supplies its instructions.
+
+```markdown
+---
+name: scripter-agent
+description: Implements small Python scripts with a defined input and output. Use for bounded scripting tasks.
+tools: Read, Glob, Grep, Write, Edit, Bash
+model: sonnet
+---
+
+Implement the requested script using the project's existing conventions.
+
+1. Read the relevant project instructions and nearby code.
+2. Confirm the requested inputs, outputs, and failure behavior.
+   If an essential requirement is missing, report it before editing.
+3. Make the smallest change that completes the task.
+4. Run a focused check using the project's configured environment.
+
+Return the changed file paths, the check command and result, and any
+unresolved issue. Keep the reply concise; do not paste entire files or logs.
+```
+
+- **`name`** identifies the helper when we request it.
+- **`description`** tells Claude when to delegate.
+- **`tools`** lists available tools; normal permission checks still apply.
+- **`model`** selects a model alias; `sonnet` is a starting choice for this example.
+- **The body** describes the work and the report we want back. A prompt still needs verification: requesting correct code does not guarantee it.
+
+Start Claude Code from the project root after saving the file. If an existing session cannot find a newly created agent directory, restart it; see the [file-loading instructions](https://code.claude.com/docs/en/sub-agents#write-subagent-files).
+
+### A first handoff
+
+Try this request in a disposable project or on a feature branch:
+
+```text
+Use scripter-agent to create scripts/check_inputs.py.
+It should accept file paths as command-line arguments and print each
+missing path. Exit 0 if every path exists, 1 if any path is missing,
+and 2 if no paths are supplied. Use only the standard library.
+Check the existing-file, missing-file, and no-argument cases.
+Return the changed paths, check results, and unresolved issues.
+```
+
+We can judge the result without guessing what "done" means: the three cases have specified exit codes. This is an illustrative task, not a recorded agent run; verify the returned script and checks before using it.
+
+Compare that handoff with "use a subagent to help with the report." The vague request leaves the helper to rediscover the task, ask follow-up questions, or make assumptions that the main agent must undo. Those extra turns are both a correctness risk and a token cost.
+
+## Communication and token use
+
+Delegation introduces work around the task: preparing the handoff, loading instructions, reading relevant files, writing a report, and interpreting that report. A shorter main conversation does not establish lower total usage. Anthropic describes this benefit as keeping work in a [separate context window](https://claude.com/blog/subagents-in-claude-code).
+
+### A token budget exercise
+
+Suppose a direct solution uses 2,000 tokens. The following numbers are invented for arithmetic, not measurements of Claude Code; they represent aggregate input and output tokens for a hypothetical delegated solution.
+
+| Work | Illustrative tokens |
+|---|---:|
+| Main agent prepares the handoff | 300 |
+| Helper reads instructions and task context | 900 |
+| Helper performs the task and writes its report | 1,800 |
+| Main agent reads the report and integrates the result | 400 |
+| **Total** | **3,400** |
+
+The delegated version uses 1,400 extra tokens: a 70% increase over 2,000. The helper may have completed its assignment perfectly; successful delegation and increased token use can both be true.
+
+Before looking at a bill, separate three questions:
+
+1. **Tokens:** how much input and output did all calls consume?
+2. **Cost:** what rates apply to those tokens, including the models used and any caching?
+3. **Time and quality:** did delegation finish useful work sooner, or produce a better checked result?
+
+A cheaper helper can lower spending even when token use rises, but repeated context and follow-up turns can erase that saving. Parallel work can reduce elapsed time only when tasks can proceed independently; our file-check handoff alone does not demonstrate a speedup.
+
+### Choosing what to delegate
+
+Use the report task as a quick exercise: would we delegate a one-line heading change, or a file check with three specified outcomes?
+
+- **One-line heading change:** the main agent already has the context. Describing and reviewing a separate assignment may cost more effort than making the edit.
+- **Bounded file check:** the input, output, and success conditions fit in a short handoff. It is a more plausible candidate, particularly when the main agent has independent report work to do.
+- **A change whose requirements keep shifting:** settle the requirements before splitting the implementation among helpers.
+
+To limit communication, pass relevant paths and acceptance criteria, ask for changed files and check results, and keep raw logs out of the returned summary. If the helper needs repeated explanations, reconsider whether the task can stand on its own.
+
+## A measurable API example
+
+The companion [Python router](./router.py) makes the added routing cost visible using Anthropic's [Messages API](https://platform.claude.com/docs/en/api/python/messages/create). It implements the [companion prompt](./codex_prompt.txt), selecting one of three roles: Python scripting, data engineering, or front-end work.
+
+This is a separate program: it reads [agents.yaml](./agents.yaml) beside `router.py` and does not load `.claude/agents/*.md`. Its configuration currently selects Sonnet 4.6 for scripting and front-end work and Haiku 4.5 for data engineering; the router also uses the data engineer's model to choose a role.
+
+From this repository's root, install the dependencies and run a request. This command makes live API calls and requires an Anthropic API key:
 
 ```bash
 uv venv .venv-claude-subagents
@@ -82,27 +170,32 @@ uv pip install --python .venv-claude-subagents/bin/python \
   -r posts/claude-subagents/requirements.txt
 export ANTHROPIC_API_KEY="your-api-key"
 .venv-claude-subagents/bin/python posts/claude-subagents/router.py \
-  "Write a SQL query that counts orders by customer"
+  "For orders(customer_id, order_id), write SQL counting orders by customer"
 ```
+
+For a standalone copy, download `router.py`, `agents.yaml`, and [requirements.txt](./requirements.txt) into one directory and adjust the command paths to that directory. The default configuration path is relative to the script, so moving the script and YAML together preserves it; `--config /path/to/agents.yaml` selects another file.
+
+Before running it, predict the number of model calls: **two**, even though only one specialist answers.
 
 1. Haiku selects one of the three configured roles from the query.
 2. The selected specialist receives the original query, its configured system prompt, model, and temperature.
 3. The script prints API-reported input and output tokens for both calls, then their totals, to standard error. The generated answer goes to standard output.
 
-The routing call is an added cost compared with directly calling that specialist. The query is sent twice, once for classification and once for the answer; no larger task transcript is copied.
+The query is sent twice, once for classification and once for the answer; no larger task transcript is copied. The printed router usage is an observable overhead compared with directly asking the selected specialist.
+
+For an arithmetic check, if the router reports 120 input and 8 output tokens, and the specialist reports 180 input and 92 output tokens, the totals should be 300 input, 100 output, and 400 combined. These are illustrative counts, not captured output; a real run prints its own API-reported usage.
 
 ## Constraints
 
-- This implementation chooses one specialist per request. The diagram shows the available delegation paths; simultaneous fan-out and synthesis would require additional calls and token accounting.
-- The opening's claim about a monolithic agent is an architectural opinion, not a measured result. This example provides no evidence of improved quality, latency, or lower total cost. Compare those outcomes against a direct call on the same tasks.
-- Separate API calls have separate context windows. Delegation increases aggregate token use; only the results brought back into an orchestrator's conversation consume that orchestrator's context.
-- Prompts request behavior; they cannot enforce valid Python, correctness, or an output format. This script prints generated code without executing it. Tool names in a configuration do not implement tools.
+- The API router chooses one specialist per request. It does not run Claude Code subagents, execute tools, or implement the return-and-review step in the opening diagram. It prints generated text without executing it.
+- Parallel workers and a final synthesis would require additional calls and token accounting. This example establishes no quality, latency, or dollar savings; compare those against direct calls on equivalent tasks.
 - A routing response outside the configured names, an empty response, or an incomplete API response stops the script with an error. The router makes no synthesis call and has no conversation memory.
 - The companion tests use mocked API responses. They check dispatch and token arithmetic, not live model quality or account access. Token counts alone do not establish dollar savings, since models have different input and output prices.
 
-Route. Tasks. Match. Models. Count. Tokens. Measure. Quality. Compare. Costs.
+Bound. Tasks. Place. Configs. Limit. Handoffs. Count. Tokens. Check. Results.
 
 ## References
 
-- Anthropic, [Model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations).
+- Anthropic, [Create custom subagents](https://code.claude.com/docs/en/sub-agents).
+- Anthropic, [How and when to use subagents in Claude Code](https://claude.com/blog/subagents-in-claude-code).
 - Anthropic, [Create a Message: Python API reference](https://platform.claude.com/docs/en/api/python/messages/create).
