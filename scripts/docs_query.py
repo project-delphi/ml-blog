@@ -49,6 +49,17 @@ def emit(lines: list[str]) -> None:
         print(f"... {len(lines) - MAX_LINES} more line(s) suppressed")
 
 
+def compile_pattern(args) -> re.Pattern[str]:
+    """The pattern, literal under -F. A bad regex is a message, not a traceback."""
+    raw = re.escape(args.pattern) if getattr(args, "fixed", False) else args.pattern
+    try:
+        return re.compile(raw)
+    except re.error as exc:
+        raise SystemExit(
+            f"bad pattern {args.pattern!r}: {exc}. Pass -F to match it literally."
+        )
+
+
 def resolve(path: str) -> Path:
     """Accept a repo-relative or docs-relative path; refuse to leave the repo."""
     p = (ROOT / path).resolve()
@@ -101,7 +112,7 @@ def iter_matches(path: Path, pattern: re.Pattern[str], limit: int) -> list[str]:
 
 
 def cmd_count(args) -> int:
-    pat = re.compile(re.escape(args.pattern) if args.fixed else args.pattern)
+    pat = compile_pattern(args)
     out = []
     for raw in args.paths:
         p = resolve(raw)
@@ -111,7 +122,7 @@ def cmd_count(args) -> int:
 
 
 def cmd_files(args) -> int:
-    pat = re.compile(re.escape(args.pattern) if args.fixed else args.pattern)
+    pat = compile_pattern(args)
     hits = []
     for raw in sorted(globlib.glob(args.glob, root_dir=ROOT, recursive=True)):
         # a glob can escape the repo with ..; resolve() refuses those
@@ -138,7 +149,7 @@ def cmd_exists(args) -> int:
 
 
 def cmd_excerpt(args) -> int:
-    pat = re.compile(re.escape(args.pattern) if args.fixed else args.pattern)
+    pat = compile_pattern(args)
     p = resolve(args.path)
     if not p.is_file():
         print(f"missing {args.path}")
@@ -178,7 +189,10 @@ def cmd_widget(args) -> int:
     and a project render can keep serving the old bundle with no warning. Two
     shapes exist and the evidence differs. A kit post publishes the sidecar as
     a resource, so the published file can be compared byte for byte and the
-    page only has to reference it. An older post prints the bundle into an
+    page only has to reference it -- along with any widget-data/*.js payload,
+    since a bundle that loads its numbers from one is only as current as that
+    file, and a payload that never published renders an empty widget with no
+    error. An older post prints the bundle into an
     inline <script> from a Python cell, so there is no file to compare and the
     only evidence is whether the current source's own lines are in the page.
     Counting a mount id would prove nothing either way: the mount div lives in
@@ -208,6 +222,24 @@ def cmd_widget(args) -> int:
         linked = count_in(page, re.compile(r'src="[^"]*widgets\.js"'))
         rows.append(f"page loads it: {'yes' if linked else 'NO'}")
         stale = stale or not linked
+        # A bundle that reads its numbers from a payload sidecar is only as
+        # current as that sidecar. Checking widgets.js alone would pass a post
+        # whose data file was never published, which renders an empty widget.
+        for data_src in sorted((POSTS / slug / "widget-data").glob("*.js")):
+            rel = f"widget-data/{data_src.name}"
+            data_out = DOCS / "posts" / slug / rel
+            if not data_out.is_file():
+                rows.append(f"payload {rel}: NOT PUBLISHED")
+                stale = True
+                continue
+            same_data = data_out.read_bytes() == data_src.read_bytes()
+            rows.append(
+                f"payload {rel}: {'identical' if same_data else 'DIFFERS'} from source"
+            )
+            stale = stale or not same_data
+            ref = count_in(page, re.compile(rf'src="[^"]*{re.escape(rel)}"'))
+            rows.append(f"page loads {rel}: {'yes' if ref else 'NO'}")
+            stale = stale or not ref
     else:
         rows.append("inline bundle: no published sidecar, checking the page text")
         markers = source_markers(text)
@@ -234,7 +266,11 @@ def cmd_widget(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     fixed = argparse.ArgumentParser(add_help=False)
     fixed.add_argument(
-        "-F", "--fixed", action="store_true", help="literal pattern, not regex"
+        "-F",
+        "--fixed",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="literal pattern, not regex",
     )
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0], parents=[fixed])
     sub = ap.add_subparsers(dest="cmd", required=True)
