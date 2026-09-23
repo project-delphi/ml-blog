@@ -42,12 +42,12 @@ The rule lives in the database update itself, so a stale dashboard or a double c
 ```python
     def approve(self, question_id):
         """Approve a verified question. Anything else is left alone."""
-        row = self.conn.execute(
+        rows = self._all(
             "update questions set status = 'approved'"
             " where id = %s and status = 'verified' returning id",
             [question_id],
-        ).fetchone()
-        return row is not None
+        )
+        return bool(rows)
 ```
 
 Launching a room checks again. `load_questions` raises `NotApproved` if any question offered to a room has any other status, and `POST /rooms` turns that into a `409`. Two checks for one rule is deliberate: the triage screen is where the professor decides, and the room is where a mistake would reach students.
@@ -126,17 +126,18 @@ async def lock_when_due(room: Room) -> None:
 
 The transport is FastAPI WebSockets. Supabase Realtime's broadcast channels would also carry the messages, but they relay between clients. Scoring and the clock still need one authority, so a server like this one would sit behind them anyway.
 
-Rooms live in the server process's memory. That keeps the design small and puts one hard limit on it: run one worker, or route every connection for a room to the same worker. The measured cost per message is small. A question snapshot plus a phone's private view for the sample question from Part 1 serialises to 579 bytes, and the reveal to 786.
+Rooms live in the server process's memory. That keeps the design small and puts one hard limit on it: run one worker, or route every connection for a room to the same worker. Database writes run on worker threads through a small connection pool that replaces dropped connections, so a slow or failed write doesn't stall the game for everyone. The measured cost per message is small. A question snapshot plus a phone's private view for the sample question from Part 1 serialises to 579 bytes, and the reveal to 786.
 
 ## Answers are events the server counts exactly once
 
 A phone on a weak connection doesn't know whether its answer arrived. The ack might have been lost, or the answer might not have been sent at all. The safe thing for the phone is to send again, and for that to be safe, the server has to recognise a repeat.
 
-The phone makes an `answer_id` (a random UUID) when the student taps, keeps the answer in `localStorage` until the server acknowledges it, and re-sends every unacknowledged answer whenever it reconnects:
+The phone makes an `answer_id` (a random UUID) when the student taps and keeps the answer in `localStorage` until the server acknowledges it. After a reconnect, as soon as the first snapshot says which game this is, it re-sends every unacknowledged answer from that game. Each answer carries the game's `epoch`, so a room code reused next week can't pick up an answer from this one, and the server refuses a mismatched epoch as well. A refusal names the `answer_id`, and the phone drops it rather than retrying forever:
 
 ```typescript
   function answer(question_id: number, choice: number) {
-    const a = { answer_id: crypto.randomUUID(), question_id, choice };
+    if (!epoch.current) return; // no question can be showing yet
+    const a = { answer_id: crypto.randomUUID(), question_id, choice, epoch: epoch.current };
     pending.current.push(a);
     savePending(); // survives a reload or a dead battery mid-question
     send(a);
@@ -193,7 +194,7 @@ The Postgres table backs this up. `answer_id` is the primary key, one answer per
 
 ## Joining a game is opening a URL
 
-No app, no account, no download. The lobby shows a four-character room code drawn from an alphabet without `0`/`O` or `1`/`I`, and a QR code for `https://<your host>/join/K7QX`. The phone opens a plain web page. The first connection sends a display name and gets back a player id, which the phone keeps in `localStorage`.
+No app, no account, no download. The lobby shows a four-character room code drawn from an alphabet without `0`/`O` or `1`/`I`, and a QR code for `https://<your host>/join/K7QX`. The phone opens a plain web page. The phone makes up its own player id the first time, keeps it in `localStorage`, and sends it with the display name on every connection. A reconnect, even one that drops before the server's `welcome` arrives, therefore comes back as the same player rather than a second one.
 
 The join URL is built from a configured public address, not from the incoming request, which behind a proxy can name an internal host. The QR code is an SVG, so it stays sharp on any projector and needs no imaging library:
 
@@ -240,7 +241,7 @@ Both front-end files (`useGameSocket.ts` and `Projector.jsx`) are display code f
 
 ## Running the companion code
 
-The files are [game.py](./game.py), [server.py](./server.py), [sessions.sql](./sessions.sql), [requirements.txt](./requirements.txt), [web/useGameSocket.ts](./web/useGameSocket.ts) and [web/Projector.jsx](./web/Projector.jsx). The 21 offline tests drive the state machine with a fake clock and run full games over real WebSocket connections in FastAPI's test client. They cover the approval gate, an edit sending a question back to `draft`, a replayed answer acknowledged but not rescored, an answer whose database write failed and was stored on replay, malformed messages, both kinds of late answer, a phone rejoining mid-game, and the server's timer locking a question with no host command, including when it wakes early. The SQL in `server.py` and `sessions.sql` was run against Postgres 18 (PGlite). The server hasn't been load-tested or timed on a real network, so there are no latency figures.
+The files are [game.py](./game.py), [server.py](./server.py), [sessions.sql](./sessions.sql), [requirements.txt](./requirements.txt), [web/useGameSocket.ts](./web/useGameSocket.ts) and [web/Projector.jsx](./web/Projector.jsx). The 24 offline tests drive the state machine with a fake clock and run full games over real WebSocket connections in FastAPI's test client. They cover the approval gate, an edit sending a question back to `draft`, a replayed answer acknowledged but not rescored, an answer whose database write failed and was stored on replay, malformed messages, both kinds of late answer, a phone rejoining mid-game or reconnecting before its welcome arrived, answers from an earlier game refused by id, and the server's timer locking a question with no host command, including when it wakes early. The SQL in `server.py` and `sessions.sql` was run against Postgres 18 (PGlite). The server hasn't been load-tested or timed on a real network, so there are no latency figures.
 
 Late answers carry the most value into the next part. [Part 3](../classroom-quiz-diagnostics/) reads the stored answers as evidence about the syllabus: which objectives the class has, which it lacks, and how far to trust the difference when some of the phones were on bad connections.
 

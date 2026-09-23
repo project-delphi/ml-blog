@@ -118,7 +118,8 @@ def upload(file: UploadFile, course_id: Annotated[str, Form()], store: StoreDep)
     # Course, name and a hash of the bytes: two courses can both upload
     # lecture1.pdf, and a corrected file never overwrites the questions
     # already tied to the old one.
-    document_id = f"{course_id}-{stem}-{hashlib.sha256(data).hexdigest()[:6]}"
+    digest = hashlib.sha256(b"\0".join([course_id.encode(), stem.encode(), data]))
+    document_id = f"{course_id}-{stem}-{digest.hexdigest()[:8]}"
     chunks = chunk_pages(document_id, extract_pages(io.BytesIO(data)))
     store.add_document(document_id, course_id, file.filename or document_id, chunks)
     return {"document_id": document_id, "chunks": [c.id for c in chunks]}

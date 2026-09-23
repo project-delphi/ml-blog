@@ -31,7 +31,7 @@ This is the first of three parts. [Part 2](../classroom-quiz-live-game/) runs th
 
 ## A question is checkable only if it says where it came from
 
-The pipeline starts by cutting the professor's readings (PDF chapters, slide exports, the syllabus) into passages that each have a permanent address. pypdf pulls the text out of each page, and `chunk_pages` packs whole sentences into chunks of up to 220 words and never lets a chunk cross a page, so the address `STAT101-stats-notes-5d41a2:p4:3fa9c1d2e0` always means one passage on page 4 of one version of `stats-notes.pdf` in course STAT101. The document part ends in a hash of the file and the last part is a hash of the passage, so uploading the same file again changes nothing, and a corrected file gets new addresses instead of silently changing the text behind questions already written.
+The pipeline starts by cutting the professor's readings (PDF chapters, slide exports, the syllabus) into passages that each have a permanent address. pypdf pulls the text out of each page, and `chunk_pages` packs whole sentences into chunks of up to 220 words and never lets a chunk cross a page, so the address `STAT101-stats-notes-5d41a2b7:p4:3fa9c1d2e0` always means one passage on page 4 of one version of `stats-notes.pdf` in course STAT101. The document part ends in a hash of the course, the file name and the file's bytes, and the last part is a hash of the passage, so uploading the same file again changes nothing, and a corrected file gets new addresses instead of silently changing the text behind questions already written.
 
 We don't need a retrieval framework such as LangChain or LlamaIndex, or a vector database. Retrieval answers "which passages matter for this query?", and here there is no query: we walk the passages one at a time and ask for questions about each. The [retrieval-augmented generation](../retrieval-augmented-generation/) post covers the case where search is the point.
 
@@ -189,7 +189,20 @@ All three roles call Claude through one small wrapper. The generator runs at `ef
 ```python
     def __call__(self, *, system: str, prompt: str, schema: type[T], effort: str) -> T:
         """Ask once and validate the answer; raise ModelOutputError otherwise."""
-        response = self.client.beta.messages.create(
+        try:
+            response = self._create(system, prompt, schema, effort)
+        except anthropic.APIError as err:  # the SDK has already retried
+            raise ModelOutputError(f"API error: {type(err).__name__}") from err
+        if response.stop_reason in ("refusal", "max_tokens"):
+            raise ModelOutputError(f"the model stopped with {response.stop_reason}")
+        text = "".join(b.text for b in response.content if b.type == "text")
+        try:
+            return schema.model_validate_json(text)
+        except ValidationError as err:
+            raise ModelOutputError(f"output did not match {schema.__name__}") from err
+
+    def _create(self, system, prompt, schema, effort):
+        return self.client.beta.messages.create(
             model=self.model,
             max_tokens=16000,
             system=system,
@@ -206,17 +219,10 @@ All three roles call Claude through one small wrapper. The generator runs at `ef
             fallbacks="default",
             betas=["server-side-fallback-2026-07-01"],
         )
-        if response.stop_reason in ("refusal", "max_tokens"):
-            raise ModelOutputError(f"the model stopped with {response.stop_reason}")
-        text = "".join(b.text for b in response.content if b.type == "text")
-        try:
-            return schema.model_validate_json(text)
-        except ValidationError as err:
-            raise ModelOutputError(f"output did not match {schema.__name__}") from err
 ```
 :::
 
-A `ModelOutputError` counts as a failed attempt with its reason recorded, the same as a failed check, so a refusal ends as a rejected draft with an explanation rather than a crash.
+A `ModelOutputError` counts as a failed attempt with its reason recorded, the same as a failed check. An API error that outlasts the SDK's own retries becomes one too. So a refusal or an outage ends as a rejected draft with an explanation, never as a job that vanished after the service answered `202`.
 
 ## Storage keeps the address next to the question
 
@@ -321,7 +327,7 @@ That person is the professor, and [Part 2](../classroom-quiz-live-game/) gives t
 
 ## Running the companion code
 
-The files are [pipeline.py](./pipeline.py), [app.py](./app.py), [schema.sql](./schema.sql) and [requirements.txt](./requirements.txt). The offline tests (27 of them, with the Anthropic client mocked at the HTTP layer) live next to them in the repository. They cover the chunker, document addresses that keep courses and file versions apart, the quote normalisation, the revise-then-verify path, re-reviewing an edited question, running out of attempts, refusals and truncated replies, and a reply that arrives after a fallback. `schema.sql` and the `save_outcome` payloads were checked against a real Postgres engine (PGlite, Postgres 18). None of it has been run against the live API or with students, so there are no quality or cost figures here.
+The files are [pipeline.py](./pipeline.py), [app.py](./app.py), [schema.sql](./schema.sql) and [requirements.txt](./requirements.txt). The offline tests (29 of them, with the Anthropic client mocked at the HTTP layer) live next to them in the repository. They cover the chunker, document addresses that keep courses and file versions apart, the quote normalisation, the revise-then-verify path, re-reviewing an edited question, running out of attempts, refusals, truncated replies and API failures, and a reply that arrives after a fallback. `schema.sql` and the `save_outcome` payloads were checked against a real Postgres engine (PGlite, Postgres 18). None of it has been run against the live API or with students, so there are no quality or cost figures here.
 
 Fluency. Hides. Errors. Quotes. Anchor. Questions. Code. Checks. Reviewers. Judge. Humans. Approve.
 

@@ -120,6 +120,13 @@ def test_only_a_confident_gap_earns_extra_questions():
     assert plan == {"O1": 2, "O2": 4, "O3": 2}
 
 
+def test_a_session_with_no_answers_does_not_erase_a_gap():
+    silent = Cell("w2", "O1", 0, None, None, None, 0.0, 12)  # all after the reveal
+    cells = [cell(0.30, 0.55, "w1", "O1"), silent, cell(0.45, 0.75, "w2", "O3")]
+    assert next_quiz(cells, ["w1", "w2"], total=6) == {"O1": 4, "O3": 2}
+    assert next_quiz([], ["w1"], total=6) == {}
+
+
 def test_simulation_is_reproducible_and_loses_answers_where_it_says():
     a, b = simulate(3), simulate(3)
     assert a.responses == b.responses

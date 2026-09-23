@@ -247,7 +247,20 @@ class ClaudeLLM:
 
     def __call__(self, *, system: str, prompt: str, schema: type[T], effort: str) -> T:
         """Ask once and validate the answer; raise ModelOutputError otherwise."""
-        response = self.client.beta.messages.create(
+        try:
+            response = self._create(system, prompt, schema, effort)
+        except anthropic.APIError as err:  # the SDK has already retried
+            raise ModelOutputError(f"API error: {type(err).__name__}") from err
+        if response.stop_reason in ("refusal", "max_tokens"):
+            raise ModelOutputError(f"the model stopped with {response.stop_reason}")
+        text = "".join(b.text for b in response.content if b.type == "text")
+        try:
+            return schema.model_validate_json(text)
+        except ValidationError as err:
+            raise ModelOutputError(f"output did not match {schema.__name__}") from err
+
+    def _create(self, system, prompt, schema, effort):
+        return self.client.beta.messages.create(
             model=self.model,
             max_tokens=16000,
             system=system,
@@ -264,13 +277,6 @@ class ClaudeLLM:
             fallbacks="default",
             betas=["server-side-fallback-2026-07-01"],
         )
-        if response.stop_reason in ("refusal", "max_tokens"):
-            raise ModelOutputError(f"the model stopped with {response.stop_reason}")
-        text = "".join(b.text for b in response.content if b.type == "text")
-        try:
-            return schema.model_validate_json(text)
-        except ValidationError as err:
-            raise ModelOutputError(f"output did not match {schema.__name__}") from err
 
 
 # ------------------------------------------------------------------- prompts

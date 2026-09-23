@@ -100,9 +100,10 @@ class Room:
 
     # ------------------------------------------------------------ host side
 
-    def join(self, name: str) -> str:
-        """Add a player and return the id their phone keeps for rejoining."""
-        player = secrets.token_urlsafe(8)
+    def join(self, name: str, player: str | None = None) -> str:
+        """Add a player under the phone's own id (or a fresh one); return it."""
+        if player is None or not 8 <= len(player) <= 64:
+            player = secrets.token_urlsafe(8)
         self.names[player] = name
         self.scores[player] = 0
         self._changed()

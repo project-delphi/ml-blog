@@ -355,6 +355,27 @@ def test_output_after_a_fallback_block_is_still_parsed():
     assert ask(claude_answering([fallback, text])) == clean_source_check()
 
 
+def test_an_api_failure_after_retries_is_a_failed_attempt():
+    def handler(request):
+        return httpx2.Response(
+            529,
+            json={
+                "type": "error",
+                "error": {"type": "overloaded_error", "message": "busy"},
+            },
+        )
+
+    client = anthropic.Anthropic(
+        api_key="test",
+        max_retries=0,
+        http_client=anthropic.DefaultHttpxClient(
+            transport=httpx2.MockTransport(handler)
+        ),
+    )
+    with pytest.raises(ModelOutputError, match="API error"):
+        ask(ClaudeLLM(client))
+
+
 @pytest.mark.parametrize("stop_reason", ["refusal", "max_tokens"])
 def test_refusal_and_truncation_raise_before_parsing(stop_reason):
     llm = claude_answering(
@@ -476,6 +497,18 @@ def test_same_name_different_course_or_content_gets_new_ids(client_and_store):
     assert upload("STAT101", [PASSAGE]) == first  # same file again: same ids
     assert upload("BIO110", [PASSAGE]) != first
     assert upload("STAT101", ["A corrected passage."]) != first
+
+
+def test_a_dash_in_a_course_code_cannot_forge_another_documents_id(client_and_store):
+    client, _ = client_and_store
+
+    def upload(course, filename):
+        files = {"file": (filename, tiny_pdf([PASSAGE]), "application/pdf")}
+        return client.post("/documents", files=files, data={"course_id": course})
+
+    a = upload("a-b", "c.pdf").json()["document_id"]
+    b = upload("a", "b-c.pdf").json()["document_id"]
+    assert a != b
 
 
 def test_unknown_chunk_is_a_404(client_and_store):

@@ -52,26 +52,39 @@ class Postgres:
     """Both roles against the schema in schema.sql and sessions.sql."""
 
     def __init__(self, dsn: str):
-        """Open one autocommitting connection."""
-        import psycopg
+        """Open a small pool; it replaces any connection the database drops."""
         from psycopg.rows import dict_row
+        from psycopg_pool import ConnectionPool
 
-        self.conn = psycopg.connect(dsn, autocommit=True, row_factory=dict_row)
+        self.pool = ConnectionPool(
+            dsn,
+            kwargs={"autocommit": True, "row_factory": dict_row},
+            check=ConnectionPool.check_connection,
+            open=True,
+        )
+
+    def _all(self, sql, params):
+        with self.pool.connection() as conn:
+            return conn.execute(sql, params).fetchall()
+
+    def _run(self, sql, params):
+        with self.pool.connection() as conn:
+            conn.execute(sql, params)
 
     def rows(self, question_ids):
         """Approved or not, with a readable source label for the reveal."""
-        return self.conn.execute(
+        return self._all(
             "select q.id, q.status::text as status, q.stem, q.options, q.evidence,"
             " q.explanation, d.title || ', p. ' || c.page as source"
             " from questions q join chunks c on c.id = q.chunk_id"
             " join documents d on d.id = c.document_id"
             " where q.id = any(%s::bigint[]) order by array_position(%s::bigint[], q.id)",
             [question_ids, question_ids],
-        ).fetchall()
+        )
 
     def queue(self, course_id):
         """Verified questions waiting for a decision, with source and history."""
-        return self.conn.execute(
+        return self._all(
             "select q.id, q.stem, q.options, q.evidence, q.explanation, q.bloom_level,"
             " d.title || ', p. ' || c.page as source,"
             " (select count(*) from reviews r where r.question_id = q.id) as attempts"
@@ -81,38 +94,38 @@ class Postgres:
             " join objectives o on o.id = q.objective_id"
             " where o.course_id = %s and q.status = 'verified' order by q.id",
             [course_id],
-        ).fetchall()
+        )
 
     def approve(self, question_id):
         """Approve a verified question. Anything else is left alone."""
-        row = self.conn.execute(
+        rows = self._all(
             "update questions set status = 'approved'"
             " where id = %s and status = 'verified' returning id",
             [question_id],
-        ).fetchone()
-        return row is not None
+        )
+        return bool(rows)
 
     def edit(self, question_id, stem, options):
         """Save an edit. It voids the old verification, so it is a draft again."""
         from psycopg.types.json import Jsonb
 
-        row = self.conn.execute(
+        rows = self._all(
             "update questions set stem = %s, options = %s, status = 'draft'"
             " where id = %s and status in ('verified', 'approved') returning id",
             [stem, Jsonb(options), question_id],
-        ).fetchone()
-        return row is not None
+        )
+        return bool(rows)
 
     def session_started(self, session, course_id, questions):
         """Record the session and its question order."""
-        self.conn.execute(
+        self._run(
             "insert into sessions (id, course_id, question_ids) values (%s, %s, %s)",
             [session, course_id, questions],
         )
 
     def player_joined(self, session, player, at):
         """Record who was in the room, and from when."""
-        self.conn.execute(
+        self._run(
             "insert into session_players (session_id, player_id, joined_at)"
             " values (%s, %s, %s) on conflict do nothing",
             [session, player, at],
@@ -120,7 +133,7 @@ class Postgres:
 
     def question_opened(self, session, question_id, at):
         """Record when a question went live."""
-        self.conn.execute(
+        self._run(
             "insert into session_questions (session_id, question_id, opened_at)"
             " values (%s, %s, %s) on conflict do nothing",
             [session, question_id, at],
@@ -128,7 +141,7 @@ class Postgres:
 
     def answer(self, session, answer):
         """Store an answer; a replayed answer_id is a no-op here too."""
-        self.conn.execute(
+        self._run(
             "insert into responses (answer_id, session_id, player_id, question_id,"
             " choice, timing, points, received_at)"
             " values (%s, %s, %s, %s, %s, %s, %s, %s) on conflict do nothing",
@@ -305,24 +318,34 @@ async def play(
         return
     await ws.accept()
     is_host = host is not None and secrets.compare_digest(host, host_keys[code])
-    if player not in room.names:
+    # The phone makes its own player id and sends it with every connection,
+    # so a reconnect (even one before `welcome` arrived) finds the same player,
+    # and an id left over from an earlier game simply joins this one.
+    if is_host:
         player = None
-    if player is None and name and not is_host:
-        player = room.join(name)
-        await asyncio.to_thread(
-            sink.player_joined, session_id(room), player, room.wall()
-        )
-        await ws.send_json({"type": "welcome", "player": player})
+    elif player not in room.names:
+        if not name:
+            player = None  # a screen that only watches
+        else:
+            player = room.join(name, player)
+            await asyncio.to_thread(
+                sink.player_joined, session_id(room), player, room.wall()
+            )
+            await ws.send_json({"type": "welcome", "player": player})
     sockets[code][ws] = player
     await broadcast(room)  # a rejoining phone catches up from this alone
 
     try:
         while True:
+            message = None
             try:
                 message = await ws.receive_json()
                 await handle(room, sink, ws, player, is_host, message)
             except (Rejected, KeyError, TypeError, ValueError) as err:
-                await ws.send_json({"type": "error", "message": str(err)})
+                error = {"type": "error", "message": str(err)}
+                if isinstance(message, dict) and "answer_id" in message:
+                    error["answer_id"] = message["answer_id"]  # the phone drops it
+                await ws.send_json(error)
     except WebSocketDisconnect:
         pass
     finally:
@@ -334,13 +357,16 @@ async def handle(room, sink, ws, player, is_host, message) -> None:
     if message["type"] == "command" and is_host:
         room.command(message["name"])
         if message["name"] == "next":
-            opened = (session_id(room), room.current.id, room.wall())
-            await asyncio.to_thread(sink.question_opened, *opened)
             task = asyncio.create_task(lock_when_due(room))
             timers.add(task)
             task.add_done_callback(timers.discard)
-        await broadcast(room)
+        await broadcast(room)  # the game goes on even if the write below fails
+        if message["name"] == "next":
+            opened = (session_id(room), room.current.id, room.wall())
+            await asyncio.to_thread(sink.question_opened, *opened)
     elif message["type"] == "answer" and player:
+        if message.get("epoch", room.epoch) != room.epoch:
+            raise Rejected("that answer belongs to an earlier game in this room")
         answer, _ = room.submit(
             player, message["answer_id"], message["question_id"], message["choice"]
         )

@@ -392,3 +392,56 @@ def test_the_timer_keeps_trying_if_it_wakes_early(room):
     finally:
         asyncio.sleep = original
     assert room.phase == "locked" and len(calls) == 2
+
+
+def test_a_phone_that_names_itself_rejoins_as_itself(served):
+    client, db = served
+    room = open_room(client)
+    code, key = room["code"], room["host_key"]
+    me = "3f1c2a9e-5d4b-4c8e-9a71-0b6d2e4f8c13"
+    with client.websocket_connect(f"/ws/{code}?host={key}") as host:
+        state(host)
+        # The first connection drops before the phone reads `welcome` ...
+        with client.websocket_connect(f"/ws/{code}?player={me}&name=Ana"):
+            pass
+        # ... and the reconnect, same id, is the same player, not a second one.
+        with client.websocket_connect(f"/ws/{code}?player={me}&name=Ana") as phone:
+            caught_up = state(phone)
+            assert caught_up["public"]["players"] == 1
+            assert caught_up["you"]["player"] == me
+    assert [e for e in db.events if e[0] == "join"] == [("join", me)]
+
+
+def test_answers_from_an_earlier_game_are_refused_by_id(served):
+    client, _ = served
+    room = open_room(client)
+    code, key = room["code"], room["host_key"]
+    me = "7a2b9c4d-1e3f-4a5b-8c6d-9e0f1a2b3c4d"
+    with (
+        client.websocket_connect(f"/ws/{code}?host={key}") as host,
+        client.websocket_connect(f"/ws/{code}?player={me}&name=Ana") as phone,
+    ):
+        assert phone.receive_json() == {"type": "welcome", "player": me}
+        state(phone)
+        host.send_json({"type": "command", "name": "next"})
+        state(phone)
+        stale = {"type": "answer", "answer_id": "old1", "question_id": 1}
+        phone.send_json(stale | {"choice": 0, "epoch": "not-this-game"})
+        error = phone.receive_json()
+        assert (error["type"], error["answer_id"]) == ("error", "old1")
+        phone.send_json(stale | {"answer_id": "new1", "choice": 0})
+        assert phone.receive_json() == {"type": "ack", "answer_id": "new1"}
+        phone.send_json(stale | {"answer_id": "new2", "choice": 1})
+        second = phone.receive_json()  # a double tap: refused, and says which
+        assert (second["type"], second["answer_id"]) == ("error", "new2")
+
+
+def test_a_screen_with_no_name_only_watches(served):
+    client, _ = served
+    room = open_room(client)
+    with client.websocket_connect(f"/ws/{room['code']}?player=unknown-id-123") as tv:
+        assert state(tv)["you"] is None
+        tv.send_json(
+            {"type": "answer", "answer_id": "t1", "question_id": 1, "choice": 0}
+        )
+        assert tv.receive_json()["type"] == "error"

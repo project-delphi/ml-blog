@@ -167,13 +167,16 @@ def next_quiz(cells: list[Cell], sessions: list[str], total: int) -> dict[str, i
     """Share `total` questions over objectives, doubling the weight of gaps.
 
     Uses each objective's cell from the latest of `sessions` (oldest first)
-    that covered it. Only a confident gap (the upper bound under the bar)
+    that produced any answers for it. Only a confident gap (the upper bound under the bar)
     earns extra questions; an unclear cell does not.
     """
     when = {s: i for i, s in enumerate(sessions)}
     latest = {}
     for c in sorted(cells, key=lambda c: when[c.session_id]):
-        latest[c.objective_id] = c
+        if c.verdict != "no data" or c.objective_id not in latest:
+            latest[c.objective_id] = c  # a session with no answers changes nothing
+    if not latest:
+        return {}
     weights = {o: 2 if c.verdict == "gap" else 1 for o, c in latest.items()}
     scale = total / sum(weights.values())
     shares = {o: w * scale for o, w in weights.items()}
