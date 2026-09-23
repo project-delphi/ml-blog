@@ -1,0 +1,333 @@
+---
+title: "Classroom Quiz Engine, Part 1: Questions That Cite Their Sources"
+subtitle: "A multi-agent pipeline that writes quiz questions from course readings and checks each one against the passage it came from"
+description: "Build the back end of an AI classroom quiz game: every generated question carries a verbatim quote from the reading, passes a free substring check, and then faces two reviewers who each see less than the writer did."
+author: "Ravi Kalia"
+date: "2026-09-23T10:00:00"
+categories: [LLMs, Agents, Claude, Architecture, Education]
+image: "./cover.png"
+tags: [quiz generation, bloom's taxonomy, structured outputs, llm review, fastapi, postgres, education]
+resources:
+  - cover-source.txt
+  - pipeline.py
+  - app.py
+  - schema.sql
+  - requirements.txt
+format:
+  html:
+    toc: true
+    code-fold: false
+---
+
+![Classroom Quiz Engine, Part 1: Questions That Cite Their Sources](./cover.png)
+
+A quiz question written by a model belongs in front of a class only if someone can check it against the reading it came from. A pipeline can make that check cheap: every question carries the address and the exact words of its source passage, and no question gets out until those words check out.
+
+Here is the manual version. You paste a chapter into a chatbot, ask for twenty multiple-choice questions, and copy them into Kahoot. They read well. Then, in front of eighty students, question fourteen turns out to have a wrong answer key, or a "correct" answer that depends on something the chapter never says. You can't settle it on the spot, because nothing in the question says where in the chapter it came from.
+
+The odd thing is that the questions fail in a way their fluency hides. Fluent text is easy to check by eye and correctness is not, so the model's strength conceals its weakness. What we need is a way to make correctness as cheap to check as fluency.
+
+This is the first of three parts. [Part 2](../classroom-quiz-live-game/) runs the game live on students' phones, and [Part 3](../classroom-quiz-diagnostics/) turns the answers into a map of what the class has and hasn't understood. The platform is a design, and the code in all three parts is companion code with offline tests, not a deployed product. The files are linked from the end of each post.
+
+## A question is checkable only if it says where it came from
+
+The pipeline starts by cutting the professor's readings (PDF chapters, slide exports, the syllabus) into passages that each have a permanent address. pypdf pulls the text out of each page, and `chunk_pages` packs whole sentences into chunks of up to 220 words and never lets a chunk cross a page, so the address `stats-notes:p4:3fa9c1d2e0` always means one passage on page 4 of `stats-notes.pdf`. The last part of the address is a hash of the passage text, so re-reading the same file gives the same addresses.
+
+We don't need a retrieval framework such as LangChain or LlamaIndex, or a vector database. Retrieval answers "which passages matter for this query?", and here there is no query: we walk the passages one at a time and ask for questions about each. The [retrieval-augmented generation](../retrieval-augmented-generation/) post covers the case where search is the point.
+
+The model gets one passage, one learning objective from the syllabus, and one level of Bloom's taxonomy. Bloom's revised taxonomy (Anderson and Krathwohl, 2001) sorts what a question asks a student to do, from *remember* through *understand*, *apply*, *analyze* and *evaluate* to *create*. We allow only the middle four. A question that tests *remember* is the trivia failure the manual workflow drifts into, and *create* needs an answer the student builds rather than picks.
+
+The model must return this structure, which the API enforces through [structured outputs](../structured-json-with-claude/):
+
+```python
+class Option(BaseModel):
+    """One answer choice; a distractor names the misconception it stands for."""
+
+    text: str
+    correct: bool
+    misconception: str | None
+
+
+class QuestionDraft(BaseModel):
+    """What the generator must return. `evidence` is copied from the passage."""
+
+    stem: str
+    options: list[Option]
+    bloom_level: BloomLevel
+    evidence: str
+    explanation: str
+```
+
+Two fields carry the design. `evidence` is a word-for-word quote from the passage that supports the correct option. `misconception` tags each wrong option with the mistaken belief it stands for, chosen from a closed list the professor writes for each objective. Part 3 counts those tags, and a closed list is what makes them countable. The passage address isn't in the schema: the code knows which passage it sent, so it records the address itself rather than trusting the model to copy it.
+
+## The cheapest reviewer is a substring check
+
+Before any model reviews a draft, plain code checks whether the quote is in the passage. If it isn't, the model invented its evidence, and nothing a reviewer says afterwards can fix that.
+
+Two details keep the check fair. First, text extracted from a PDF carries ligatures (`ﬁ` as one character), soft hyphens and words broken across lines, and a model quoting it will quietly tidy those up. `match_key` normalises both sides the same way: it undoes the PDF damage, straightens curly quotes, drops dashes and case, and ignores quotation marks around the quote. Second, the quote must be at least eight words long, so a fragment such as "the standard error" can't pass by turning up somewhere in the passage.
+
+```python
+QUOTES = str.maketrans("\u2018\u2019\u201c\u201d", "''\"\"")
+DASHES = re.compile(r"[-\u2010-\u2015]")
+
+
+def match_key(text: str) -> str:
+    """Normalise text so a faithful quote matches the passage it came from."""
+    text = DASHES.sub("", clean(text).translate(QUOTES)).casefold()
+    return re.sub(r"\s+", " ", text).strip(" \"'.,;:")
+
+
+def contract_problems(
+    draft: QuestionDraft, chunk: Chunk, objective: Objective, level: BloomLevel
+) -> list[str]:
+    """Deterministic checks that run before any reviewer sees the draft."""
+    problems = []
+    if len(draft.evidence.split()) < MIN_QUOTE_WORDS:
+        problems.append(f"the evidence quote is under {MIN_QUOTE_WORDS} words")
+    elif match_key(draft.evidence) not in match_key(chunk.text):
+        problems.append("the evidence quote does not appear in the passage")
+    if len(draft.options) != 4:
+        problems.append(f"expected 4 options, got {len(draft.options)}")
+    if sum(o.correct for o in draft.options) != 1:
+        problems.append("expected exactly one correct option")
+    if len({match_key(o.text) for o in draft.options}) != len(draft.options):
+        problems.append("two options say the same thing")
+    for i, option in enumerate(draft.options):
+        if option.correct and option.misconception is not None:
+            problems.append(f"option {i} is the key but carries a misconception tag")
+        if not option.correct and option.misconception not in objective.misconceptions:
+            problems.append(
+                f"option {i} is tagged {option.misconception!r}, "
+                f"which is not in {list(objective.misconceptions)}"
+            )
+    if draft.bloom_level != level:
+        problems.append(f"asked for a {level} question, got {draft.bloom_level}")
+    return problems
+```
+
+The tests run on a short passage written for them, not taken from a textbook. It ends: *"Collecting more data therefore does not make individual measurements less variable; it makes the average more stable. Because of the square root, quadrupling the sample size only halves the standard error."* The objective is to explain why the standard error of a mean shrinks as the sample grows, and its misconception list is `se-equals-sd`, `linear-in-n` and `more-data-less-spread`.
+
+An *apply* question for that passage gives a lab whose standard error is 8 ms with 25 participants and asks how many participants bring it to 4 ms. The key is 100. The distractors are 50 (`linear-in-n`), "none, the standard error always equals the standard deviation" (`se-equals-sd`), and "any number above 25, because each measurement gets less noisy" (`more-data-less-spread`). Quoting the square-root sentence as evidence, the draft passes the contract. Swap the evidence for *"Standard error falls in proportion to sample size"*, a sentence the passage never contains and which is also false, and the draft fails with `the evidence quote does not appear in the passage` before any model is asked about it. Both drafts are test fixtures, not captured model output.
+
+## Two reviewers who each see less than the writer
+
+A real quote can still sit under a wrong key. The test passage supports "quadruple the sample" and nothing stops a generator from marking 50 as correct while quoting that sentence. Catching that takes reading, so the next two checks are model calls. [LLM-as-judge](../prompt-evaluation-pipelines/) is the general pattern. What matters here is what each judge is allowed to see.
+
+The **source reviewer** gets the passage and the question with the answer key removed. It has to answer the question itself from the passage alone, then say for every option whether the passage supports it, contradicts it, or doesn't address it. A reviewer shown the key is being asked to agree. A reviewer that has to answer first is being asked to solve the question, and a key it can't reach from the passage is a key a student can't reach either. In the wrong-key example, the blind reviewer picks 100, the key says 50, and the draft goes back.
+
+The **pedagogy reviewer** gets the key and the misconception tags but not the passage. It says which Bloom level the question tests in practice, whether exactly one option can be defended, and whether a student holding each tagged misconception would find that distractor tempting. Its instructions say a question answerable by recognising a phrase from the reading tests *remember*, whatever level it claims.
+
+Neither reviewer returns a verdict. They report observations in a fixed schema, and the code turns observations into a verdict:
+
+```python
+def source_problems(check: SourceCheck, draft: QuestionDraft) -> list[str]:
+    """Turn the source reviewer's observations into a verdict."""
+    key = key_index(draft)
+    judged = {j.option: j for j in check.judgements}
+    problems = []
+    if check.answer != key:
+        problems.append(
+            f"reading only the passage, the reviewer chose option {check.answer}, "
+            f"but the key is option {key}"
+        )
+    for i in range(len(draft.options)):
+        j = judged.get(i)
+        if j is None:
+            problems.append(f"the reviewer did not judge option {i}")
+        elif i == key and j.status != "supported":
+            problems.append(f"the passage does not support the key: {j.note}")
+        elif i != key and j.status == "supported":
+            problems.append(f"the passage also supports option {i}: {j.note}")
+    return problems
+```
+
+Keeping the rules in code means we can test them without a model and change them without rewriting a prompt. A distractor the passage doesn't address is allowed. A distractor the passage *supports* is a second right answer, and the draft goes back.
+
+## Failed drafts go back with their reasons, a bounded number of times
+
+The three checks run cheapest first, and the first failure ends the attempt. Its reasons go back to the generator along with the failed draft, as a revision request. After three attempts the job stops.
+
+```{mermaid}
+flowchart TD
+    P[Passage + objective + Bloom level] --> G[Generator]
+    G --> Q{Quote in passage?}
+    Q -- no --> G
+    Q -- yes --> S{Source reviewer<br/>answers blind}
+    S -- disagrees --> G
+    S -- agrees --> T{Pedagogy reviewer}
+    T -- fails --> G
+    T -- passes --> V[(verified)]
+    G -. third failure .-> R[(rejected, with reasons)]
+```
+
+```python
+def generate_question(
+    llm: LLM,
+    chunk: Chunk,
+    objective: Objective,
+    level: BloomLevel,
+    language: Language = "en",
+    max_attempts: int = MAX_ATTEMPTS,
+) -> Outcome:
+    """Generate, check and revise until a draft passes or attempts run out."""
+    outcome = Outcome("rejected", chunk, objective, level)
+    previous = None
+    for _ in range(max_attempts):
+        previous = review_attempt(llm, chunk, objective, level, language, previous)
+        outcome.attempts.append(previous)
+        if previous.draft and not previous.problems:
+            outcome.status = "verified"
+            break
+    return outcome
+```
+
+A rejected draft is stored, not thrown away. A passage that defeats three attempts is telling the professor something: it may be too thin to support a question at that level, or its misconception list may not fit it.
+
+All three roles call Claude through one small wrapper. The generator runs at `effort="high"` and the reviewers at `"medium"`. The output format is the Pydantic schema, which the API enforces. The wrapper checks why the model stopped *before* parsing, because a refusal or a reply cut off at `max_tokens` doesn't have to match the schema. It also turns on server-side fallbacks, which re-run a request on another model if a safety classifier declines it. Anthropic's Citations API would seem the natural tool for quoting a source, but it can't be combined with structured outputs, so the evidence field and the substring check do that job.
+
+::: {.callout-note collapse="true" title="The Claude call (pipeline.py)"}
+```python
+    def __call__(self, *, system: str, prompt: str, schema: type[T], effort: str) -> T:
+        """Ask once and validate the answer; raise ModelOutputError otherwise."""
+        response = self.client.beta.messages.create(
+            model=self.model,
+            max_tokens=16000,
+            system=system,
+            messages=[{"role": "user", "content": prompt}],
+            output_config={
+                "effort": effort,
+                "format": {
+                    "type": "json_schema",
+                    "schema": anthropic.transform_schema(schema),
+                },
+            },
+            # If a safety classifier declines, the API re-runs the request on
+            # Anthropic's recommended fallback model instead of refusing.
+            fallbacks="default",
+            betas=["server-side-fallback-2026-07-01"],
+        )
+        if response.stop_reason in ("refusal", "max_tokens"):
+            raise ModelOutputError(f"the model stopped with {response.stop_reason}")
+        text = "".join(b.text for b in response.content if b.type == "text")
+        try:
+            return schema.model_validate_json(text)
+        except ValidationError as err:
+            raise ModelOutputError(f"output did not match {schema.__name__}") from err
+```
+:::
+
+A `ModelOutputError` counts as a failed attempt with its reason recorded, the same as a failed check, so a refusal ends as a rejected draft with an explanation rather than a crash.
+
+## Storage keeps the address next to the question
+
+The schema is plain Postgres, so it runs as-is on Supabase. Questions point at their chunk, and chunks point at their document and page. Every attempt, with the draft it produced and the problems it met, sits in a `reviews` table. A check constraint refuses any non-rejected question without evidence.
+
+The status column has four values. The pipeline writes only `verified` or `rejected`. `approved` is a human decision made in Part 2's triage screen, and `draft` is where a question goes back to after a professor edits it. One Postgres function, `save_outcome`, stores a question and its full review history in one call, so a question never exists without the record of how it got there.
+
+::: {.callout-note collapse="true" title="schema.sql"}
+```sql
+-- Every question keeps the address of the passage it came from and the record
+-- of every review it went through. Plain Postgres; runs unchanged on Supabase.
+
+create table courses (
+  id        text primary key,
+  title     text not null,
+  language  text not null check (language in ('es', 'pt-BR', 'en'))
+);
+
+-- Objective ids are language-neutral, so a Spanish and an English section of
+-- the same course aggregate onto the same rows.
+create table objectives (
+  id              text primary key,
+  course_id       text not null references courses,
+  statement       text not null,
+  misconceptions  text[] not null  -- the closed list distractors are tagged from
+);
+
+create table documents (
+  id           text primary key,
+  course_id    text not null references courses,
+  title        text not null,
+  uploaded_at  timestamptz not null default now()
+);
+
+create table chunks (
+  id           text primary key,  -- '<document>:p<page>:<sha256 prefix>'
+  document_id  text not null references documents on delete cascade,
+  page         int  not null,
+  text         text not null
+);
+
+create type question_status as enum ('draft', 'verified', 'rejected', 'approved');
+
+create table questions (
+  id            bigint generated always as identity primary key,
+  chunk_id      text not null references chunks,
+  objective_id  text not null references objectives,
+  bloom_level   text not null,
+  status        question_status not null,
+  stem          text,
+  options       jsonb,  -- [{text, correct, misconception}]
+  evidence      text,   -- verbatim from chunks.text
+  explanation   text,
+  created_at    timestamptz not null default now(),
+  check (status = 'rejected' or evidence is not null)
+);
+
+-- One row per attempt: what the generator wrote and what the checks said.
+create table reviews (
+  question_id  bigint not null references questions on delete cascade,
+  attempt      int    not null,
+  problems     text[] not null,
+  draft        jsonb,
+  primary key (question_id, attempt)
+);
+
+-- Store one pipeline outcome (see outcome_payload in pipeline.py) in one call,
+-- so a question never exists without its review history.
+create function save_outcome(payload jsonb) returns bigint
+language plpgsql as $$
+declare
+  qid bigint;
+begin
+  insert into questions
+    (chunk_id, objective_id, bloom_level, status,
+     stem, options, evidence, explanation)
+  values
+    (payload ->> 'chunk_id', payload ->> 'objective_id',
+     payload ->> 'bloom_level', (payload ->> 'status')::question_status,
+     payload #>> '{draft,stem}', payload #> '{draft,options}',
+     payload #>> '{draft,evidence}', payload #>> '{draft,explanation}')
+  returning id into qid;
+
+  insert into reviews (question_id, attempt, problems, draft)
+  select qid, a.n,
+         array(select jsonb_array_elements_text(a.value -> 'problems')),
+         nullif(a.value -> 'draft', 'null'::jsonb)
+  from jsonb_array_elements(payload -> 'attempts') with ordinality as a(value, n);
+
+  return qid;
+end $$;
+```
+:::
+
+The FastAPI service in `app.py` is thin. `POST /documents` takes a PDF upload, chunks it, and stores the chunks. `POST /questions` takes a chunk, an objective, a Bloom level and a course language, answers `202 Accepted` at once, and runs the review loop as a background task. Both the store and the model are injected dependencies, which is how the tests replace them with an in-memory store and a scripted fake model.
+
+## Passing every check is not the same as being right
+
+The checks narrow what can go wrong. They don't close it. The substring check proves that a quote exists, not that it supports the key. The source reviewer is itself a model and can misread a passage. A passage that is wrong, or out of date, produces questions that faithfully repeat its mistakes. What the pipeline guarantees is smaller and more useful: every surviving question arrives with a quote, an address and a review record, so a person can check it against the reading without hunting for the page.
+
+That person is the professor, and [Part 2](../classroom-quiz-live-game/) gives them the screen to do it on. It shows each verified draft beside its source quote and review history, and a question can reach a live game only after the professor approves it there.
+
+## Running the companion code
+
+The files are [pipeline.py](./pipeline.py), [app.py](./app.py), [schema.sql](./schema.sql) and [requirements.txt](./requirements.txt). The offline tests (26 of them, with the Anthropic client mocked at the HTTP layer) live next to them in the repository. They cover the chunker, the quote normalisation, the revise-then-verify path, re-reviewing an edited question, running out of attempts, refusals and truncated replies, and a reply that arrives after a fallback. `schema.sql` and the `save_outcome` payloads were checked against a real Postgres engine (PGlite, Postgres 18). None of it has been run against the live API or with students, so there are no quality or cost figures here.
+
+Fluency. Hides. Errors. Quotes. Anchor. Questions. Code. Checks. Reviewers. Judge. Humans. Approve.
+
+## References
+
+- Anderson, L. W., and Krathwohl, D. R. (eds.) (2001). *A Taxonomy for Learning, Teaching, and Assessing: A Revision of Bloom's Taxonomy of Educational Objectives*. Longman.
+- Anthropic, [Structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs).
+- [pypdf documentation](https://pypdf.readthedocs.io/).
+- [FastAPI documentation](https://fastapi.tiangolo.com/).
