@@ -46,7 +46,7 @@ export function Projector({ snapshot, qrUrl }) {
         </blockquote>
       )}
       {snapshot.leaderboard?.map((row, rank) => (
-        <div key={row.name} className="row">
+        <div key={rank} className="row">
           {rank + 1}. {row.name} <b>{row.score}</b>
         </div>
       ))}

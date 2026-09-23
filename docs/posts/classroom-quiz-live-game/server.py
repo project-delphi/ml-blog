@@ -62,8 +62,9 @@ class Postgres:
         """Approved or not, with a readable source label for the reveal."""
         return self.conn.execute(
             "select q.id, q.status::text as status, q.stem, q.options, q.evidence,"
-            " q.explanation, c.document_id || ', p. ' || c.page as source"
+            " q.explanation, d.title || ', p. ' || c.page as source"
             " from questions q join chunks c on c.id = q.chunk_id"
+            " join documents d on d.id = c.document_id"
             " where q.id = any(%s::bigint[]) order by array_position(%s::bigint[], q.id)",
             [question_ids, question_ids],
         ).fetchall()
@@ -72,10 +73,11 @@ class Postgres:
         """Verified questions waiting for a decision, with source and history."""
         return self.conn.execute(
             "select q.id, q.stem, q.options, q.evidence, q.explanation, q.bloom_level,"
-            " c.document_id || ', p. ' || c.page as source,"
+            " d.title || ', p. ' || c.page as source,"
             " (select count(*) from reviews r where r.question_id = q.id) as attempts"
             " from questions q"
             " join chunks c on c.id = q.chunk_id"
+            " join documents d on d.id = c.document_id"
             " join objectives o on o.id = q.objective_id"
             " where o.course_id = %s and q.status = 'verified' order by q.id",
             [course_id],
@@ -278,9 +280,13 @@ async def broadcast(room: Room) -> None:
 
 async def lock_when_due(room: Room) -> None:
     """The server, not any phone, decides when time is up."""
-    await asyncio.sleep(room.remaining())
-    if room.tick():
-        await broadcast(room)
+    question = room.current.id
+    # asyncio can wake a timer a hair early, so keep going until the lock
+    # happens, or the host has already moved on from this question.
+    while room.phase == "question" and room.current.id == question:
+        await asyncio.sleep(max(room.remaining(), 0.01))
+        if room.tick():
+            await broadcast(room)
 
 
 @app.websocket("/ws/{code}")
@@ -303,38 +309,44 @@ async def play(
         player = None
     if player is None and name and not is_host:
         player = room.join(name)
-        sink.player_joined(session_id(room), player, room.wall())
+        await asyncio.to_thread(
+            sink.player_joined, session_id(room), player, room.wall()
+        )
         await ws.send_json({"type": "welcome", "player": player})
     sockets[code][ws] = player
     await broadcast(room)  # a rejoining phone catches up from this alone
 
     try:
         while True:
-            message = await ws.receive_json()
             try:
-                if message["type"] == "command" and is_host:
-                    room.command(message["name"])
-                    if message["name"] == "next":
-                        sink.question_opened(
-                            session_id(room), room.current.id, room.wall()
-                        )
-                        task = asyncio.create_task(lock_when_due(room))
-                        timers.add(task)
-                        task.add_done_callback(timers.discard)
-                    await broadcast(room)
-                elif message["type"] == "answer" and player:
-                    answer, is_new = room.submit(
-                        player,
-                        message["answer_id"],
-                        message["question_id"],
-                        message["choice"],
-                    )
-                    if is_new:
-                        sink.answer(session_id(room), answer)
-                    await ws.send_json({"type": "ack", "answer_id": answer.answer_id})
-                else:
-                    raise Rejected(f"{message['type']!r} is not allowed here")
-            except (Rejected, KeyError) as err:
+                message = await ws.receive_json()
+                await handle(room, sink, ws, player, is_host, message)
+            except (Rejected, KeyError, TypeError, ValueError) as err:
                 await ws.send_json({"type": "error", "message": str(err)})
     except WebSocketDisconnect:
+        pass
+    finally:
         sockets[code].pop(ws, None)
+
+
+async def handle(room, sink, ws, player, is_host, message) -> None:
+    """Apply one message. Database writes run off the event loop."""
+    if message["type"] == "command" and is_host:
+        room.command(message["name"])
+        if message["name"] == "next":
+            opened = (session_id(room), room.current.id, room.wall())
+            await asyncio.to_thread(sink.question_opened, *opened)
+            task = asyncio.create_task(lock_when_due(room))
+            timers.add(task)
+            task.add_done_callback(timers.discard)
+        await broadcast(room)
+    elif message["type"] == "answer" and player:
+        answer, _ = room.submit(
+            player, message["answer_id"], message["question_id"], message["choice"]
+        )
+        # Write before acknowledging, on replays too: the insert ignores a
+        # duplicate answer_id, so a write that failed last time is retried.
+        await asyncio.to_thread(sink.answer, session_id(room), answer)
+        await ws.send_json({"type": "ack", "answer_id": answer.answer_id})
+    else:
+        raise Rejected(f"{message['type']!r} is not allowed here")

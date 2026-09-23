@@ -20,12 +20,18 @@ scored as (
   from per_student
   group by 1, 2
 ),
-expected as (  -- answers we could have had: students present x questions asked
-  select sq.session_id, q.objective_id, count(*) as possible
-  from session_questions sq
-  join questions q on q.id = sq.question_id
-  join session_players sp
-    on sp.session_id = sq.session_id and sp.joined_at <= sq.opened_at
+expected as (  -- answers we could have had: who was there when each question
+               -- opened, plus anyone who joined late and answered it anyway
+  select seats.session_id, q.objective_id, count(*) as possible
+  from (
+    select sq.session_id, sq.question_id, sp.player_id
+    from session_questions sq
+    join session_players sp
+      on sp.session_id = sq.session_id and sp.joined_at <= sq.opened_at
+    union
+    select session_id, question_id, player_id from responses
+  ) seats
+  join questions q on q.id = seats.question_id
   group by 1, 2
 ),
 counts as (

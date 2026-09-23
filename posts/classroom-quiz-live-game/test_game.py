@@ -21,7 +21,7 @@ def row(qid, status="approved", answer=0):
         ],
         "explanation": "Because.",
         "evidence": "A sentence copied from the reading.",
-        "source": "stats-notes, p. 1",
+        "source": "stats-notes.pdf, p. 1",
     }
 
 
@@ -165,6 +165,7 @@ class FakeDB:
     def __init__(self, rows):
         self.by_id = {r["id"]: r for r in rows}
         self.events = []
+        self.writes = 0
 
     def rows(self, ids):
         return [self.by_id[i] for i in ids if i in self.by_id]
@@ -196,7 +197,10 @@ class FakeDB:
         self.events.append(("open", question_id))
 
     def answer(self, session, answer):
-        self.events.append(("answer", answer.answer_id))
+        # Like the real insert: a repeated answer_id is ignored.
+        if ("answer", answer.answer_id) not in self.events:
+            self.events.append(("answer", answer.answer_id))
+        self.writes += 1
 
 
 @pytest.fixture
@@ -291,6 +295,12 @@ def test_a_full_question_over_websockets(served):
                 phone.send_json(answer | {"choice": 0})
                 assert phone.receive_json() == {"type": "ack", "answer_id": "x1"}
             assert db.events.count(("answer", "x1")) == 1
+            assert db.writes == 2  # the retry re-sent the write; storage kept one
+
+            phone.send_json(answer | {"choice": "0"})
+            assert phone.receive_json()["type"] == "error"
+            phone.send_text("not json")
+            assert phone.receive_json()["type"] == "error"
 
             phone.send_json({"type": "command", "name": "reveal"})
             assert phone.receive_json()["type"] == "error"
@@ -320,3 +330,65 @@ def test_the_server_timer_locks_without_the_host(served):
         host.send_json({"type": "command", "name": "next"})
         assert state(host)["public"]["phase"] == "question"
         assert state(host)["public"]["phase"] == "locked"
+
+
+class FlakyDB(FakeDB):
+    """Fails the first answer write, like a dropped database connection."""
+
+    def answer(self, session, answer):
+        if self.writes == 0:
+            self.writes += 1
+            raise ConnectionError("database went away")
+        super().answer(session, answer)
+
+
+def test_an_answer_whose_write_failed_is_stored_on_replay():
+    db = FlakyDB([row(1), row(2, answer=2)])
+    app.dependency_overrides[get_source] = lambda: db
+    app.dependency_overrides[get_sink] = lambda: db
+    try:
+        with TestClient(app) as client:
+            room = open_room(client)
+            code, key = room["code"], room["host_key"]
+            with client.websocket_connect(f"/ws/{code}?host={key}") as host:
+                state(host)
+                answer = {"type": "answer", "answer_id": "y1", "question_id": 1}
+                with (
+                    pytest.raises(ConnectionError),  # the handler dies, no ack
+                    client.websocket_connect(f"/ws/{code}?name=Ana") as phone,
+                ):
+                    player = phone.receive_json()["player"]
+                    state(phone), state(host)
+                    host.send_json({"type": "command", "name": "next"})
+                    state(phone), state(host)
+                    phone.send_json(answer | {"choice": 0})
+                    phone.receive_json()
+                with client.websocket_connect(f"/ws/{code}?player={player}") as again:
+                    state(again)
+                    again.send_json(answer | {"choice": 0})
+                    assert again.receive_json() == {"type": "ack", "answer_id": "y1"}
+        assert db.events.count(("answer", "y1")) == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_the_timer_keeps_trying_if_it_wakes_early(room):
+    import asyncio
+
+    import server
+
+    room.command("next")
+    server.sockets.setdefault(room.code, {})
+    calls = []
+
+    async def fake_sleep(seconds):
+        calls.append(seconds)
+        room.test_clock.now += seconds - 0.001 if len(calls) == 1 else seconds
+
+    original = asyncio.sleep
+    asyncio.sleep = fake_sleep
+    try:
+        asyncio.run(server.lock_when_due(room))
+    finally:
+        asyncio.sleep = original
+    assert room.phase == "locked" and len(calls) == 2

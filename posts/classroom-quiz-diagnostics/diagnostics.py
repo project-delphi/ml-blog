@@ -76,16 +76,17 @@ def usable(responses: Iterable[Response]) -> list[Response]:
 def objective_cells(
     responses: list[Response],
     items: dict[int, Item],
-    present: dict[tuple[str, int], int],
+    present: dict[tuple[str, int], set[str]],
 ) -> list[Cell]:
     """Build every (session, objective) cell.
 
-    `present[(session, question)]` is how many students were in the room when
-    that question opened: the denominator that makes missing answers visible.
+    `present[(session, question)]` is who was in the room when that question
+    opened. With anyone who answered it anyway (a late joiner), those are the
+    answers we could have had: the denominator that makes missing ones visible.
     """
-    expected: Counter = Counter()
-    for (session, qid), count in present.items():
-        expected[session, items[qid].objective_id] += count
+    seats = {(s, q, p) for (s, q), players in present.items() for p in players}
+    seats |= {(r.session_id, r.question_id, r.player_id) for r in responses}
+    expected = Counter((s, items[q].objective_id) for s, q, _ in seats)
 
     got: Counter = Counter()
     late: Counter = Counter()

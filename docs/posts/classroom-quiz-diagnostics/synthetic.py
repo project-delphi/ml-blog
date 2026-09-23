@@ -56,7 +56,7 @@ class SyntheticClass:
     sessions: list[str]
     items: dict[int, Item]
     responses: list[Response]
-    present: dict[tuple[str, int], int]
+    present: dict[tuple[str, int], set[str]]
     weak: set[str]
     lost: list[Response]  # answers that never arrived, as they would have been
 
@@ -91,7 +91,7 @@ def simulate(seed: int, weak_shift: float = 0.10) -> SyntheticClass:
                 items[qid] = Item(
                     qid, o, f"notes-{o}:p{k + 1}", key, tuple(option_tags)
                 )
-                present[session, qid] = N_STUDENTS
+                present[session, qid] = set(students)
                 offset = rng.gauss(0, 0.07)
                 for s in students:
                     p = min(0.97, max(0.03, mastery[s, o] + growth + offset))

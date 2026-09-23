@@ -450,6 +450,7 @@ def test_upload_then_generate_stores_a_verified_question(client_and_store):
     assert response.status_code == 200
     chunk_ids = response.json()["chunks"]
     assert [c.split(":")[1] for c in chunk_ids] == ["p1", "p2"]
+    assert chunk_ids[0].startswith("STAT101-stats-notes-")
     assert store.chunk(chunk_ids[0]).text == PASSAGE
 
     response = client.post(
@@ -461,6 +462,20 @@ def test_upload_then_generate_stores_a_verified_question(client_and_store):
     assert saved["status"] == "verified"
     assert saved["chunk_id"] == chunk_ids[0]
     assert saved["draft"]["options"][1]["misconception"] == "linear-in-n"
+
+
+def test_same_name_different_course_or_content_gets_new_ids(client_and_store):
+    client, _ = client_and_store
+
+    def upload(course, pages):
+        files = {"file": ("lecture1.pdf", tiny_pdf(pages), "application/pdf")}
+        response = client.post("/documents", files=files, data={"course_id": course})
+        return response.json()["document_id"]
+
+    first = upload("STAT101", [PASSAGE])
+    assert upload("STAT101", [PASSAGE]) == first  # same file again: same ids
+    assert upload("BIO110", [PASSAGE]) != first
+    assert upload("STAT101", ["A corrected passage."]) != first
 
 
 def test_unknown_chunk_is_a_404(client_and_store):

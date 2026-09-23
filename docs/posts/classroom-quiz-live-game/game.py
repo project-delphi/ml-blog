@@ -144,6 +144,8 @@ class Room:
 
     def submit(self, player: str, answer_id: str, question_id: int, choice: int):
         """Record an answer exactly once. Returns (answer, is_new)."""
+        if not isinstance(question_id, int) or not isinstance(choice, int):
+            raise Rejected("question_id and choice must be integers")
         claim = (player, question_id, choice)
         if answer_id in self.answers:
             prior = self.answers[answer_id]

@@ -31,7 +31,7 @@ The fix is to have only one copy. [Part 1](../classroom-quiz-generation-pipeline
 
 ## Nothing reaches a phone until the professor approves it
 
-The game starts before class, on the professor's triage screen. `GET /triage/{course_id}` lists every `verified` question with what a person needs to judge it quickly: the stem and options, the evidence quote, its source (`stats-notes, p. 4`), and how many attempts the pipeline needed. The professor does one of three things with each question:
+The game starts before class, on the professor's triage screen. `GET /triage/{course_id}` lists every `verified` question with what a person needs to judge it quickly: the stem and options, the evidence quote, its source (`stats-notes.pdf, p. 4`), and how many attempts the pipeline needed. The professor does one of three things with each question:
 
 - **Approve** it, which is the only way a question becomes playable.
 - **Edit** it. An edit voids the old verification, so the question goes back to `draft` and can't be approved until it passes Part 1's checks again. Part 1's `review_draft` runs the substring check and both reviewers on edited text; the job that calls it on each edited question isn't part of the companion code.
@@ -115,14 +115,18 @@ The countdown works the same way. The snapshot sends `remaining_ms` and the phon
 ```python
 async def lock_when_due(room: Room) -> None:
     """The server, not any phone, decides when time is up."""
-    await asyncio.sleep(room.remaining())
-    if room.tick():
-        await broadcast(room)
+    question = room.current.id
+    # asyncio can wake a timer a hair early, so keep going until the lock
+    # happens, or the host has already moved on from this question.
+    while room.phase == "question" and room.current.id == question:
+        await asyncio.sleep(max(room.remaining(), 0.01))
+        if room.tick():
+            await broadcast(room)
 ```
 
 The transport is FastAPI WebSockets. Supabase Realtime's broadcast channels would also carry the messages, but they relay between clients. Scoring and the clock still need one authority, so a server like this one would sit behind them anyway.
 
-Rooms live in the server process's memory. That keeps the design small and puts one hard limit on it: run one worker, or route every connection for a room to the same worker. The measured cost per message is small. A question snapshot plus a phone's private view for the sample question from Part 1 serialises to 579 bytes, and the reveal to 782.
+Rooms live in the server process's memory. That keeps the design small and puts one hard limit on it: run one worker, or route every connection for a room to the same worker. The measured cost per message is small. A question snapshot plus a phone's private view for the sample question from Part 1 serialises to 579 bytes, and the reveal to 786.
 
 ## Answers are events the server counts exactly once
 
@@ -139,11 +143,13 @@ The phone makes an `answer_id` (a random UUID) when the student taps, keeps the 
   }
 ```
 
-The server records the first arrival and answers every repeat with the same acknowledgement, never scoring it twice. The same `answer_id` carrying a different choice is rejected, and so is a second answer from the same student to the same question. Points come from the server's clock, half for being right and half for being quick:
+The server records the first arrival and answers every repeat with the same acknowledgement, never scoring it twice. It writes the answer to Postgres before acknowledging it, and it does so for repeats too: the insert ignores an `answer_id` it already has, so a write that failed the first time is retried by the phone's replay, and no acknowledged answer can go missing from the diagnostics. The same `answer_id` carrying a different choice is rejected, and so is a second answer from the same student to the same question. Points come from the server's clock, half for being right and half for being quick:
 
 ```python
     def submit(self, player: str, answer_id: str, question_id: int, choice: int):
         """Record an answer exactly once. Returns (answer, is_new)."""
+        if not isinstance(question_id, int) or not isinstance(choice, int):
+            raise Rejected("question_id and choice must be integers")
         claim = (player, question_id, choice)
         if answer_id in self.answers:
             prior = self.answers[answer_id]
@@ -234,7 +240,7 @@ Both front-end files (`useGameSocket.ts` and `Projector.jsx`) are display code f
 
 ## Running the companion code
 
-The files are [game.py](./game.py), [server.py](./server.py), [sessions.sql](./sessions.sql), [requirements.txt](./requirements.txt), [web/useGameSocket.ts](./web/useGameSocket.ts) and [web/Projector.jsx](./web/Projector.jsx). The 19 offline tests drive the state machine with a fake clock and run full games over real WebSocket connections in FastAPI's test client. They cover the approval gate, an edit sending a question back to `draft`, a replayed answer acknowledged but not rescored, both kinds of late answer, a phone rejoining mid-game, and the server's timer locking a question with no host command. The SQL in `server.py` and `sessions.sql` was run against Postgres 18 (PGlite). The server hasn't been load-tested or timed on a real network, so there are no latency figures.
+The files are [game.py](./game.py), [server.py](./server.py), [sessions.sql](./sessions.sql), [requirements.txt](./requirements.txt), [web/useGameSocket.ts](./web/useGameSocket.ts) and [web/Projector.jsx](./web/Projector.jsx). The 21 offline tests drive the state machine with a fake clock and run full games over real WebSocket connections in FastAPI's test client. They cover the approval gate, an edit sending a question back to `draft`, a replayed answer acknowledged but not rescored, an answer whose database write failed and was stored on replay, malformed messages, both kinds of late answer, a phone rejoining mid-game, and the server's timer locking a question with no host command, including when it wakes early. The SQL in `server.py` and `sessions.sql` was run against Postgres 18 (PGlite). The server hasn't been load-tested or timed on a real network, so there are no latency figures.
 
 Late answers carry the most value into the next part. [Part 3](../classroom-quiz-diagnostics/) reads the stored answers as evidence about the syllabus: which objectives the class has, which it lacks, and how far to trust the difference when some of the phones were on bad connections.
 

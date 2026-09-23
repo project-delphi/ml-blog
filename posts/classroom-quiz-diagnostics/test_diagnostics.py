@@ -45,7 +45,8 @@ def test_students_count_once_and_late_answers_are_excluded():
         Response("w1", "cai", 2, 2, "late_after_reveal"),  # saw the key first
         # dan's answers never arrived
     ]
-    present = {("w1", 1): 4, ("w1", 2): 4}
+    everyone = {"ana", "ben", "cai", "dan"}
+    present = {("w1", 1): everyone, ("w1", 2): everyone}
     [cell] = objective_cells(responses, ITEMS, present)
     assert cell.students == 2  # ana and ben; cai's only answer is unusable
     assert cell.mastery == pytest.approx((1.0 + 0.0) / 2)
@@ -53,8 +54,17 @@ def test_students_count_once_and_late_answers_are_excluded():
     assert cell.late_after_reveal == 1
 
 
+def test_a_late_joiner_who_answers_counts_in_the_denominator_too():
+    responses = [
+        Response("w1", "ana", 1, 0, "on_time"),
+        Response("w1", "eve", 1, 0, "on_time"),  # joined after question 1 opened
+    ]
+    [cell] = objective_cells(responses, ITEMS, {("w1", 1): {"ana", "ben"}})
+    assert cell.answer_rate == pytest.approx(2 / 3)  # never above 1
+
+
 def test_a_cell_nobody_answered_is_no_data_not_zero():
-    [cell] = objective_cells([], ITEMS, {("w1", 3): 30})
+    [cell] = objective_cells([], ITEMS, {("w1", 3): {f"s{i}" for i in range(30)}})
     assert (cell.students, cell.mastery, cell.verdict) == (0, None, "no data")
     assert cell.answer_rate == 0
 
