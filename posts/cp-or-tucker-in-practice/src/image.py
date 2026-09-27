@@ -19,14 +19,13 @@ and only the image-specific factors are fitted.
 Usage (the sweeps write CSVs into data/; `panels` writes image crops):
     .venv-cp-tucker/bin/python posts/cp-or-tucker-in-practice/src/image.py compress
     .venv-cp-tucker/bin/python posts/cp-or-tucker-in-practice/src/image.py predict 0
-    .venv-cp-tucker/bin/python posts/cp-or-tucker-in-practice/src/image.py transfer
+    .venv-cp-tucker/bin/python posts/cp-or-tucker-in-practice/src/image.py transfer 0
 """
 
 from __future__ import annotations
 
 import csv
 import itertools
-import json
 import sys
 from pathlib import Path
 
@@ -132,25 +131,32 @@ def tucker_storage(ranks: tuple[int, ...], shape: tuple[int, ...], shared=()) ->
 def fit_cp(x, rank, mask=None, fixed=None, seed=0, iters=CP_ITERS):
     """CP-ALS with line search; missing entries are re-imputed from the fit each step.
 
-    `fixed` maps a mode to a factor matrix that is held, not fitted.
+    `fixed` maps a mode to a factor matrix that is held, not fitted. TensorLy 0.9
+    cannot hold the last mode (it warns and fits it anyway), so the modes are
+    reordered to put the held ones first and the factors put back afterwards.
     """
     fixed = fixed or {}
+    order = sorted(fixed) + [m for m in range(x.ndim) if m not in fixed]
+    moved = np.transpose(x, order)
     rng = np.random.default_rng(seed)
     init = [
-        fixed[m] if m in fixed else rng.standard_normal((n, rank))
-        for m, n in enumerate(x.shape)
+        fixed[m] if m in fixed else rng.standard_normal((x.shape[m], rank))
+        for m in order
     ]
-    cp = parafac(
-        x,
+    weights, factors = parafac(
+        moved,
         rank,
         init=tl.cp_tensor.CPTensor((np.ones(rank), init)),
-        mask=None if mask is None else mask.astype(np.float64),
-        fixed_modes=sorted(fixed),
+        mask=None if mask is None else np.transpose(mask, order).astype(np.float64),
+        fixed_modes=list(range(len(fixed))),
         n_iter_max=iters,
         tol=1e-9,
         linesearch=not fixed,
     )
-    return cp
+    factors = [factors[order.index(m)] for m in range(x.ndim)]
+    for m, held in fixed.items():  # the held factors must come back untouched
+        assert np.array_equal(factors[m], held), f"mode {m} was refitted"
+    return tl.cp_tensor.CPTensor((weights, factors))
 
 
 def fit_tucker(x, ranks, mask=None, fixed=None, iters=TUCKER_ITERS, tol=1e-7):
@@ -368,14 +374,16 @@ SHARED = (2, 3)  # pixel-within-block and colour modes carry over from the astro
 
 
 def _cp_fixed(cp):
+    """The shared modes' factors, with the CP weights folded into the first of them."""
     weights, factors = cp
-    factors = [factors[0] * weights, *factors[1:]]
-    return {m: factors[m] for m in SHARED}
+    shared = {m: factors[m] for m in SHARED}
+    shared[SHARED[0]] = shared[SHARED[0]] * weights
+    return shared
 
 
-def _fit(model, x, cfg, mask=None, fixed=None):
+def _fit(model, x, cfg, mask=None, fixed=None, seed=0):
     if model == "cp":
-        return fit_cp(x, cfg, mask=mask, fixed=fixed)
+        return fit_cp(x, cfg, mask=mask, fixed=fixed, seed=seed)
     return fit_tucker(x, cfg, mask=mask, fixed=fixed)
 
 
@@ -400,7 +408,12 @@ def _largest_term(cp, x) -> float:
     return float(np.abs(sizes).max() / np.linalg.norm(x))
 
 
-def transfer():
+def transfer(seed: int):
+    """One seed per process: the pixel split on both images and the CP start.
+
+    Tucker starts from HOSVD, so its compression rows repeat across seeds; its
+    prediction rows still change with the split.
+    """
     import pandas as pd
 
     squeeze = choose_compression(pd.read_csv(DATA / "image_compress.csv"))
@@ -408,71 +421,87 @@ def transfer():
 
     src_img, dst_img = crop(astronaut()), crop(china())
     src, dst = fold(src_img), fold(dst_img)
-    src_labels, dst_labels = (
-        pixel_split(src_img.shape[:2], 0),
-        pixel_split(dst_img.shape[:2], 0),
-    )
+    src_labels = pixel_split(src_img.shape[:2], seed)
+    dst_labels = pixel_split(dst_img.shape[:2], seed)
     src_train = entries(src_labels, 0)
     dst_train, dst_test = entries(dst_labels, 0), entries(dst_labels, 2)
 
-    rows, panels, terms = [], {}, {}
+    rows, panels = [], {}
     for model in ("cp", "tucker"):
         # Compression: learn on every astronaut pixel, reuse two modes on china.
         cfg = config(squeeze[model])
-        learned = _fit(model, src, cfg)
+        learned = _fit(model, src, cfg, seed=seed)
         panels[f"astronaut_compress_{model}"] = _dense(model, learned)
-        if model == "cp":
-            terms["compress"] = _largest_term(learned, src)
-        moved = _fit(model, dst, cfg, fixed=_shared(model, learned))
-        fresh = _fit(model, dst, cfg)
+        moved = _fit(model, dst, cfg, fixed=_shared(model, learned), seed=seed)
+        fresh = _fit(model, dst, cfg, seed=seed)
         panels[f"china_compress_{model}"] = _dense(model, moved)
+        term = _largest_term(learned, src) if model == "cp" else ""
         for variant, fitted, shared in (
             ("transfer", moved, SHARED),
             ("fresh", fresh, ()),
         ):
             est = _dense(model, fitted)
             storage = _storage(model, cfg, dst.shape, shared)
+            score = f"{psnr(dst, est):.3f}"
             rows.append(
-                ["compress", model, str(cfg), variant, storage, f"{psnr(dst, est):.3f}"]
+                ["compress", model, str(cfg), variant, seed, storage, score, term]
             )
 
         # Prediction: learn on the astronaut's training pixels, reuse two modes on
         # china, fit china's own modes on its training pixels, score its test pixels.
-        cfg = config(predict[model])
         # Panels keep the observed pixels and show the model only where it predicts.
-        learned = _fit(model, src, cfg, mask=src_train)
-        if model == "cp":
-            terms["predict"] = _largest_term(learned, src)
+        cfg = config(predict[model])
+        learned = _fit(model, src, cfg, mask=src_train, seed=seed)
         panels[f"astronaut_predict_{model}"] = np.where(
             src_train, src, _dense(model, learned)
         )
-        moved = _fit(model, dst, cfg, mask=dst_train, fixed=_shared(model, learned))
-        fresh = _fit(model, dst, cfg, mask=dst_train)
+        moved = _fit(
+            model, dst, cfg, mask=dst_train, fixed=_shared(model, learned), seed=seed
+        )
+        fresh = _fit(model, dst, cfg, mask=dst_train, seed=seed)
         panels[f"china_predict_{model}"] = np.where(
             dst_train, dst, _dense(model, moved)
         )
+        term = _largest_term(learned, src) if model == "cp" else ""
         for variant, fitted, shared in (
             ("transfer", moved, SHARED),
             ("fresh", fresh, ()),
         ):
             est = _dense(model, fitted)
             storage = _storage(model, cfg, dst.shape, shared)
-            score = psnr(dst, est, dst_test)
-            rows.append(["predict", model, str(cfg), variant, storage, f"{score:.3f}"])
+            score = f"{psnr(dst, est, dst_test):.3f}"
+            rows.append(
+                ["predict", model, str(cfg), variant, seed, storage, score, term]
+            )
 
     panels["astronaut_predict_interpolate"] = fold(
         interpolate(src_img, src_labels == 0)
     )
     base = interpolate(dst_img, dst_labels == 0)
     panels["china_predict_interpolate"] = fold(base)
-    rows.append(
-        ["predict", "interpolate", "", "", 0, f"{psnr(dst, fold(base), dst_test):.3f}"]
-    )
+    score = f"{psnr(dst, fold(base), dst_test):.3f}"
+    rows.append(["predict", "interpolate", "", "", seed, 0, score, ""])
 
-    header = ["job", "model", "config", "variant", "storage", "psnr"]
-    write_rows("image_transfer.csv", header, rows)
-    (DATA / "image_cp_terms.json").write_text(json.dumps(terms, indent=2) + "\n")
-    _save_panels(panels, src_img, dst_img, src_labels, dst_labels)
+    header = [
+        "job",
+        "model",
+        "config",
+        "variant",
+        "seed",
+        "storage",
+        "psnr",
+        "largest_term",
+    ]
+    write_rows(f"image_transfer_seed{seed}.csv", header, rows)
+    if seed == 0:
+        _save_panels(panels, src_img, dst_img, src_labels, dst_labels)
+
+
+def transfer_runs():
+    import pandas as pd
+
+    paths = sorted(DATA.glob("image_transfer_seed*.csv"))
+    return pd.concat(pd.read_csv(path) for path in paths)
 
 
 # Crops shown at full resolution, so block artefacts stay visible.
@@ -505,8 +534,10 @@ def main() -> None:
     job = sys.argv[1]
     if job == "predict":
         sweep_predict(int(sys.argv[2]))
+    elif job == "transfer":
+        transfer(int(sys.argv[2]))
     else:
-        {"compress": sweep_compress, "transfer": transfer}[job]()
+        sweep_compress()
 
 
 if __name__ == "__main__":

@@ -89,6 +89,9 @@ plt.rcParams.update(
     }
 )
 
+# Quarto keys this post's freeze on index.qmd alone. After changing src/*.py or
+# anything under data/, re-render this post explicitly (make render-post), or a
+# project render keeps serving the old numbers and skips every assert below.
 DATA = Path("data")
 sys.path.insert(0, "src")
 
@@ -631,7 +634,7 @@ CP fits the kernel more closely than Tucker-2 at every budget.
 - The three CP starts agree to within `{python} f"{spread:.4f}"` at every budget, so
   the gap is not a lucky seed.
 - CP's error was still falling at 1,000 iterations, by up to `{python} f"{tail:.1e}"`
-  over the last tenth of them. ALS with line search never raises the error, so more
+  over roughly the last hundred. ALS with line search never raises the error, so more
   iterations could only widen the gap.
 
 The price is in the right panel. At every budget CP's largest term is between
@@ -896,6 +899,7 @@ too_strong = {
 # The prose names these outcomes; fail the render if a rerun changes them.
 assert set(window) == {"group", "l1", "wd"}
 assert set(too_strong) == {"group", "l1"}
+assert too_strong["group"].hi < prune.TRUE_RANK <= too_strong["l1"].hi
 
 
 def mu(k, end):
@@ -927,9 +931,9 @@ the median distance to the noiseless tensor. Without a penalty all
   `{python} f"{window['l1'][2]:.4f}"` and `{python} f"{window['wd'][2]:.4f}"` against
   `{python} f"{baseline.err:.4f}"`. The spare terms were fitting noise.
 - **Too weak keeps spares; too strong cuts true terms.** Group lasso at
-  `{python} f"{too_strong['group'].strength:g}"` and L1 at
-  `{python} f"{too_strong['l1'].strength:g}"` drop below six on some seeds, and the
-  median distance to the truth jumps to `{python} f"{too_strong['group'].err:.2f}"` and
+  `{python} f"{too_strong['group'].strength:g}"` keeps fewer than six on every seed,
+  and L1 at `{python} f"{too_strong['l1'].strength:g}"` on some. The median distance
+  to the truth jumps to `{python} f"{too_strong['group'].err:.2f}"` and
   `{python} f"{too_strong['l1'].err:.2f}"`. Weight decay still keeps six at the top of
   the grid.
 - **Inside the range the penalty still shrinks the survivors**, so the error climbs
@@ -1020,13 +1024,17 @@ tk_runs = squeeze_runs[
 tk_front = tk_runs[tk_runs.psnr == tk_runs.psnr.cummax()]
 
 # The same comparison at other thresholds, wherever both families clear it.
-sq_ratio = {}
+sq_ratio, sq_tucker_only = {}, []
 for target in (25.0, 27.5, 30.0, 32.5, 35.0):
     picks = im.choose_compression(squeeze_runs, target)
     if {"cp", "tucker"} <= set(picks):
         sq_ratio[target] = picks["tucker"].storage / picks["cp"].storage
+    elif "tucker" in picks:
+        sq_tucker_only.append(target)
+cp_top = cp_curve.storage.max()
 assert all(r > 1 for r in sq_ratio.values())  # the prose says CP always stores less
 sq_core = int(np.prod(im.config(sq_tk)))
+assert im.config(sq_tk)[:2] == (64, 64)  # the prose says the layout modes stay whole
 ```
 
 ```{python}
@@ -1056,10 +1064,13 @@ plt.show()
   `{python} f"{int(sq_tk.storage):,}"` numbers, `{python} f"{img_dense / sq_tk.storage:.1f}"`×,
   at `{python} f"{sq_tk.psnr:.1f}"` dB. Its block-row and block-column ranks sit at
   the full 64, so the core alone holds `{python} f"{sq_core:,}"` of those numbers.
-- **The ranking does not depend on the threshold.** At every threshold from 25 to
-  `{python} f"{max(sq_ratio):g}"` dB that both families reach on this grid, Tucker
-  needs `{python} f"{min(sq_ratio.values()):.1f}"` to
-  `{python} f"{max(sq_ratio.values()):.1f}"` times CP's storage.
+- **The ranking holds across thresholds.** At every threshold from
+  `{python} f"{min(sq_ratio):g}"` to `{python} f"{max(sq_ratio):g}"` dB, Tucker needs
+  `{python} f"{min(sq_ratio.values()):.1f}"` to
+  `{python} f"{max(sq_ratio.values()):.1f}"` times CP's storage. At
+  `{python} ", ".join(f"{t:g}" for t in sq_tucker_only)` dB only Tucker appears,
+  because the CP grid stops at `{python} f"{int(cp_top):,}"` numbers, not because CP
+  was measured to lose there.
 - **The spectra predicted it.** The layout modes need nearly all their length, so a
   Tucker core over them is close to the full size of those modes multiplied together.
   CP pays for each component once per mode instead of once per combination.
@@ -1102,6 +1113,8 @@ tk_peak = tk_pred.loc[tk_pred.val.idxmax()]
 assert cp_last.val < cp_peak.val and cp_last["rank"] > cp_peak["rank"]
 assert im.config(pr_tk) == im.config(tk_peak)
 assert interp_test > pr_tk.test > pr_cp.test
+pr_tk_cfg = im.config(pr_tk)
+assert pr_tk_cfg[:2] == X_img.shape[:2]  # the explanation needs whole layout modes
 ```
 
 ```{python}
@@ -1135,8 +1148,9 @@ plt.show()
   dB above CP's pick, from `{python} f"{pr_tk.storage / pr_cp.storage:.1f}"`× CP's
   storage. Compression ranked the two the other way round.
 - **Why the ranking flips.** Tucker at this rank leaves the block-row and block-column
-  modes whole, so every block keeps its own 24 coefficients on 8 shared within-block
-  patterns, and a hidden pixel is predicted from its own block. CP writes a block's
+  modes whole, so every block keeps its own
+  `{python} pr_tk_cfg[2] * pr_tk_cfg[3]` coefficients on `{python} pr_tk_cfg[2]` shared
+  within-block patterns, and a hidden pixel is predicted from its own block. CP writes a block's
   weight on component $r$ as the product $a_{Ir}b_{Jr}$ of a row factor and a column
   factor. That tie between blocks is what lets CP compress, and it is what stops CP
   predicting.
@@ -1149,79 +1163,106 @@ plt.show()
 The tuned models go to the temple unchanged in rank. The within-block and colour
 factors learned on the astronaut are held fixed; only the block-row and block-column
 factors (and Tucker's core) are fitted to the temple. The fresh fit frees every factor
-at the same ranks, and is the most the transfer could hope to match.
+at the same ranks. It has every freedom the transfer has, so it can fit the temple's
+observed pixels at least as closely; with half of them hidden, its extra free factors
+can also fit more noise.
 
 ```{python}
 #| label: image-transfer
-moved = pd.read_csv(DATA / "image_transfer.csv")
+moved = im.transfer_runs()
 panels = np.load(DATA / "image_panels.npz")
+n_transfer = moved.seed.nunique()
 
 
-def moved_psnr(job, model, variant):
-    hit = moved[(moved.job == job) & (moved.model == model) & (moved.variant == variant)]
-    return hit.psnr.iloc[0]
+def pick(job, model, variant):
+    return moved[(moved.job == job) & (moved.model == model) & (moved.variant == variant)]
 
 
-def moved_storage(job, model, variant):
-    hit = moved[(moved.job == job) & (moved.model == model) & (moved.variant == variant)]
-    return int(hit.storage.iloc[0])
+def mean_psnr(job, model, variant):
+    return pick(job, model, variant).psnr.mean()
 
 
-china_interp = moved[moved.model == "interpolate"].psnr.iloc[0]
-cp_terms = json.loads((DATA / "image_cp_terms.json").read_text())
-loss = {
-    job: {
-        m: moved_psnr(job, m, "fresh") - moved_psnr(job, m, "transfer")
-        for m in ("cp", "tucker")
-    }
+def spread(job, model, variant):
+    return span(*pick(job, model, variant).psnr.agg(["min", "max"]), ".2f")
+
+
+def gain(job, model):
+    """Transferred minus fresh PSNR, one value per seed."""
+    t = pick(job, model, "transfer").set_index("seed").psnr
+    f = pick(job, model, "fresh").set_index("seed").psnr
+    return t - f
+
+
+china_interp = moved[moved.model == "interpolate"].psnr
+cp_terms = {
+    job: moved[(moved.job == job) & (moved.model == "cp")].largest_term.astype(float)
     for job in ("compress", "predict")
 }
-# The prose reads these outcomes; fail the render if a rerun changes them.
-assert max(moved_psnr("compress", m, "fresh") for m in ("cp", "tucker")) < im.PSNR_TARGET
-assert 0 < loss["compress"]["tucker"] < loss["compress"]["cp"]
-assert loss["predict"]["cp"] < 0 < loss["predict"]["tucker"]
-assert china_interp > max(moved_psnr("predict", m, v) for m in ("cp", "tucker") for v in ("transfer", "fresh"))
+
+
+def storage(job, model, variant):
+    return int(pick(job, model, variant).storage.iloc[0])
+
+
+rows = []
+for job, label in (("compress", "compression"), ("predict", "prediction")):
+    for model, name, chosen in (
+        ("cp", "CP", sq_cp if job == "compress" else pr_cp),
+        ("tucker", "Tucker", sq_tk if job == "compress" else pr_tk),
+    ):
+        rows.append(
+            [
+                label,
+                name,
+                f"{im.config(chosen)}",
+                spread(job, model, "transfer"),
+                spread(job, model, "fresh"),
+                f"{storage(job, model, 'transfer'):,} / {storage(job, model, 'fresh'):,}",
+            ]
+        )
+rows.append(
+    [
+        "prediction",
+        "3 × 3 neighbour mean",
+        "",
+        span(china_interp.min(), china_interp.max(), ".2f"),
+        "",
+        "",
+    ]
+)
+# The prose reads these outcomes; each must hold on every seed.
+loss_sq = {m: -gain("compress", m) for m in ("cp", "tucker")}
+gain_pr = {m: gain("predict", m) for m in ("cp", "tucker")}
+assert n_transfer == 3
+assert max(mean_psnr("compress", m, "fresh") for m in ("cp", "tucker")) < im.PSNR_TARGET
+assert (loss_sq["tucker"] > 0).all() and (loss_sq["cp"] > loss_sq["tucker"].max()).all()
+assert (gain_pr["cp"] > 0).all() and (gain_pr["tucker"] < 0).all()
+best_model = moved[(moved.job == "predict") & (moved.model != "interpolate")]
+assert (china_interp.min() > best_model.groupby("seed").psnr.max()).all()
+
+
+def rng(series, fmt=".2f"):
+    return span(series.min(), series.max(), fmt)
+
+
 md_table(
     pd.DataFrame(
-        {
-            "Job": ["compression", "compression", "prediction", "prediction", "prediction"],
-            "Model": ["CP", "Tucker", "CP", "Tucker", "3 × 3 neighbour mean"],
-            "Ranks": [
-                f"{im.config(sq_cp)}",
-                f"{im.config(sq_tk)}",
-                f"{im.config(pr_cp)}",
-                f"{im.config(pr_tk)}",
-                "",
-            ],
-            "Transferred PSNR": [
-                f"{moved_psnr('compress', 'cp', 'transfer'):.2f}",
-                f"{moved_psnr('compress', 'tucker', 'transfer'):.2f}",
-                f"{moved_psnr('predict', 'cp', 'transfer'):.2f}",
-                f"{moved_psnr('predict', 'tucker', 'transfer'):.2f}",
-                f"{china_interp:.2f}",
-            ],
-            "Fresh PSNR": [
-                f"{moved_psnr('compress', 'cp', 'fresh'):.2f}",
-                f"{moved_psnr('compress', 'tucker', 'fresh'):.2f}",
-                f"{moved_psnr('predict', 'cp', 'fresh'):.2f}",
-                f"{moved_psnr('predict', 'tucker', 'fresh'):.2f}",
-                "",
-            ],
-            "Numbers stored for the temple (transferred / fresh)": [
-                f"{moved_storage('compress', 'cp', 'transfer'):,} / {moved_storage('compress', 'cp', 'fresh'):,}",
-                f"{moved_storage('compress', 'tucker', 'transfer'):,} / {moved_storage('compress', 'tucker', 'fresh'):,}",
-                f"{moved_storage('predict', 'cp', 'transfer'):,} / {moved_storage('predict', 'cp', 'fresh'):,}",
-                f"{moved_storage('predict', 'tucker', 'transfer'):,} / {moved_storage('predict', 'tucker', 'fresh'):,}",
-                "",
-            ],
-        }
+        rows,
+        columns=[
+            "Job",
+            "Model",
+            "Ranks",
+            "Transferred PSNR",
+            "Fresh PSNR",
+            "Numbers stored for the temple (transferred / fresh)",
+        ],
     )
 )
 ```
 
 ```{python}
 #| label: fig-image-panels
-#| fig-cap: "192 × 192 crops at full resolution. Top: the astronaut's original, CP and Tucker at the compression picks, the half of the pixels kept for prediction, and the CP, Tucker and neighbour-mean fills. Bottom: the same for the temple, where the CP and Tucker models reuse the astronaut's within-block and colour factors. China image: danielbuechele, CC BY 2.0."
+#| fig-cap: "192 × 192 crops at full resolution. Top: the astronaut's original, CP and Tucker at the compression picks, the half of the pixels kept for prediction, and the CP, Tucker and neighbour-mean fills. Bottom: the same for the temple, where the CP and Tucker models reuse the astronaut's within-block and colour factors. Pixel split and CP start: seed 0. China image: danielbuechele, CC BY 2.0."
 #| fig-alt: "Two rows of seven image crops, a face on top and a temple roof below: original, two compressed versions, a speckled half-observed version, and three filled-in versions."
 #| fig-width: 12
 #| fig-height: 3.6
@@ -1251,36 +1292,39 @@ plt.tight_layout()
 plt.show()
 ```
 
+Every number in this subsection is a range over `{python} n_transfer` seeds; a seed
+sets the pixel split on both images and CP's starting point. The crops show seed 0.
+
 - **A quality bar does not transfer.** At the astronaut's 30 dB ranks the temple
-  reaches only `{python} f"{moved_psnr('compress', 'cp', 'fresh'):.1f}"` dB with CP and
-  `{python} f"{moved_psnr('compress', 'tucker', 'fresh'):.1f}"` dB with Tucker, even
+  reaches only `{python} f"{mean_psnr('compress', 'cp', 'fresh'):.1f}"` dB with CP and
+  `{python} f"{mean_psnr('compress', 'tucker', 'fresh'):.1f}"` dB with Tucker, even
   with every factor refitted. The temple has more fine texture than the portrait, so
   the threshold search has to run again on each image.
-- **For compression, Tucker's shared factors transfer and CP's much less.** Reusing the astronaut's
-  within-block and colour factors costs Tucker
-  `{python} f"{loss['compress']['tucker']:.1f}"` dB against a fresh fit, and CP
-  `{python} f"{loss['compress']['cp']:.1f}"` dB. Tucker's shared factors are bases for
-  subspaces of block patterns and colours, which photographs share. CP's are
+- **For compression, Tucker's shared factors transfer and CP's much less.** Reusing
+  the astronaut's within-block and colour factors costs Tucker
+  `{python} rng(loss_sq['tucker'])` dB against a fresh fit, and CP
+  `{python} rng(loss_sq['cp'])` dB. Tucker's shared factors are bases for subspaces of
+  block patterns and colours, which photographs share. CP's are
   `{python} im.config(sq_cp)` particular rank-one components chosen to fit one
-  picture, the largest of them `{python} f"{cp_terms['compress']:.1f}"` times that
+  picture, the largest of them `{python} rng(cp_terms['compress'], '.1f')` times that
   picture's norm.
 - **For prediction, fixed factors help CP.** With half the temple's pixels hidden,
-  CP with the astronaut's factors scores
-  `{python} f"{moved_psnr('predict', 'cp', 'transfer'):.2f}"` dB against
-  `{python} f"{moved_psnr('predict', 'cp', 'fresh'):.2f}"` dB fitted fresh. Fewer free
-  factors leave less to overfit. Tucker loses
-  `{python} f"{loss['predict']['tucker']:.2f}"` dB by reusing them.
-- **The neighbour mean still leads** at `{python} f"{china_interp:.2f}"` dB.
+  reusing the astronaut's factors gains CP `{python} rng(gain_pr['cp'])` dB over a
+  fresh fit: fewer free factors leave less to overfit. Tucker loses
+  `{python} rng(-gain_pr['tucker'])` dB by reusing them.
+- **The neighbour mean still leads** at `{python} rng(china_interp)` dB.
 
-What carries from one photograph to another is the within-block and colour bases,
-and Tucker's carry best. The ranks, and the quality they buy, have to be found again.
+For compression, what carries from one photograph to another is the within-block and
+colour bases, and Tucker's carry with little loss. For prediction, fixing them helps
+CP and costs Tucker a little. The ranks, and the quality they buy, have to be found
+again.
 
 ## Decision matrix
 
 | | CP | Tucker (HOSVD to initialise and to read ranks) |
 |---|---|---|
 | Core | Superdiagonal: component $r$ meets only component $r$ | Dense: any component meets any other |
-| Goal it serves | Interpretable parts; the lowest error per stored number, if degeneracy is controlled | Asymmetric relations through one shared core; predicting hidden entries; a well-conditioned compressed layer; bases that carry to new data |
+| Goal it serves | Interpretable parts; the lowest error per stored number, if degeneracy is controlled | Asymmetric relations through one shared core; predicting hidden entries; a well-conditioned compressed layer; compression bases that carry to new images |
 | Uniqueness | Unique up to order and scale under Kruskal's condition | A subspace per mode; factors fixed only up to rotation |
 | Numbers, 256×256×3×3 kernel | $518R$ | $512R+9R^2$ (square Tucker-2) |
 | Numbers, FB15k-237 at published size | `{python} millions(cp_n3)` (CP-N3) | `{python} millions(tucker_kg)` (TuckER) |

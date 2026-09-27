@@ -73,7 +73,7 @@ def run_cp(seed: int) -> None:
                 "rank",
                 "params",
                 "rel_error",
-                "iters",
+                "recorded_errors",
                 "tail_improvement",
                 "max_component_norm",
                 "seconds",
@@ -97,6 +97,8 @@ def run_cp(seed: int) -> None:
             # approximate is cancelling against another one.
             comp = np.prod([np.linalg.norm(f, axis=0) for f in cp.factors], axis=0)
             comp = comp * np.asarray(cp.weights)
+            # With line search, TensorLy records an error only on iterations that
+            # are not line-search steps, so len(errors) is about half of CP_ITERS.
             tail = len(errors) // 10
             writer.writerow(
                 [
