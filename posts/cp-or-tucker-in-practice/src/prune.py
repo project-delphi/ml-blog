@@ -66,14 +66,9 @@ def component_weights(factors):
     return torch.stack([f.norm(dim=0) for f in factors]).prod(0)
 
 
-def penalty(factors, kind):
-    if kind == "group":
-        return sum(f.norm(dim=0).sum() for f in factors)
-    if kind == "l1":
-        return sum(f.abs().sum() for f in factors)
-    if kind == "wd":
-        return sum((f**2).sum() for f in factors)
-    return torch.tensor(0.0)
+def weight_decay(factors):
+    """The only smooth penalty; group lasso and L1 act through `prox`."""
+    return sum((f**2).sum() for f in factors)
 
 
 def prox(factors, kind, step, strength):
@@ -110,7 +105,7 @@ def fit(data, start, kind, strength, iters=ITERS):
     def smooth(fs):
         value = 0.5 * ((data - cp_tensor(fs)) ** 2).sum()
         if kind == "wd":
-            value = value + strength * penalty(fs, "wd")
+            value = value + strength * weight_decay(fs)
         return value
 
     for _ in range(iters):

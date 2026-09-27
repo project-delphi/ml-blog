@@ -10,7 +10,6 @@ tags: [CP, Tucker, HOSVD, TuckER, DistMult, ComplEx, RESCAL, knowledge graph, FB
 jupyter: cp-tucker-blog
 resources:
   - cover.png
-  - data
 execute:
   warning: false
 format:
@@ -132,7 +131,9 @@ For an $N$-way tensor $\mathcal{X}\in\mathbb{R}^{I_1\times\cdots\times I_N}$:
   meets only component $r$ of the other modes. A dense core lets any component of one
   mode meet any component of another.
 - **Parameter counts.** CP stores $R\sum_n I_n$ numbers. Tucker stores
-  $\prod_n R_n+\sum_n I_nR_n$, and the core product is what grows fastest.
+  $\prod_n R_n+\sum_n I_nR_n$, and the core product is what grows fastest. A mode kept
+  whole ($R_n=I_n$) needs no factor: its square orthogonal factor folds into the
+  core, so its $I_nR_n$ term drops out.
 - **HOSVD.** Take the SVD of each mode-$n$ unfolding $\mathcal{X}_{(n)}$, keep $R_n$
   left singular vectors as $U^{(n)}$, and set
   $\mathcal{G}=\mathcal{X}\times_1 U^{(1)\top}\cdots\times_N U^{(N)\top}$. HOOI
@@ -205,7 +206,7 @@ The question to ask of the data is how often a relation's reversal is also a fac
 ```{python}
 #| label: fig-reversal
 #| fig-cap: "Per-relation fraction of FB15k-237 training pairs $(s,o)$ whose reversal $(o,s)$ is also a training triple, weighted by how many triples the relation carries."
-#| fig-alt: "Histogram of the reversed fraction for FB15k-237 relations, weighted by triples. About 85% of the weight sits in the bar at zero and about 15% in one bar near 0.8, with nothing between."
+#| fig-alt: "Histogram of the reversed fraction for FB15k-237 relations, weighted by triples. About 85% of the weight sits in the bar at zero and about 15% in the bar from 0.80 to 0.85; the few remaining bars near 0.4, 0.75 and 0.9 are too small to see."
 #| fig-height: 3.2
 fig, ax = plt.subplots()
 ax.hist(
@@ -488,7 +489,8 @@ $$
    and padding.
 3. 1×1 conv, $R_o$ → `{python} C_out` channels, weights $U^{\text{out}}$.
 
-It stores $256R_i+256R_o+9R_oR_i$ numbers. Kim et al. leave the spatial modes alone
+It stores $256R_i+256R_o+9R_oR_i$ numbers, less the factor of any channel mode kept at
+full length. Kim et al. leave the spatial modes alone
 because they "are already quite small": a length-3 mode has little to give.
 
 ```{python}
@@ -904,6 +906,11 @@ too_strong = {
 assert set(window) == {"group", "l1", "wd"}
 assert set(too_strong) == {"group", "l1"}
 assert too_strong["group"].hi < prune.TRUE_RANK <= too_strong["l1"].hi
+# "Pruning also denoises" and "the error climbs toward the top of the range".
+assert all(w[2] < baseline.err for w in window.values())
+for k, (lo, hi, _) in window.items():
+    inside = summary[(summary.kind == k) & summary.strength.between(lo, hi)]
+    assert inside.sort_values("strength").err.iloc[-1] > inside.err.min()
 
 
 def mu(k, end):
@@ -1008,7 +1015,8 @@ Every pixel is fitted, and the question is the smallest model that is good enoug
   three random starts each, `{python} im.CP_ITERS` ALS iterations with line search.
 - **Tucker.** Every $(R,R,R_p,R_c)$ on a grid of `{python} len(im.COMPRESS_TUCKER)`,
   with $R$ shared by block rows and columns, fitted by HOOI from HOSVD.
-- **Storage.** $195R$ numbers for CP; $\prod_n R_n+64(2R+R_p)+3R_c$ for Tucker.
+- **Storage.** $195R$ numbers for CP. For Tucker, the core $\prod_n R_n$ plus $I_nR_n$
+  for every mode compressed below its length $I_n$.
   `src/image.py` runs the sweeps and caches them.
 
 ```{python}
@@ -1035,6 +1043,7 @@ for target in (25.0, 27.5, 30.0, 32.5, 35.0):
         sq_ratio[target] = picks["tucker"].storage / picks["cp"].storage
     elif "tucker" in picks:
         sq_tucker_only.append(target)
+assert sq_tucker_only  # the prose names the thresholds only Tucker reaches
 cp_top = cp_curve.storage.max()
 assert all(r > 1 for r in sq_ratio.values())  # the prose says CP always stores less
 sq_core = int(np.prod(im.config(sq_tk)))
@@ -1241,7 +1250,7 @@ assert n_transfer == 3
 for job in ("compress", "predict"):  # the prose says whole layout modes stay whole
     ranks = ast.literal_eval(pick(job, "tucker", "transfer").config.iloc[0])
     assert ranks[:2] == Y_img.shape[:2]
-assert max(mean_psnr("compress", m, "fresh") for m in ("cp", "tucker")) < im.PSNR_TARGET
+assert max(pick("compress", m, "fresh").psnr.max() for m in ("cp", "tucker")) < im.PSNR_TARGET
 assert (loss_sq["tucker"] > 0).all() and (loss_sq["cp"] > loss_sq["tucker"].max()).all()
 assert (gain_pr["cp"] > 0).all() and (gain_pr["tucker"] < 0).all()
 best_model = moved[(moved.job == "predict") & (moved.model != "interpolate")]
@@ -1303,8 +1312,8 @@ Every number in this subsection is a range over `{python} n_transfer` seeds; a s
 sets the pixel split on both images and CP's starting point. The crops show seed 0.
 
 - **A quality bar does not transfer.** At the astronaut's 30 dB ranks the temple
-  reaches only `{python} f"{mean_psnr('compress', 'cp', 'fresh'):.1f}"` dB with CP and
-  `{python} f"{mean_psnr('compress', 'tucker', 'fresh'):.1f}"` dB with Tucker, even
+  reaches only `{python} psnr_span('compress', 'cp', 'fresh')` dB with CP and
+  `{python} psnr_span('compress', 'tucker', 'fresh')` dB with Tucker, even
   with every factor refitted. The same ranks buy less on the temple than on the
   portrait, so the threshold search has to run again on each image.
 - **For compression, Tucker's shared factors transfer and CP's much less.** Reusing

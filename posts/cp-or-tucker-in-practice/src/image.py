@@ -121,8 +121,10 @@ def cp_storage(rank: int, shape: tuple[int, ...], shared=()) -> int:
 def tucker_storage(ranks: tuple[int, ...], shape: tuple[int, ...], shared=()) -> int:
     if any(r > n for r, n in zip(ranks, shape)):
         raise ValueError(f"ranks {ranks} exceed the tensor's shape {shape}")
+    # A mode kept whole (rank = length) has a square orthogonal factor, which
+    # folds into the core, so it costs nothing to store.
     factors = sum(
-        n * r for m, (n, r) in enumerate(zip(shape, ranks)) if m not in shared
+        n * r for m, (n, r) in enumerate(zip(shape, ranks)) if m not in shared and r < n
     )
     return int(np.prod(ranks)) + factors
 
@@ -315,8 +317,8 @@ def sweep_predict(seed: int):
 
 def append_rows(name: str, header: list[str], rows) -> None:
     path = DATA / name
-    fresh = not path.exists()
     _trim_partial(path)
+    fresh = not path.exists() or path.stat().st_size == 0
     with path.open("a", newline="") as fh:
         writer = csv.writer(fh, lineterminator="\n")
         if fresh:
@@ -366,6 +368,9 @@ def choose_prediction(runs):
     model whose mean is within one standard error of it.
     """
     runs = runs[runs.model != "interpolate"].fillna({"ranks": ""})
+    seeds = runs.groupby(["model", "rank", "ranks"], dropna=False).seed.nunique()
+    if (seeds != len(SEEDS)).any():
+        raise ValueError("choose_prediction needs every configuration on every split")
     stats = (
         runs.groupby(["model", "rank", "ranks"], dropna=False)
         .agg(

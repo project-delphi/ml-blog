@@ -39,8 +39,10 @@ def cp_params(rank: int, shape: tuple[int, ...]) -> int:
 
 
 def tucker2_params(r_out: int, r_in: int, shape: tuple[int, ...]) -> int:
+    """Core plus factors; a channel mode kept whole folds its factor into the core."""
     o, i, h, w = shape
-    return o * r_out + i * r_in + h * w * r_out * r_in
+    factors = (o * r_out if r_out < o else 0) + (i * r_in if r_in < i else 0)
+    return factors + h * w * r_out * r_in
 
 
 def cp_rank_for(budget: float, shape: tuple[int, ...]) -> int:
@@ -51,12 +53,16 @@ def tucker2_pairs_for(
     budget: float, shape: tuple[int, ...], r_outs: range
 ) -> list[tuple[int, int]]:
     """For each R_o, the largest R_i whose parameter count stays within budget."""
-    o, i, h, w = shape
     pairs = []
     for r_out in r_outs:
-        r_in = min(int((budget - o * r_out) // (i + h * w * r_out)), i)
-        if r_in >= 1:
-            pairs.append((r_out, r_in))
+        # The largest R_i within budget; storage rises with R_i, so scan down.
+        fits = [
+            r
+            for r in range(shape[1], 0, -1)
+            if tucker2_params(r_out, r, shape) <= budget
+        ]
+        if fits:
+            pairs.append((r_out, fits[0]))
     return pairs
 
 
