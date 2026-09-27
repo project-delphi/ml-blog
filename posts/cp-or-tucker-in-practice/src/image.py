@@ -16,7 +16,7 @@ The tuned models then go to a second image, scikit-learn's `china.jpg`. The
 pixel-within-block and colour factors learned on the astronaut are held fixed,
 and only the image-specific factors are fitted.
 
-Usage (the sweeps write CSVs into data/; `panels` writes image crops):
+Usage (every job writes CSVs into data/; transfer seed 0 also writes the crops):
     .venv-cp-tucker/bin/python posts/cp-or-tucker-in-practice/src/image.py compress
     .venv-cp-tucker/bin/python posts/cp-or-tucker-in-practice/src/image.py predict 0
     .venv-cp-tucker/bin/python posts/cp-or-tucker-in-practice/src/image.py transfer 0
@@ -119,6 +119,8 @@ def cp_storage(rank: int, shape: tuple[int, ...], shared=()) -> int:
 
 
 def tucker_storage(ranks: tuple[int, ...], shape: tuple[int, ...], shared=()) -> int:
+    if any(r > n for r, n in zip(ranks, shape)):
+        raise ValueError(f"ranks {ranks} exceed the tensor's shape {shape}")
     factors = sum(
         n * r for m, (n, r) in enumerate(zip(shape, ranks)) if m not in shared
     )
@@ -134,6 +136,8 @@ def fit_cp(x, rank, mask=None, fixed=None, seed=0, iters=CP_ITERS):
     `fixed` maps a mode to a factor matrix that is held, not fitted. TensorLy 0.9
     cannot hold the last mode (it warns and fits it anyway), so the modes are
     reordered to put the held ones first and the factors put back afterwards.
+    Line search stays on either way, so a fit with held modes and a fresh fit
+    differ only in what is held.
     """
     fixed = fixed or {}
     order = sorted(fixed) + [m for m in range(x.ndim) if m not in fixed]
@@ -151,7 +155,7 @@ def fit_cp(x, rank, mask=None, fixed=None, seed=0, iters=CP_ITERS):
         fixed_modes=list(range(len(fixed))),
         n_iter_max=iters,
         tol=1e-9,
-        linesearch=not fixed,
+        linesearch=True,  # held modes are not moved by the extrapolation step
     )
     factors = [factors[order.index(m)] for m in range(x.ndim)]
     for m, held in fixed.items():  # the held factors must come back untouched
@@ -165,6 +169,8 @@ def fit_tucker(x, ranks, mask=None, fixed=None, iters=TUCKER_ITERS, tol=1e-7):
     `fixed` maps a mode to an orthonormal factor that is held, not fitted.
     """
     fixed = fixed or {}
+    if any(r > n for r, n in zip(ranks, x.shape)):
+        raise ValueError(f"ranks {ranks} exceed the tensor's shape {x.shape}")
     filled = x.copy() if mask is None else np.where(mask, x, x[mask].mean())
     factors = [
         fixed[m] if m in fixed else _leading(tl.unfold(filled, m), r)
@@ -221,6 +227,14 @@ def write_rows(name: str, header: list[str], rows) -> None:
             print(*row, flush=True)
 
 
+def _trim_partial(path: Path) -> None:
+    """Drop a half-written last row left by an interrupted sweep."""
+    if path.exists():
+        text = path.read_text()
+        if text and not text.endswith("\n"):
+            path.write_text(text[: text.rfind("\n") + 1])
+
+
 def done_rows(name: str) -> set[tuple[str, str, str]]:
     """(model, rank, ranks) keys already written, so an interrupted sweep resumes.
 
@@ -274,6 +288,7 @@ def sweep_predict(seed: int):
     labels = pixel_split(img.shape[:2], seed)
     train, val, test = (entries(labels, k) for k in range(3))
     name = f"image_predict_seed{seed}.csv"
+    _trim_partial(DATA / name)
     done = done_rows(name)
 
     def rows():
@@ -301,6 +316,7 @@ def sweep_predict(seed: int):
 def append_rows(name: str, header: list[str], rows) -> None:
     path = DATA / name
     fresh = not path.exists()
+    _trim_partial(path)
     with path.open("a", newline="") as fh:
         writer = csv.writer(fh, lineterminator="\n")
         if fresh:
@@ -381,6 +397,22 @@ def _cp_fixed(cp):
     return shared
 
 
+def moved_ranks(model, cfg, src_shape, dst_shape):
+    """The tuned ranks, restated for a tensor of another shape.
+
+    CP's single rank carries over. A Tucker layout mode the astronaut kept
+    whole stays whole on the new image, whatever its length; a compressed one
+    keeps its rank, capped at the new mode's length. The shared modes have the
+    same length on both images.
+    """
+    if model == "cp":
+        return cfg
+    return tuple(
+        n_dst if r == n_src else min(r, n_dst)
+        for r, n_src, n_dst in zip(cfg, src_shape, dst_shape)
+    )
+
+
 def _fit(model, x, cfg, mask=None, fixed=None, seed=0):
     if model == "cp":
         return fit_cp(x, cfg, mask=mask, fixed=fixed, seed=seed)
@@ -431,9 +463,10 @@ def transfer(seed: int):
         # Compression: learn on every astronaut pixel, reuse two modes on china.
         cfg = config(squeeze[model])
         learned = _fit(model, src, cfg, seed=seed)
+        cfg_dst = moved_ranks(model, cfg, src.shape, dst.shape)
         panels[f"astronaut_compress_{model}"] = _dense(model, learned)
-        moved = _fit(model, dst, cfg, fixed=_shared(model, learned), seed=seed)
-        fresh = _fit(model, dst, cfg, seed=seed)
+        moved = _fit(model, dst, cfg_dst, fixed=_shared(model, learned), seed=seed)
+        fresh = _fit(model, dst, cfg_dst, seed=seed)
         panels[f"china_compress_{model}"] = _dense(model, moved)
         term = _largest_term(learned, src) if model == "cp" else ""
         for variant, fitted, shared in (
@@ -441,10 +474,20 @@ def transfer(seed: int):
             ("fresh", fresh, ()),
         ):
             est = _dense(model, fitted)
-            storage = _storage(model, cfg, dst.shape, shared)
+            storage = _storage(model, cfg_dst, dst.shape, shared)
             score = f"{psnr(dst, est):.3f}"
+            source_term = term if variant == "transfer" else ""
             rows.append(
-                ["compress", model, str(cfg), variant, seed, storage, score, term]
+                [
+                    "compress",
+                    model,
+                    str(cfg_dst),
+                    variant,
+                    seed,
+                    storage,
+                    score,
+                    source_term,
+                ]
             )
 
         # Prediction: learn on the astronaut's training pixels, reuse two modes on
@@ -452,13 +495,19 @@ def transfer(seed: int):
         # Panels keep the observed pixels and show the model only where it predicts.
         cfg = config(predict[model])
         learned = _fit(model, src, cfg, mask=src_train, seed=seed)
+        cfg_dst = moved_ranks(model, cfg, src.shape, dst.shape)
         panels[f"astronaut_predict_{model}"] = np.where(
             src_train, src, _dense(model, learned)
         )
         moved = _fit(
-            model, dst, cfg, mask=dst_train, fixed=_shared(model, learned), seed=seed
+            model,
+            dst,
+            cfg_dst,
+            mask=dst_train,
+            fixed=_shared(model, learned),
+            seed=seed,
         )
-        fresh = _fit(model, dst, cfg, mask=dst_train, seed=seed)
+        fresh = _fit(model, dst, cfg_dst, mask=dst_train, seed=seed)
         panels[f"china_predict_{model}"] = np.where(
             dst_train, dst, _dense(model, moved)
         )
@@ -468,10 +517,20 @@ def transfer(seed: int):
             ("fresh", fresh, ()),
         ):
             est = _dense(model, fitted)
-            storage = _storage(model, cfg, dst.shape, shared)
+            storage = _storage(model, cfg_dst, dst.shape, shared)
             score = f"{psnr(dst, est, dst_test):.3f}"
+            source_term = term if variant == "transfer" else ""
             rows.append(
-                ["predict", model, str(cfg), variant, seed, storage, score, term]
+                [
+                    "predict",
+                    model,
+                    str(cfg_dst),
+                    variant,
+                    seed,
+                    storage,
+                    score,
+                    source_term,
+                ]
             )
 
     panels["astronaut_predict_interpolate"] = fold(
@@ -490,7 +549,7 @@ def transfer(seed: int):
         "seed",
         "storage",
         "psnr",
-        "largest_term",
+        "source_largest_term",
     ]
     write_rows(f"image_transfer_seed{seed}.csv", header, rows)
     if seed == 0:
@@ -531,13 +590,17 @@ def _save_panels(panels, src_img, dst_img, src_labels, dst_labels):
 
 
 def main() -> None:
-    job = sys.argv[1]
-    if job == "predict":
+    job = sys.argv[1] if len(sys.argv) > 1 else ""
+    if job == "compress":
+        sweep_compress()
+    elif job == "predict":
         sweep_predict(int(sys.argv[2]))
     elif job == "transfer":
         transfer(int(sys.argv[2]))
     else:
-        sweep_compress()
+        sys.exit(
+            f"unknown job {job!r}: expected compress, predict SEED or transfer SEED"
+        )
 
 
 if __name__ == "__main__":

@@ -133,6 +133,8 @@ def fit(data, start, kind, strength, iters=ITERS):
             if smooth(trial) <= bound + 1e-15:
                 break
             step *= 0.5
+            if not torch.isfinite(bound) or step < 1e-12:
+                raise FloatingPointError("backtracking failed: the fit diverged")
         factors = trial
         step = min(step * 1.5, MAX_STEP)
         factors = rebalance(factors, kind)

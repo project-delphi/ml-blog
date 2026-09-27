@@ -47,6 +47,7 @@ ranks, not as a third model.
 ```{python}
 #| label: setup
 #| echo: false
+import ast
 import json
 import sys
 from pathlib import Path
@@ -363,9 +364,10 @@ vary by model, so they carry no count.
   TuckER's 0.358.
 - **Tucker's case is size.** At the published settings TuckER matches CP-N3 with
   `{python} f"{cp_n3 / tucker_kg:.0f}"`× fewer parameters and ComplEx-N3 with
-  `{python} f"{complex_n3 / tucker_kg:.1f}"`× fewer. Entity tables dominate every count,
-  and TuckER stores 200 numbers per entity against CP-N3's 8,000. At $10^5$ entities
-  that is $2\times10^7$ numbers against $8\times10^8$.
+  `{python} f"{complex_n3 / tucker_kg:.1f}"`× fewer. Entity tables dominate CP-N3's and
+  ComplEx-N3's counts; TuckER's is mostly its $200^3$ core, which does not grow with
+  the graph. TuckER stores 200 numbers per entity against CP-N3's 8,000, so at $10^5$
+  entities that is $2\times10^7$ numbers against $8\times10^8$.
 - **The relation dimension is a separate dial.** TuckER sets $d_r=30$ against
   $d_e=200$ on WN18RR, which has 11 relations. CP and ComplEx force one rank on every
   mode.
@@ -387,6 +389,8 @@ The ranking this supports:
 
 ```{python}
 #| label: kernel
+from sweep import tucker2_params
+
 meta = json.loads((DATA / "resnet18_manifest.json").read_text())
 K = np.load(DATA / "resnet18_layer3_1_conv2.npy").astype(np.float64)
 K_norm = np.linalg.norm(K)
@@ -697,7 +701,7 @@ r50 = (rank_at(0, 0.50), rank_at(1, 0.50))
 
 
 def t2_cost(ro, ri):
-    return C_out * ro + C_in * ri + kh * kw * ro * ri
+    return tucker2_params(ro, ri, K.shape)
 
 
 # HOSVD truncation at the 90% ranks, against the bound that guarantees it.
@@ -1160,9 +1164,12 @@ plt.show()
 
 ### Transfer to a second image
 
-The tuned models go to the temple unchanged in rank. The within-block and colour
-factors learned on the astronaut are held fixed; only the block-row and block-column
-factors (and Tucker's core) are fitted to the temple. The fresh fit frees every factor
+The tuned models go to the temple with the same ranks. The temple folds to
+`{python} " × ".join(map(str, Y_img.shape))`, so a Tucker layout mode the astronaut
+kept whole stays whole: `{python} Y_img.shape[0]` block rows and
+`{python} Y_img.shape[1]` block columns, not 64 of each. The
+within-block and colour factors learned on the astronaut are held fixed; only the
+block-row and block-column factors (and Tucker's core) are fitted to the temple. The fresh fit frees every factor
 at the same ranks. It has every freedom the transfer has, so it can fit the temple's
 observed pixels at least as closely; with half of them hidden, its extra free factors
 can also fit more noise.
@@ -1182,7 +1189,7 @@ def mean_psnr(job, model, variant):
     return pick(job, model, variant).psnr.mean()
 
 
-def spread(job, model, variant):
+def psnr_span(job, model, variant):
     return span(*pick(job, model, variant).psnr.agg(["min", "max"]), ".2f")
 
 
@@ -1195,7 +1202,7 @@ def gain(job, model):
 
 china_interp = moved[moved.model == "interpolate"].psnr
 cp_terms = {
-    job: moved[(moved.job == job) & (moved.model == "cp")].largest_term.astype(float)
+    job: pick(job, "cp", "transfer").source_largest_term.astype(float)
     for job in ("compress", "predict")
 }
 
@@ -1206,17 +1213,14 @@ def storage(job, model, variant):
 
 rows = []
 for job, label in (("compress", "compression"), ("predict", "prediction")):
-    for model, name, chosen in (
-        ("cp", "CP", sq_cp if job == "compress" else pr_cp),
-        ("tucker", "Tucker", sq_tk if job == "compress" else pr_tk),
-    ):
+    for model, name in (("cp", "CP"), ("tucker", "Tucker")):
         rows.append(
             [
                 label,
                 name,
-                f"{im.config(chosen)}",
-                spread(job, model, "transfer"),
-                spread(job, model, "fresh"),
+                pick(job, model, "transfer").config.iloc[0],
+                psnr_span(job, model, "transfer"),
+                psnr_span(job, model, "fresh"),
                 f"{storage(job, model, 'transfer'):,} / {storage(job, model, 'fresh'):,}",
             ]
         )
@@ -1234,6 +1238,9 @@ rows.append(
 loss_sq = {m: -gain("compress", m) for m in ("cp", "tucker")}
 gain_pr = {m: gain("predict", m) for m in ("cp", "tucker")}
 assert n_transfer == 3
+for job in ("compress", "predict"):  # the prose says whole layout modes stay whole
+    ranks = ast.literal_eval(pick(job, "tucker", "transfer").config.iloc[0])
+    assert ranks[:2] == Y_img.shape[:2]
 assert max(mean_psnr("compress", m, "fresh") for m in ("cp", "tucker")) < im.PSNR_TARGET
 assert (loss_sq["tucker"] > 0).all() and (loss_sq["cp"] > loss_sq["tucker"].max()).all()
 assert (gain_pr["cp"] > 0).all() and (gain_pr["tucker"] < 0).all()
@@ -1241,7 +1248,7 @@ best_model = moved[(moved.job == "predict") & (moved.model != "interpolate")]
 assert (china_interp.min() > best_model.groupby("seed").psnr.max()).all()
 
 
-def rng(series, fmt=".2f"):
+def series_span(series, fmt=".2f"):
     return span(series.min(), series.max(), fmt)
 
 
@@ -1251,7 +1258,7 @@ md_table(
         columns=[
             "Job",
             "Model",
-            "Ranks",
+            "Ranks on the temple",
             "Transferred PSNR",
             "Fresh PSNR",
             "Numbers stored for the temple (transferred / fresh)",
@@ -1298,21 +1305,21 @@ sets the pixel split on both images and CP's starting point. The crops show seed
 - **A quality bar does not transfer.** At the astronaut's 30 dB ranks the temple
   reaches only `{python} f"{mean_psnr('compress', 'cp', 'fresh'):.1f}"` dB with CP and
   `{python} f"{mean_psnr('compress', 'tucker', 'fresh'):.1f}"` dB with Tucker, even
-  with every factor refitted. The temple has more fine texture than the portrait, so
-  the threshold search has to run again on each image.
+  with every factor refitted. The same ranks buy less on the temple than on the
+  portrait, so the threshold search has to run again on each image.
 - **For compression, Tucker's shared factors transfer and CP's much less.** Reusing
   the astronaut's within-block and colour factors costs Tucker
-  `{python} rng(loss_sq['tucker'])` dB against a fresh fit, and CP
-  `{python} rng(loss_sq['cp'])` dB. Tucker's shared factors are bases for subspaces of
+  `{python} series_span(loss_sq['tucker'])` dB against a fresh fit, and CP
+  `{python} series_span(loss_sq['cp'])` dB. Tucker's shared factors are bases for subspaces of
   block patterns and colours, which photographs share. CP's are
   `{python} im.config(sq_cp)` particular rank-one components chosen to fit one
-  picture, the largest of them `{python} rng(cp_terms['compress'], '.1f')` times that
+  picture, the largest of them `{python} series_span(cp_terms['compress'], '.1f')` times that
   picture's norm.
 - **For prediction, fixed factors help CP.** With half the temple's pixels hidden,
-  reusing the astronaut's factors gains CP `{python} rng(gain_pr['cp'])` dB over a
+  reusing the astronaut's factors gains CP `{python} series_span(gain_pr['cp'])` dB over a
   fresh fit: fewer free factors leave less to overfit. Tucker loses
-  `{python} rng(-gain_pr['tucker'])` dB by reusing them.
-- **The neighbour mean still leads** at `{python} rng(china_interp)` dB.
+  `{python} series_span(-gain_pr['tucker'])` dB by reusing them.
+- **The neighbour mean still leads** at `{python} series_span(china_interp)` dB.
 
 For compression, what carries from one photograph to another is the within-block and
 colour bases, and Tucker's carry with little loss. For prediction, fixing them helps

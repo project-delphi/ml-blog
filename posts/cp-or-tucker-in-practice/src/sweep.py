@@ -54,8 +54,8 @@ def tucker2_pairs_for(
     o, i, h, w = shape
     pairs = []
     for r_out in r_outs:
-        r_in = int((budget - o * r_out) // (i + h * w * r_out))
-        if 1 <= r_in <= i:
+        r_in = min(int((budget - o * r_out) // (i + h * w * r_out)), i)
+        if r_in >= 1:
             pairs.append((r_out, r_in))
     return pairs
 
