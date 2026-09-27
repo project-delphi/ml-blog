@@ -1,12 +1,12 @@
 ---
 title: "CP or Tucker in Practice"
 subtitle: "Knowledge graphs, conv kernels, and choosing the rank"
-description: "Measured on FB15k-237 and a trained ResNet-18 kernel. DistMult's symmetry rarely gets the chance to cost a ranking, and Tucker's case in knowledge graphs is parameter count. CP stores the kernel in about half Tucker-2's numbers at the same error, by cancelling terms many times the kernel's size. The kernel's HOSVD scree has no elbow, and an over-parameterised CP prunes itself to the true rank under any of three factor penalties."
+description: "Measured on FB15k-237, a trained ResNet-18 kernel and two photographs. DistMult's symmetry rarely costs a ranking, and Tucker's case in knowledge graphs is parameter count. CP stores a kernel or an image in about half Tucker's numbers at the same error, but on the same image Tucker predicts hidden pixels better. A trained kernel's HOSVD scree has no elbow, and an over-parameterised CP prunes itself to the true rank under a factor penalty."
 author: "Ravi Kalia"
 date: "2026-09-26"
 categories: [Tensors, Linear Algebra, Deep Learning, Machine Learning]
 image: "./cover.png"
-tags: [CP, Tucker, HOSVD, TuckER, DistMult, ComplEx, RESCAL, knowledge graph, FB15k-237, CNN compression, ResNet-18, rank selection, group lasso, TensorLy, PyTorch]
+tags: [CP, Tucker, HOSVD, TuckER, DistMult, ComplEx, RESCAL, knowledge graph, FB15k-237, CNN compression, ResNet-18, image compression, tensor completion, rank selection, group lasso, TensorLy, PyTorch]
 jupyter: cp-tucker-blog
 resources:
   - cover.png
@@ -40,8 +40,8 @@ express. The second asks what it costs.
 
 [CP or Tucker](../cp-or-tucker/) derives both models: CP's uniqueness, Tucker's
 rotational freedom, and their storage counts. Here they meet two real tensors — the
-FB15k-237 knowledge graph and a trained ResNet-18 kernel — and then the question both
-leave open, which rank to fit. HOSVD appears as a way to fit Tucker and read off its
+FB15k-237 knowledge graph and a trained ResNet-18 kernel — then the question both
+leave open, which rank to fit, and then a photograph that can be asked either job. HOSVD appears as a way to fit Tucker and read off its
 ranks, not as a third model.
 
 ```{python}
@@ -942,17 +942,352 @@ The range moves with the penalty's scale and with the noise, so on a real tensor
 is found against held-out entries: one sweep over a single strength in place of one
 over ranks.
 
+## Image: both jobs on one tensor
+
+The knowledge graph only asks for prediction and the kernel only asks for
+compression. A photograph can be asked either, so it separates the two choices on one
+tensor: the same fold, the same models, two different answers for which ranks are best.
+
+### Tensor
+
+```{python}
+#| label: image-data
+import image as im
+
+astro = im.crop(im.astronaut())
+china = im.crop(im.china())
+X_img = im.fold(astro)
+Y_img = im.fold(china)
+img_dense = X_img.size
+img_energy = {
+    n: np.cumsum(s**2) / np.sum(s**2)
+    for n, s in (
+        (n, np.linalg.svd(tl.unfold(X_img, n), compute_uv=False)) for n in range(4)
+    )
+}
+img_r999 = [int(np.searchsorted(img_energy[n], 0.999)) + 1 for n in range(4)]
+```
+
+- **Provenance.** The first image is scikit-image's `astronaut`: NASA's portrait of
+  Eileen Collins, public domain. The second is scikit-learn's `china.jpg`, a
+  photograph of a temple by danielbuechele on Flickr, licensed CC BY 2.0. Both ship
+  inside the Python packages, so the render reads no network.
+- **Fold.** Cut the image into 8 × 8 blocks, the block size JPEG uses, and index a
+  pixel by block row, block column, position within the block and colour. The
+  astronaut becomes a `{python} " × ".join(map(str, X_img.shape))` tensor of
+  `{python} f"{img_dense:,}"` entries. The temple, cropped to a multiple of 8, becomes
+  `{python} " × ".join(map(str, Y_img.shape))`.
+- **Why these four modes.** Block rows and block columns carry the layout of this
+  particular picture. The within-block mode carries texture every block shares, and
+  colour carries three channels. The last two describe photographs in general, which
+  is what lets them move to a second image.
+- **Spectra.** Keeping 99.9% of the energy needs `{python} img_r999[0]`,
+  `{python} img_r999[1]`, `{python} img_r999[2]` and `{python} img_r999[3]` components
+  of the four modes' `{python} ", ".join(map(str, X_img.shape))`. Only the
+  within-block mode compresses easily.
+- **What a wrong answer costs.** A compressed image below the quality bar shows
+  blocks and blur. A completion tuned on the pixels it was fitted to fills the holes
+  with noise.
+
+### Compression
+
+Every pixel is fitted, and the question is the smallest model that is good enough.
+
+- **Threshold.** PSNR of at least `{python} f"{im.PSNR_TARGET:.0f}"` dB against the
+  original on every seed. The floor is a choice, and the sweep shows what a different
+  one would cost.
+- **CP.** Ranks from `{python} min(im.COMPRESS_CP)` to `{python} max(im.COMPRESS_CP)`,
+  three random starts each, `{python} im.CP_ITERS` ALS iterations with line search.
+- **Tucker.** Every $(R,R,R_p,R_c)$ on a grid of `{python} len(im.COMPRESS_TUCKER)`,
+  with $R$ shared by block rows and columns, fitted by HOOI from HOSVD.
+- **Storage.** $195R$ numbers for CP; $\prod_n R_n+64(2R+R_p)+3R_c$ for Tucker.
+  `src/image.py` runs the sweeps and caches them.
+
+```{python}
+#| label: image-compress
+squeeze_runs = pd.read_csv(DATA / "image_compress.csv")
+squeeze = im.choose_compression(squeeze_runs)
+sq_cp, sq_tk = squeeze["cp"], squeeze["tucker"]
+cp_curve = (
+    squeeze_runs[squeeze_runs.model == "cp"]
+    .groupby("rank")
+    .agg(storage=("storage", "first"), lo=("psnr", "min"), hi=("psnr", "max"))
+)
+# Rank tuples that store at least as many numbers as the dense tensor do not compress.
+tk_runs = squeeze_runs[
+    (squeeze_runs.model == "tucker") & (squeeze_runs.storage < img_dense)
+].sort_values("storage")
+tk_front = tk_runs[tk_runs.psnr == tk_runs.psnr.cummax()]
+
+# The same comparison at other thresholds, wherever both families clear it.
+sq_ratio = {}
+for target in (25.0, 27.5, 30.0, 32.5, 35.0):
+    picks = im.choose_compression(squeeze_runs, target)
+    if {"cp", "tucker"} <= set(picks):
+        sq_ratio[target] = picks["tucker"].storage / picks["cp"].storage
+assert all(r > 1 for r in sq_ratio.values())  # the prose says CP always stores less
+sq_core = int(np.prod(im.config(sq_tk)))
+```
+
+```{python}
+#| label: fig-image-compress
+#| fig-cap: "Compression of the four-way astronaut tensor: PSNR against stored numbers. Grey dots are the Tucker rank tuples on the grid that store fewer numbers than the dense tensor, and the orange line is their upper frontier; the purple band spans CP's three starts. The dashed line is the 30 dB threshold and the circled points are the smallest models that clear it."
+#| fig-alt: "PSNR against stored numbers on a log axis. CP's curve rises steeply and crosses the 30 dB line at far fewer stored numbers than Tucker's frontier, which crosses it much further right."
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.scatter(tk_runs.storage, tk_runs.psnr, s=8, color=RULE, zorder=1)
+ax.plot(tk_front.storage, tk_front.psnr, "-", color=CORAL, label="Tucker frontier", zorder=2)
+ax.fill_between(cp_curve.storage, cp_curve.lo, cp_curve.hi, color=ACCENT, alpha=0.25, lw=0)
+ax.plot(cp_curve.storage, cp_curve.lo, "o-", color=ACCENT, ms=4, label="CP", zorder=3)
+ax.axhline(im.PSNR_TARGET, color=MUTED, ls="--", lw=1)
+for pick, colour in ((sq_cp, ACCENT), (sq_tk, CORAL)):
+    ax.scatter(pick.storage, pick.psnr, s=140, facecolors="none", edgecolors=colour, lw=1.6, zorder=4)
+ax.set_xscale("log")
+ax.set_xlabel(f"stored numbers (dense tensor: {img_dense:,})")
+ax.set_ylabel("PSNR (dB)")
+ax.legend(frameon=False, loc="lower right")
+plt.tight_layout()
+plt.show()
+```
+
+- **CP clears 30 dB at rank `{python} im.config(sq_cp)`**: `{python} f"{int(sq_cp.storage):,}"`
+  numbers, `{python} f"{img_dense / sq_cp.storage:.1f}"`× fewer than the dense tensor,
+  at `{python} f"{sq_cp.psnr:.1f}"` dB on its worst seed.
+- **Tucker clears it first at `{python} im.config(sq_tk)`**:
+  `{python} f"{int(sq_tk.storage):,}"` numbers, `{python} f"{img_dense / sq_tk.storage:.1f}"`×,
+  at `{python} f"{sq_tk.psnr:.1f}"` dB. Its block-row and block-column ranks sit at
+  the full 64, so the core alone holds `{python} f"{sq_core:,}"` of those numbers.
+- **The ranking does not depend on the threshold.** At every threshold from 25 to
+  `{python} f"{max(sq_ratio):g}"` dB that both families reach on this grid, Tucker
+  needs `{python} f"{min(sq_ratio.values()):.1f}"` to
+  `{python} f"{max(sq_ratio.values()):.1f}"` times CP's storage.
+- **The spectra predicted it.** The layout modes need nearly all their length, so a
+  Tucker core over them is close to the full size of those modes multiplied together.
+  CP pays for each component once per mode instead of once per combination.
+
+This is the kernel's result again: at fixed error, CP needs fewer numbers.
+
+### Prediction
+
+Now half the pixels are hidden, and the question is which ranks best predict them.
+
+- **Split.** Every pixel is drawn into training (50%), validation (25%) or test (25%),
+  with all three colours together. Three random splits.
+- **Fitting.** Each model sees only training pixels. Missing entries are re-imputed
+  from the current fit at every step: expectation–maximisation around ALS for CP and
+  around HOOI for Tucker.
+- **Grid.** CP ranks from `{python} min(im.PREDICT_CP)` to `{python} max(im.PREDICT_CP)`
+  and `{python} len(im.PREDICT_TUCKER)` Tucker rank tuples.
+- **Threshold.** The one-standard-error rule (Hastie et al. 2009): find the best mean
+  validation PSNR over the three splits, then take the smallest model whose mean is
+  within one standard error of it. A model that fits noise gains nothing on held-out
+  pixels, and a small model within noise of the best should win.
+- **Baseline.** Each hidden pixel set to the mean of its observed 3 × 3 neighbours.
+
+```{python}
+#| label: image-predict
+predict_runs = im.predict_runs()
+predict, predict_stats = im.choose_prediction(predict_runs)
+pr_cp, pr_tk = predict["cp"], predict["tucker"]
+interp = predict_runs[predict_runs.model == "interpolate"]
+interp_val, interp_test = interp.val_psnr.mean(), interp.test_psnr.mean()
+pr_best = {m: g.val.max() for m, g in predict_stats.groupby("model")}
+cp_pred = predict_stats[predict_stats.model == "cp"].sort_values("storage")
+tk_pred = predict_stats[predict_stats.model == "tucker"].sort_values("storage")
+tk_pred_front = tk_pred[tk_pred.val == tk_pred.val.cummax()]
+cp_peak = cp_pred.loc[cp_pred.val.idxmax()]
+cp_last = cp_pred.iloc[-1]
+tk_peak = tk_pred.loc[tk_pred.val.idxmax()]
+# The prose says CP overfits past its peak, that Tucker's pick is its best model,
+# that Tucker beats CP here, and that neither beats the neighbour mean.
+assert cp_last.val < cp_peak.val and cp_last["rank"] > cp_peak["rank"]
+assert im.config(pr_tk) == im.config(tk_peak)
+assert interp_test > pr_tk.test > pr_cp.test
+```
+
+```{python}
+#| label: fig-image-predict
+#| fig-cap: "Prediction of hidden astronaut pixels: mean validation PSNR over three pixel splits against stored numbers, with one-standard-error bars for CP. Grey dots are every Tucker rank tuple and the orange line their frontier. The dashed line is the 3 × 3 neighbour-mean baseline; circled points are the models the one-standard-error rule picks."
+#| fig-alt: "Validation PSNR against stored numbers. CP rises to a peak and then falls; Tucker's frontier keeps rising to its circled pick, above CP's; both stay below the dashed interpolation baseline."
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.scatter(tk_pred.storage, tk_pred.val, s=8, color=RULE, zorder=1)
+ax.plot(tk_pred_front.storage, tk_pred_front.val, "-", color=CORAL, label="Tucker frontier", zorder=2)
+ax.errorbar(cp_pred.storage, cp_pred.val, yerr=cp_pred.se, fmt="o-", color=ACCENT, ms=4, label="CP", zorder=3)
+ax.axhline(interp_val, color=MUTED, ls="--", lw=1)
+for pick, colour in ((pr_cp, ACCENT), (pr_tk, CORAL)):
+    ax.scatter(pick.storage, pick.val, s=140, facecolors="none", edgecolors=colour, lw=1.6, zorder=4)
+ax.set_xscale("log")
+ax.set_xlabel("stored numbers")
+ax.set_ylabel("validation PSNR (dB)")
+ax.legend(frameon=False, loc="lower right")
+plt.tight_layout()
+plt.show()
+```
+
+- **CP peaks, then overfits.** Mean validation PSNR climbs to
+  `{python} f"{cp_peak.val:.2f}"` dB at rank `{python} int(cp_peak['rank'])`, then falls
+  to `{python} f"{cp_last.val:.2f}"` dB by rank `{python} int(cp_last['rank'])` as the
+  spare components fit noise in the training pixels. The one-standard-error rule picks
+  rank `{python} im.config(pr_cp)`, `{python} f"{int(pr_cp.storage):,}"` numbers, with a
+  test PSNR of `{python} f"{pr_cp.test:.2f}"` dB.
+- **Tucker wins this job.** The rule picks `{python} im.config(pr_tk)`, which is also
+  the best model on the grid: nothing smaller comes within a standard error. Its test
+  PSNR is `{python} f"{pr_tk.test:.2f}"` dB, `{python} f"{pr_tk.test - pr_cp.test:.1f}"`
+  dB above CP's pick, from `{python} f"{pr_tk.storage / pr_cp.storage:.1f}"`× CP's
+  storage. Compression ranked the two the other way round.
+- **Why the ranking flips.** Tucker at this rank leaves the block-row and block-column
+  modes whole, so every block keeps its own 24 coefficients on 8 shared within-block
+  patterns, and a hidden pixel is predicted from its own block. CP writes a block's
+  weight on component $r$ as the product $a_{Ir}b_{Jr}$ of a row factor and a column
+  factor. That tie between blocks is what lets CP compress, and it is what stops CP
+  predicting.
+- **Neither beats the neighbour mean.** The 3 × 3 baseline reaches
+  `{python} f"{interp_test:.2f}"` dB. Random single-pixel holes nearly always have
+  observed neighbours, and a photograph is smooth at that scale.
+
+### Transfer to a second image
+
+The tuned models go to the temple unchanged in rank. The within-block and colour
+factors learned on the astronaut are held fixed; only the block-row and block-column
+factors (and Tucker's core) are fitted to the temple. The fresh fit frees every factor
+at the same ranks, and is the most the transfer could hope to match.
+
+```{python}
+#| label: image-transfer
+moved = pd.read_csv(DATA / "image_transfer.csv")
+panels = np.load(DATA / "image_panels.npz")
+
+
+def moved_psnr(job, model, variant):
+    hit = moved[(moved.job == job) & (moved.model == model) & (moved.variant == variant)]
+    return hit.psnr.iloc[0]
+
+
+def moved_storage(job, model, variant):
+    hit = moved[(moved.job == job) & (moved.model == model) & (moved.variant == variant)]
+    return int(hit.storage.iloc[0])
+
+
+china_interp = moved[moved.model == "interpolate"].psnr.iloc[0]
+cp_terms = json.loads((DATA / "image_cp_terms.json").read_text())
+loss = {
+    job: {
+        m: moved_psnr(job, m, "fresh") - moved_psnr(job, m, "transfer")
+        for m in ("cp", "tucker")
+    }
+    for job in ("compress", "predict")
+}
+# The prose reads these outcomes; fail the render if a rerun changes them.
+assert max(moved_psnr("compress", m, "fresh") for m in ("cp", "tucker")) < im.PSNR_TARGET
+assert 0 < loss["compress"]["tucker"] < loss["compress"]["cp"]
+assert loss["predict"]["cp"] < 0 < loss["predict"]["tucker"]
+assert china_interp > max(moved_psnr("predict", m, v) for m in ("cp", "tucker") for v in ("transfer", "fresh"))
+md_table(
+    pd.DataFrame(
+        {
+            "Job": ["compression", "compression", "prediction", "prediction", "prediction"],
+            "Model": ["CP", "Tucker", "CP", "Tucker", "3 × 3 neighbour mean"],
+            "Ranks": [
+                f"{im.config(sq_cp)}",
+                f"{im.config(sq_tk)}",
+                f"{im.config(pr_cp)}",
+                f"{im.config(pr_tk)}",
+                "",
+            ],
+            "Transferred PSNR": [
+                f"{moved_psnr('compress', 'cp', 'transfer'):.2f}",
+                f"{moved_psnr('compress', 'tucker', 'transfer'):.2f}",
+                f"{moved_psnr('predict', 'cp', 'transfer'):.2f}",
+                f"{moved_psnr('predict', 'tucker', 'transfer'):.2f}",
+                f"{china_interp:.2f}",
+            ],
+            "Fresh PSNR": [
+                f"{moved_psnr('compress', 'cp', 'fresh'):.2f}",
+                f"{moved_psnr('compress', 'tucker', 'fresh'):.2f}",
+                f"{moved_psnr('predict', 'cp', 'fresh'):.2f}",
+                f"{moved_psnr('predict', 'tucker', 'fresh'):.2f}",
+                "",
+            ],
+            "Numbers stored for the temple (transferred / fresh)": [
+                f"{moved_storage('compress', 'cp', 'transfer'):,} / {moved_storage('compress', 'cp', 'fresh'):,}",
+                f"{moved_storage('compress', 'tucker', 'transfer'):,} / {moved_storage('compress', 'tucker', 'fresh'):,}",
+                f"{moved_storage('predict', 'cp', 'transfer'):,} / {moved_storage('predict', 'cp', 'fresh'):,}",
+                f"{moved_storage('predict', 'tucker', 'transfer'):,} / {moved_storage('predict', 'tucker', 'fresh'):,}",
+                "",
+            ],
+        }
+    )
+)
+```
+
+```{python}
+#| label: fig-image-panels
+#| fig-cap: "192 × 192 crops at full resolution. Top: the astronaut's original, CP and Tucker at the compression picks, the half of the pixels kept for prediction, and the CP, Tucker and neighbour-mean fills. Bottom: the same for the temple, where the CP and Tucker models reuse the astronaut's within-block and colour factors. China image: danielbuechele, CC BY 2.0."
+#| fig-alt: "Two rows of seven image crops, a face on top and a temple roof below: original, two compressed versions, a speckled half-observed version, and three filled-in versions."
+#| fig-width: 12
+#| fig-height: 3.6
+names = [
+    ("original", "original"),
+    ("compress_cp", "CP, compressed"),
+    ("compress_tucker", "Tucker, compressed"),
+    ("observed", "kept pixels"),
+    ("predict_cp", "CP fill"),
+    ("predict_tucker", "Tucker fill"),
+    ("predict_interpolate", "3 × 3 mean fill"),
+]
+fig, axes = plt.subplots(2, len(names), figsize=(12, 3.6))
+for row, image_name in enumerate(("astronaut", "china")):
+    for col, (key, title) in enumerate(names):
+        ax = axes[row, col]
+        key_full = f"{image_name}_{key}"
+        ax.imshow(panels[key_full] if key_full in panels else np.ones((192, 192, 3)))
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.grid(False)
+        for side in ax.spines.values():
+            side.set_visible(False)
+        if row == 0:
+            ax.set_title(title, fontsize=9, fontweight="normal")
+plt.tight_layout()
+plt.show()
+```
+
+- **A quality bar does not transfer.** At the astronaut's 30 dB ranks the temple
+  reaches only `{python} f"{moved_psnr('compress', 'cp', 'fresh'):.1f}"` dB with CP and
+  `{python} f"{moved_psnr('compress', 'tucker', 'fresh'):.1f}"` dB with Tucker, even
+  with every factor refitted. The temple has more fine texture than the portrait, so
+  the threshold search has to run again on each image.
+- **For compression, Tucker's shared factors transfer and CP's much less.** Reusing the astronaut's
+  within-block and colour factors costs Tucker
+  `{python} f"{loss['compress']['tucker']:.1f}"` dB against a fresh fit, and CP
+  `{python} f"{loss['compress']['cp']:.1f}"` dB. Tucker's shared factors are bases for
+  subspaces of block patterns and colours, which photographs share. CP's are
+  `{python} im.config(sq_cp)` particular rank-one components chosen to fit one
+  picture, the largest of them `{python} f"{cp_terms['compress']:.1f}"` times that
+  picture's norm.
+- **For prediction, fixed factors help CP.** With half the temple's pixels hidden,
+  CP with the astronaut's factors scores
+  `{python} f"{moved_psnr('predict', 'cp', 'transfer'):.2f}"` dB against
+  `{python} f"{moved_psnr('predict', 'cp', 'fresh'):.2f}"` dB fitted fresh. Fewer free
+  factors leave less to overfit. Tucker loses
+  `{python} f"{loss['predict']['tucker']:.2f}"` dB by reusing them.
+- **The neighbour mean still leads** at `{python} f"{china_interp:.2f}"` dB.
+
+What carries from one photograph to another is the within-block and colour bases,
+and Tucker's carry best. The ranks, and the quality they buy, have to be found again.
+
 ## Decision matrix
 
 | | CP | Tucker (HOSVD to initialise and to read ranks) |
 |---|---|---|
 | Core | Superdiagonal: component $r$ meets only component $r$ | Dense: any component meets any other |
-| Goal it serves | Interpretable parts; the lowest weight error per stored number, if degeneracy is controlled | Asymmetric relations through one shared core; a well-conditioned compressed layer |
+| Goal it serves | Interpretable parts; the lowest error per stored number, if degeneracy is controlled | Asymmetric relations through one shared core; predicting hidden entries; a well-conditioned compressed layer; bases that carry to new data |
 | Uniqueness | Unique up to order and scale under Kruskal's condition | A subspace per mode; factors fixed only up to rotation |
 | Numbers, 256×256×3×3 kernel | $518R$ | $512R+9R^2$ (square Tucker-2) |
 | Numbers, FB15k-237 at published size | `{python} millions(cp_n3)` (CP-N3) | `{python} millions(tucker_kg)` (TuckER) |
+| Numbers, 64×64×64×3 photograph at 30 dB | `{python} f"{int(sq_cp.storage):,}"` (rank `{python} im.config(sq_cp)`) | `{python} f"{int(sq_tk.storage):,}"` `{python} im.config(sq_tk)` |
+| Hidden pixels, test PSNR at the tuned ranks | `{python} f"{pr_cp.test:.1f}"` dB | `{python} f"{pr_tk.test:.1f}"` dB |
 | Overfitting risk | Linear in $R$, but entity tables dominate: CP-N3 carries `{python} f"{cp_n3 / n_train:.0f}"` numbers per training triple and leans on its N3 penalty | Core grows as $\prod_n R_n$; TuckER carries `{python} f"{tucker_kg / n_train:.0f}"` per training triple |
-| Rank selection | No spectrum to read; over-parameterise and prune with a factor penalty | HOSVD scree when a gap exists; otherwise an energy budget or VBMF |
+| Rank selection | No spectrum to read; over-parameterise and prune with a factor penalty, or validate on held-out entries | HOSVD scree when a gap exists; otherwise an energy budget, VBMF, or held-out entries |
 | Typical failure | Rank-one terms many times the tensor's norm, cancelling | A core that eats the budget before the factors can |
 
 ## Constraints
@@ -973,11 +1308,14 @@ over ranks.
   past it, so their components carry no uniqueness guarantee.
 - **Tucker's core is exponential in $N$.** At eight modes with $R_n=10$ the core alone
   is $10^8$ numbers.
+- **The image test hides single pixels.** Holes that large a neighbour mean cannot
+  bridge — missing blocks, missing rows — are where completion by factorization should
+  pay, and they are not tested here. The 8 × 8 block size is fixed, not tuned.
 - **The knowledge-graph verdict rests on published sizes.** Each paper tuned its own
   embedding size, and none of the quoted tables reports CP-N3 at TuckER's parameter
   count.
 
-Symmetry. Rarely. Bites. Tucker. Saves. Parameters. CP. Compresses. Unstably. Penalties. Prune.
+CP. Compresses. Tucker. Predicts. Symmetry. Rarely. Bites. Penalties. Find. Ranks.
 
 ## References
 
@@ -991,6 +1329,12 @@ Symmetry. Rarely. Bites. Tucker. Saves. Parameters. CP. Compresses. Unstably. Pe
   [A multilinear singular value decomposition](https://doi.org/10.1137/S0895479896305696).
   *SIAM Journal on Matrix Analysis and Applications* 21(4). HOSVD and its truncation
   bound.
+- danielbuechele (2011). [China](https://www.flickr.com/photos/danielbuechele/6061409035/).
+  Flickr, [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/). The temple image,
+  shipped with scikit-learn as `china.jpg`.
+- Hastie, T., Tibshirani, R., and Friedman, J. (2009).
+  [The elements of statistical learning](https://hastie.su.domains/ElemStatLearn/), 2nd
+  ed. Springer. The one-standard-error rule, section 7.10.
 - He, K., Zhang, X., Ren, S., and Sun, J. (2016).
   [Deep residual learning for image recognition](https://arxiv.org/abs/1512.03385).
   *CVPR*. ResNet-18.
@@ -1006,6 +1350,8 @@ Symmetry. Rarely. Bites. Tucker. Saves. Parameters. CP. Compresses. Unstably. Pe
 - Lebedev, V., Ganin, Y., Rakhuba, M., Oseledets, I., and Lempitsky, V. (2015).
   [Speeding-up convolutional neural networks using fine-tuned CP-decomposition](https://arxiv.org/abs/1412.6553).
   *ICLR*. CP as four convolutions.
+- NASA. [Eileen Collins](https://flic.kr/p/r9qvLn). NASA Great Images, public domain.
+  The portrait shipped with scikit-image as `astronaut`.
 - Nickel, M., Tresp, V., and Kriegel, H.-P. (2011).
   [A three-way model for collective learning on multi-relational data](https://icml.cc/2011/papers/438_icmlpaper.pdf).
   *ICML*. RESCAL.
