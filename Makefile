@@ -38,7 +38,7 @@ kernels-stub: install
 	          authorship-blog kendall-blog kite-blog jackknife-blog svd-blog \
 	          volcano-blog signature-blog tensor-blog mfc-blog clustering-blog \
 	          neutrophil-axis-blog gapdh-net-blog pca-blog ppca-blog \
-	          efferocytosis-blog efferocytosis-guide-blog \
+	          efferocytosis-blog efferocytosis-guide-blog cp-tucker-blog \
 	          blog-base; do \
 	  if .venv/bin/python -c "import sys;from jupyter_client.kernelspec import KernelSpecManager as K;sys.exit(0 if '$$k' in K().find_kernel_specs() else 1)"; then \
 	    echo "kept     $$k (already registered)"; \
