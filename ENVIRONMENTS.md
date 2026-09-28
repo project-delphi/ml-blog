@@ -107,6 +107,23 @@ kernel. `_freeze/` hashes source only, so nothing silently re-executes — but c
 versions and the versions that produced a post's output can drift apart.
 **Re-render every post on a kernel when you bump that kernel's venv.**
 
+## The Calibrated Decisions posts share one venv
+
+`calibration-and-proper-scoring-rules` and `recalibration-and-decisions`, Parts 2 and 3
+of one series, pin the kernel **`calibration-blog`** over `.venv-calibration`. They run
+the same generating process on the same small stack, so one venv serves both; each post
+still commits its own copy of the freeze. Part 1, `jev-system-one-model`, runs no code.
+
+```bash
+uv venv .venv-calibration
+uv pip install --python .venv-calibration/bin/python \
+  numpy pandas scipy matplotlib scikit-learn statsmodels tabulate \
+  ipykernel jupyter nbclient nbformat pyyaml
+.venv-calibration/bin/python -m ipykernel install --user --name calibration-blog
+```
+
+The Hugging Face rule applies: re-render both posts when you bump this venv.
+
 ## One post calls a live API
 
 `llm-agents-from-first-principles` runs an LLM agent against Groq's free tier, so

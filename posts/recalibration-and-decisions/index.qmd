@@ -220,7 +220,7 @@ Above the diagonal at $p$, the event happens more often than the model says ther
 : How to read a calibration curve against the diagonal. {#tbl-reading}
 
 ::: {.callout-caution title="Common misconception"}
-"LOESS above the diagonal means underconfident." It does only for $p > 0.5$. An overconfident model sits above the diagonal at low forecasts: when it says 0.04, the event happens 16% of the time. The diagnosis comes from the slope of the curve, not from which side of the diagonal one point is on.
+"LOESS above the diagonal means underconfident." It does only for $p > 0.5$. An overconfident model sits above the diagonal at low forecasts: for the $\alpha = 2.5$ forecaster, the true curve at a forecast of 0.04 is at 0.22. The diagnosis comes from the slope of the curve, not from which side of the diagonal one point is on.
 :::
 
 ### Strengths and limits
@@ -305,7 +305,10 @@ def run_calmap(model, seed):
         d = 200
         X = rng.standard_normal((1000, d))
         y_tr = (rng.random(1000) < expit(2 * X[:, 0])).astype(float)
-        beta = sm.Logit(y_tr, sm.add_constant(X)).fit(disp=0, maxiter=100).params
+        fit = sm.Logit(y_tr, sm.add_constant(X)).fit(disp=0, maxiter=100)
+        if not fit.mle_retvals["converged"]:
+            return None
+        beta = fit.params
         Xc, Xt = rng.standard_normal((1000, d)), rng.standard_normal((20_000, d))
         pc, pt = expit(beta[0] + Xc @ beta[1:]), expit(beta[0] + Xt @ beta[1:])
         xc, xt = Xc[:, 0], Xt[:, 0]
@@ -322,15 +325,18 @@ def run_calmap(model, seed):
 
 
 calmap = {m: {} for m in ("alpha", "mle")}
-examples = {}
+examples, skipped = {}, 0
 for model in calmap:
     for r in range(R):
-        out, yc, yt = run_calmap(model, 30_000 + r)
+        run = run_calmap(model, 30_000 + r)
+        if run is None:
+            skipped += 1
+            continue
+        out, yc, yt = run
         for (name, split), p in out.items():
             yy = yt if split == "test" else yc
             calmap[model].setdefault((name, split), []).append((brier(p, yy), log_loss(p, yy), ece(p, yy)))
-        if r == 0:
-            examples[model] = (out, yt)
+        examples.setdefault(model, (out, yt))
 calmap = {m: {k: np.array(v) for k, v in d.items()} for m, d in calmap.items()}
 
 
@@ -393,7 +399,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-What the two tables show:
+The regression's Newton fit converged on `{python} R - skipped` of `{python} R` seeds, and its table uses those. What the two tables show:
 
 - All three maps cut test ECE and test log loss for both models. Platt does best on the $\alpha = 2.5$ forecaster, where the distortion is linear in the logit and Platt is the correct model for it.
 - No map recovers the true $p^*$ for the overfitted regression. Recalibration fixes the calibration term; the 199 noise features have already damaged the ranking, and a monotone map cannot restore resolution.
@@ -421,7 +427,7 @@ Calibration is a property of a model *on a distribution*, and four versions of i
 3. **Subgroup calibration:** $P(Y = 1 \mid \hat p = p, G = g) = p$ for every group $g$ you care about.
 4. **Conditional (strong) calibration:** $P(Y = 1 \mid X = x) = \hat p(x)$ for every input, which makes $\hat p$ the true probability.
 
-Each implies every condition earlier in the list, with one proviso: conditional calibration implies subgroup calibration only for groups that the model's input determines. A group the model cannot see can be miscalibrated even when the forecast is the true probability given all the inputs the model sees, as the next example shows. Only conditional calibration survives a change in the input distribution with the relationship between $X$ and $Y$ held fixed; the others can fail when the mix of inputs moves (Ovadia et al. 2019 measured the effect on neural networks).
+Each implies every condition earlier in the list, with two provisos: subgroup calibration implies calibration only when the groups cover every case, and conditional calibration implies subgroup calibration only for groups that the model's input determines. A group the model cannot see can be miscalibrated even when the forecast is the true probability given all the inputs the model sees, as the next example shows. Only conditional calibration survives a change in the input distribution with the relationship between $X$ and $Y$ held fixed; the others can fail when the mix of inputs moves (Ovadia et al. 2019 measured the effect on neural networks).
 
 ### Subgroup calibration example
 
@@ -512,15 +518,17 @@ def excess(label, k, n):
     return np.median(shift[label][0][k][n])
 
 
-def first_ahead(label, a, b):
-    """Smallest n at which map a has lower median excess than map b, as text."""
-    n = next((n for n in SIZES if excess(label, a, n) < excess(label, b, n)), None)
-    return f"{n:,}" if n is not None else f"no size up to {SIZES[-1]:,}"
+def stays_ahead(label, a, b):
+    """Clause saying from which n map a keeps a lower median excess than map b."""
+    for i, n in enumerate(SIZES):
+        if all(excess(label, a, m) < excess(label, b, m) for m in SIZES[i:]):
+            return f"stays ahead of Platt from {n:,} labels"
+    return f"does not stay ahead of Platt at any size up to {SIZES[-1]:,}"
 ```
 
 - With no recalibration the source model's excess log loss is `{python} f"{np.median(shift['Logit-linear shift'][1]):.3f}"` under the logit-linear shift and `{python} f"{np.median(shift['Label-noise shift'][1]):.3f}"` under label noise.
 - Under the logit-linear shift, Platt's map with 100 labels brings the excess to `{python} f"{excess('Logit-linear shift', 'Platt', 100):.4f}"`. Isotonic regression is still at `{python} f"{excess('Logit-linear shift', 'Isotonic', 1000):.4f}"` with 1,000 labels.
-- Under label noise, Platt levels off near `{python} f"{excess('Label-noise shift', 'Platt', 10_000):.4f}"` because it has the wrong shape. LOESS is ahead of it from `{python} first_ahead('Label-noise shift', 'LOESS', 'Platt')` labels and reaches `{python} f"{excess('Label-noise shift', 'LOESS', 10_000):.4f}"` at 10,000; isotonic regression is ahead only from `{python} first_ahead('Label-noise shift', 'Isotonic', 'Platt')`.
+- Under label noise, Platt levels off near `{python} f"{excess('Label-noise shift', 'Platt', 10_000):.4f}"` because it has the wrong shape. LOESS `{python} stays_ahead('Label-noise shift', 'LOESS', 'Platt')` and reaches `{python} f"{excess('Label-noise shift', 'LOESS', 10_000):.4f}"` at 10,000; isotonic regression `{python} stays_ahead('Label-noise shift', 'Isotonic', 'Platt')`.
 
 A two-parameter map wins when its shape is right and data are scarce; a flexible map wins when data are plentiful and the shape is unknown. Which regime you are in is an empirical question about your data.
 

@@ -228,7 +228,7 @@ if (typeof WK !== "undefined") {
       title: "Calibration lab",
       note: "X ~ N(0, 1), true probability sigmoid(2x), forecast sigmoid(α·2x). Dots are equal-width " +
         "bins (larger dots hold more cases; bars are 95% intervals); the curve is LOESS with no robustness " +
-        "iterations, left unclipped. Log loss clips forecasts to [0.001, 0.999]."
+        "iterations, drawn up to 0.05 beyond [0, 1] so overshoot stays visible. Log loss clips forecasts to [0.001, 0.999]."
     });
     var aS = WK.slider({ label: "Distortion α (1 = calibrated)", min: -2, max: 2, step: 0.01,
       value: Math.log2(state.alpha), fmt: function (v) { return Math.pow(2, v).toFixed(2); },
