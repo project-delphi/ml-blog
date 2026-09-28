@@ -1,0 +1,477 @@
+---
+title: "Calibrated Decisions, Part 1: Jev and the System One Model"
+subtitle: "What changes when a foundation model stops generating text and returns typed, probabilistic decisions"
+description: "TypeSafe's Jev answers typed questions (Choice, Score, Noul) with probability distributions instead of generated text. What that interface is, how it differs from prompted JSON and constrained decoding, why it can be cheap, why agents are full of classification problems, and which of TypeSafe's claims are documented, inferred or unknown."
+author: "Ravi Kalia"
+date: "2026-09-27T10:00:00"
+categories: [LLMs, Agents, Machine Learning, Architecture]
+image: "./cover.png"
+tags: [Jev, TypeSafe, System One, structured outputs, constrained decoding, classification, agents, calibration]
+resources:
+  - widgets.js
+  - cover-source.txt
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    css: post.css
+---
+
+![Calibrated Decisions, Part 1: Jev and the System One Model](./cover.png)
+
+An agent working a support inbox makes several small calls on every ticket: which team should take it, whether it asks for a refund, how urgent it is. None of those answers is a paragraph. The usual way to get them is still to ask a language model to write text and then parse the text. TypeSafe's Jev, announced on 2026-09-15, drops the text: it answers typed questions with probability distributions. This series asks what changes when a foundation model makes fast, structured, probabilistic decisions instead of generating language.
+
+This is the first of three parts. [Part 2](../calibration-and-proper-scoring-rules/) defines calibration and the scoring rules that reward it; [Part 3](../recalibration-and-decisions/) checks and repairs calibration on your own data and turns probabilities into decisions. Every statement about Jev comes from TypeSafe's launch post or documentation, read on 2026-09-27. No independent evaluation of Jev had been published by then.
+
+Statements about Jev carry one of four labels:
+
+- [vendor]{.tag-vendor} documented by TypeSafe;
+- [theory]{.tag-theory} standard statistics or machine learning;
+- [inference]{.tag-inference} our reading of documented facts, such as arithmetic on TypeSafe's own examples;
+- [speculation]{.tag-spec} a hypothesis about something TypeSafe has not disclosed.
+
+## A typed request {#sec-typed-request}
+
+A request to Jev has a **state**, the text to evaluate, and a map of named **questions**, each with a type and the answers it allows [vendor]{.tag-vendor}. The ticket from the opening, in the request schema of TypeSafe's API reference:
+
+```json
+{
+  "model": "jev-latest",
+  "state": "I was charged twice for my subscription and need the duplicate charge reversed.",
+  "questions": {
+    "department": {
+      "type": "choice",
+      "instructions": "Which team should handle this?",
+      "criteria": {
+        "billing": "Payments, invoices, refunds",
+        "technical": "Bugs, outages, integrations",
+        "account": "Login, profile, cancellation",
+        "sales": "Pricing, upgrades, new accounts"
+      }
+    },
+    "refund_requested": {
+      "type": "noul",
+      "instructions": "Does this message request a refund?"
+    },
+    "urgency": {
+      "type": "score",
+      "instructions": "How urgent is this request?",
+      "criteria": ["Low", "Medium", "High"]
+    }
+  }
+}
+```
+
+A response has this shape. The field names follow the API reference; the numbers are invented for illustration, and the derived fields are computed from them the way the documentation describes:
+
+```json
+{
+  "model": "jev-1.13.0",
+  "answers": {
+    "department": {
+      "type": "choice",
+      "choice": "billing",
+      "probabilities": {"billing": 0.96, "technical": 0.01, "account": 0.02, "sales": 0.01},
+      "confidence": 0.95
+    },
+    "refund_requested": {"type": "noul", "noul": 0.94},
+    "urgency": {
+      "type": "score",
+      "score": 1.3,
+      "legend": {"0": "Low", "1": "Medium", "2": "High"},
+      "probabilities": {"0": 0.05, "1": 0.60, "2": 0.35},
+      "confidence": 0.40
+    }
+  }
+}
+```
+
+The three question types are TypeSafe's **primitives** [vendor]{.tag-vendor}:
+
+| Primitive | Asks | Returns | Note |
+|:---|:---|:---|:---|
+| `choice` | which of a set of unordered options | `choice`, `probabilities`, `confidence` | up to 255 options |
+| `score` | which of a list of ordered levels | `score`, `legend`, `probabilities`, `confidence` | `score` is the probability-weighted mean of the level numbers |
+| `noul` | is this true | `noul`, the probability of yes | no `confidence` field |
+
+: TypeSafe's decision primitives, from its documentation and launch post. {#tbl-primitives}
+
+- The `score` of 1.3 is $0 \times 0.05 + 1 \times 0.60 + 2 \times 0.35$. TypeSafe's documentation warns that "different distributions can produce the same score" [vendor]{.tag-vendor}.
+- A Noul's number is itself the answer: "the probability that the answer is yes" [vendor]{.tag-vendor}.
+
+### The interface
+
+Abstracted from the JSON, every question maps a state $x$, a question $q$ and a declared set of answers $\mathcal Y_q$ to a distribution over that set:
+
+$$
+(\text{state},\ \text{question},\ \text{allowed outputs}) \longrightarrow p_\theta(y \mid x, q), \qquad y \in \mathcal Y_q.
+$$
+
+- The task is written at inference time, in the request. A new business decision needs a new question, not a new training run.
+- That makes Jev a relative of zero-shot text classification, where a model that was never trained on the labels scores a text against label descriptions written at test time (Yin, Hay & Roth 2019) [theory]{.tag-theory}.
+- The label under-describes what TypeSafe claims: probabilities trained to be calibrated, many questions answered in parallel against one state, and latency and prices far below LLMs [vendor]{.tag-vendor}. Parts 2 and 3 examine those claims.
+
+### Confidence and probability
+
+Choice and Score answers carry a `confidence` field. TypeSafe defines it as "a statistic computed from the probability distribution the answer already gives you" and describes its meaning as spread: "concentrated on one outcome means a confident answer, spread out means an uncertain one" [vendor]{.tag-vendor}. The exact statistic is not published. The documentation's interactive demo says it "uses `(3 × largest probability − 1) / 2` to approximate confidence for three options" [vendor]{.tag-vendor}, which generalises to
+
+$$
+c = \frac{K\,p_{\max} - 1}{K - 1}
+$$
+
+for $K$ options: 0 for a uniform distribution, 1 when one option has all the mass. Every example response in the documentation that we checked matches this formula once the probabilities are rounded to two places: the API reference's $(0.88, 0.12, 0)$ with confidence 0.81, its $(0, 0.95, 0.05)$ with 0.92, and the Score page's $(0.45, 0.55, 0)$ with 0.33 [inference]{.tag-inference}. The illustrative response in this section uses the same formula.
+
+Read as a threshold, a confidence value implies a different probability for each $K$ [inference]{.tag-inference}. Inverting the formula gives $p_{\max} = \big(1 + c(K - 1)\big)/K$:
+
+| Confidence threshold | $K = 2$ | $K = 3$ | $K = 4$ | $K = 5$ |
+|---:|---:|---:|---:|---:|
+| 0.5 | 0.750 | 0.667 | 0.625 | 0.600 |
+| 0.9 | 0.950 | 0.933 | 0.925 | 0.920 |
+
+: Largest probability implied by a confidence threshold, under the demo formula. TypeSafe's documentation uses 0.5 and 0.9 as example thresholds. {#tbl-confidence}
+
+::: {.callout-caution title="Common misconception"}
+"Confidence 0.9 means the answer is right 90% of the time." Confidence is a measure of how concentrated the distribution is, not a frequency. Under the demo formula it corresponds to a largest probability between 0.92 and 0.95, depending on the number of options. Whether that probability matches how often the answer is right is a calibration question, and Part 2 is about how to answer it.
+:::
+
+::: {.callout-note title="What we know about Jev"}
+From TypeSafe's launch post and documentation [vendor]{.tag-vendor}:
+
+- It takes text only, as a string, a JSON object or an array, with a 64k-token context.
+- It returns typed answers with probabilities, and gives up generating strings: "`jev-1.13` is not trained to generate text".
+- It "ingests the `state` once and evaluates every question against it in parallel".
+- The same weights serve every account; it is "not fine-tuned or LoRA-adapted with customer data".
+- It is trained with a method TypeSafe calls reinforcement learning for calibrated decisions (RLCD).
+- The published input price is \$0.042 per million tokens; output tokens are free.
+:::
+
+## System One models
+
+TypeSafe calls Jev the first **System One model**: "a new class of frontier models built to make fast, structured decisions that software can use directly" [vendor]{.tag-vendor}. The name borrows Kahneman's fast, intuitive System 1. The launch post's summary is "unstructured state in, typed probabilistic decisions out" [vendor]{.tag-vendor}.
+
+```{mermaid}
+%%| label: fig-two-paths
+%%| fig-cap: "Two ways to get a decision from a foundation model: a generative LLM, and a System One model as TypeSafe describes it."
+flowchart TB
+  subgraph LLM["Generative LLM"]
+    direction TB
+    a1["prompt and context"] --> a2["autoregressive decoding<br/>t₁ → t₂ → … → t<sub>T</sub>"]
+    a2 --> a3["post-trained with RLHF / RLVR"]
+    a3 --> a4["text, free or constrained"]
+    a4 --> a5["parse, validate, retry"]
+  end
+  subgraph S1["System One model"]
+    direction TB
+    b1["state and typed questions"] --> b2["representation of the state"]
+    b2 --> b3["typed decision per question"]
+    b3 --> b4["probability distribution<br/>over the declared answers"]
+    b4 --> b5["software acts on the probability"]
+  end
+```
+
+### Two inference problems
+
+A language model defines a distribution over token sequences and factorises it one token at a time:
+
+$$
+p_\theta(t_1, \ldots, t_T \mid x) = \prod_{j=1}^{T} p_\theta(t_j \mid x, t_{<j}).
+$$
+
+A decision model, in the conceptual form of this series, defines a distribution over a set fixed by the request:
+
+$$
+p_\theta(y \mid x, q), \qquad y \in \mathcal Y_q.
+$$
+
+The two are different inference problems [theory]{.tag-theory}:
+
+1. **Output space.** A sequence model ranges over $|V|^T$ strings for a vocabulary $V$. A Choice ranges over at most 255 options, TypeSafe's documented limit [vendor]{.tag-vendor}.
+2. **Normalisation.** A decision model can normalise exactly over $\mathcal Y_q$. For a language model, the probability that "the answer is billing" is a sum over every token sequence that expresses it, which is not computed in practice.
+3. **Search.** The most probable option in $\mathcal Y_q$ is found exactly. The most probable sequence is approximated by greedy decoding, beam search or sampling.
+4. **Sequential dependence.** A $T$-token answer takes $T$ dependent decoding steps. A decision over $\mathcal Y_q$ needs no decoding.
+
+```{mermaid}
+%%| label: fig-branch
+%%| fig-cap: "A Choice answer is a distribution over the options the request declared, using the illustrative numbers from the response in the previous section."
+flowchart LR
+  T["support ticket"] -->|0.96| B["billing"]
+  T -->|0.01| TE["technical"]
+  T -->|0.02| A["account"]
+  T -->|0.01| S["sales"]
+```
+
+### Jev and JSON-emitting LLMs
+
+TypeSafe says Jev "outputs all probabilities in parallel instead of autoregressively generating by token", and describes "a new model architecture, parallel sampler for maximum efficiency" [vendor]{.tag-vendor}. Its documentation warns that forcing text out of Jev by chaining choices "will not work well and will be very slow" [vendor]{.tag-vendor}. Both statements fit a model whose outputs are distributions over declared answers rather than tokens [inference]{.tag-inference}.
+
+::: {.callout-warning title="What we don't know"}
+TypeSafe has not published enough to state [speculation]{.tag-spec}:
+
+- the parameter count;
+- the backbone, or whether it is encoder-like, decoder-like, or something else;
+- what the "parallel sampler" samples, and how;
+- the RLCD reward or objective;
+- the training data;
+- the compute per question, and so the precise computational complexity;
+- how calibration was evaluated, on which tasks, and with what result.
+:::
+
+## Structured output
+
+Three different things are called structured output, and they fail differently.
+
+### Prompted JSON
+
+```text
+"Please answer in JSON."
+```
+
+The model is an ordinary language model that has been asked nicely. Nothing prevents a missing brace, an extra field, a label outside the list, or a paragraph before the JSON. The caller parses, validates, and retries.
+
+### Constrained decoding
+
+The model still generates tokens, but at each step a grammar or schema masks the tokens that cannot extend a valid output (Willard & Louf 2023). With $A_j$ the allowed tokens at step $j$:
+
+$$
+p(t_j \mid t_{<j}, x) \;\longrightarrow\; p(t_j \mid t_{<j}, x, t_j \in A_j) = \frac{p(t_j \mid t_{<j}, x)\,\mathbb 1\{t_j \in A_j\}}{\sum_{t \in A_j} p(t \mid t_{<j}, x)}.
+$$
+
+The output always parses. Its probabilities are a different matter. The mask renormalises one step at a time, which is not the same as conditioning the whole output on being valid [theory]{.tag-theory}:
+
+$$
+p(y \mid x, y \in \mathcal Y) = \frac{p(y \mid x)}{\sum_{y' \in \mathcal Y} p(y' \mid x)}.
+$$
+
+Park et al. (2024) show that per-step masking distorts the model's distribution in this way. The widget shows it on a toy model that spells a department label in two tokens.
+
+::: {#widget-constrained}
+:::
+
+```{=html}
+<script src="widgets.js"></script>
+```
+
+- At the defaults, constrained decoding puts 0.56 on "billing" and picks it. Conditioning on a valid label puts 0.46 on "billing" and picks "technical". The prefix "bill" often continues to "billed", which is not a label, and the step-two mask pushes all of that mass onto "billing".
+- Raise P("ing" | "bill") to 0.9, equal to P("nical" | "tech"). The two distributions now agree, whatever weight "refund" has.
+- Masking the first token costs nothing: it removes a whole answer at once, which is ordinary conditioning. The distortion comes from later steps, where different prefixes lose different fractions of their mass. The amount of invalid mass is not the problem; its uneven spread across prefixes is.
+
+### Native typed output
+
+A model whose output space is the answer set itself,
+
+$$
+Y \in \{\text{billing}, \text{technical}, \text{account}, \text{sales}\}
+\qquad\text{or}\qquad
+p \in [0, 1],
+$$
+
+has nothing to decode and nothing to mask. Its probabilities are a distribution over $\mathcal Y_q$ by construction, which is how a classifier's softmax head works [theory]{.tag-theory}. That puts Jev's interface closer to a classifier than to JSON generation, whatever its internals are [inference]{.tag-inference}.
+
+### Type validity and correctness
+
+::: {.callout-tip title="Key idea"}
+Guaranteeing a valid output type is not the same thing as guaranteeing a correct decision. A type fixes the set of possible answers. It does not choose among them.
+:::
+
+TypeSafe's launch post says Jev "can't hallucinate" [vendor]{.tag-vendor}. Its evidence is the output contract: the post's hallucination chart notes that "Our number is not empirical. Schema matching is guaranteed, thus we can confidently add 0% into the plots" [vendor]{.tag-vendor}. That supports a narrow reading of "hallucination" [inference]{.tag-inference}. A closed output space rules out:
+
+- labels outside the declared set;
+- malformed JSON, missing fields and wrong types;
+- values out of range, such as a probability of 1.3.
+
+It cannot rule out:
+
+- the wrong member of the declared set;
+- a probability that does not match how often the answer is right;
+- a misreading of the state. TypeSafe's own list of known failure modes for Jev 1.13 includes literal readings of negations, unreliable counting and date comparison, and instructions injected into the state [vendor]{.tag-vendor}.
+
+## Inference cost
+
+TypeSafe reports end-to-end latency of 70–500 ms and prices input at \$0.042 per million tokens with free output [vendor]{.tag-vendor}. Some of the reason follows from the interface alone.
+
+### Autoregressive decoding
+
+Generating $T$ tokens takes $T$ dependent forward passes:
+
+$$
+h_0 \rightarrow t_1 \rightarrow t_2 \rightarrow \cdots \rightarrow t_T.
+$$
+
+The KV cache stores the attention keys and values of earlier tokens, so each step does not recompute the past. The steps are still sequential, and at small batch sizes each one is dominated by the time to load the weights and the cache from memory (Pope et al. 2023) [theory]{.tag-theory}. A classifier-style prediction is one pass followed by a small matrix product:
+
+$$
+h(x) \rightarrow W h \rightarrow \operatorname{softmax}(W h).
+$$
+
+Removing long outputs removes, per decision [theory]{.tag-theory}:
+
+- **latency** from $T$ sequential steps;
+- **output-token compute**, which providers usually price above input tokens;
+- **memory traffic** from reloading weights and cache at every step;
+- **sampling overhead** per token;
+- **serialisation and parsing**, with validation and retries;
+- **repeated agent chatter**, where each small decision is its own conversation that resends the context.
+
+### Shared state
+
+TypeSafe documents that Jev "ingests the `state` once and evaluates every question against it in parallel", and recommends sending speculative questions in the same call and letting code ignore the ones that turn out irrelevant [vendor]{.tag-vendor}.
+
+```{mermaid}
+%%| label: fig-fanout
+%%| fig-cap: "One state, several typed questions in one request, instead of one conversation per question."
+flowchart LR
+  D["shared document<br/>read once"] --> Q1["Is this spam?<br/>noul"]
+  D --> Q2["Which queue?<br/>choice"]
+  D --> Q3["Is OCR needed?<br/>noul"]
+  D --> Q4["How urgent?<br/>score"]
+  D --> Q5["Which model should handle it?<br/>choice"]
+```
+
+### Reported numbers
+
+| Claim | Value | Source | Status |
+|:---|:---|:---|:---|
+| End-to-end latency | 70–500 ms | launch post | vendor measurement, "generally run from our laptops on the West Coast" |
+| Price | \$0.042 per million input tokens; output free | models page | published; TypeSafe says it "can't prove it isn't subsidized" |
+| Against LLMs on workflows | 193.6× faster, 444.6× cheaper | launch post | vendor evaluation; reference answers are the average of two frontier LLMs; workflows written by TypeSafe staff; TypeSafe expects these "on the higher end of real world gains" |
+| Batching 13 questions into one call | 12.2× cheaper, 10.0× faster than separate calls | cookbook | vendor measurement |
+| Type errors | none | launch post | holds by the output contract |
+
+: Speed and cost claims, all from TypeSafe. None had been reproduced independently when this was written. {#tbl-claims}
+
+Other design choices may contribute to the economics: a smaller network than frontier LLMs, the "hardware-aware" parallel sampler the launch post mentions, or reusing one encoding of the state across questions [speculation]{.tag-spec}. None of these is documented in enough detail to say how much of the reported speed-up each explains.
+
+## Decisions inside agents
+
+An agent that looks sophisticated from outside spends most of its steps answering questions like these:
+
+- Which tool? Should I call a tool at all?
+- Which model should handle this step?
+- Did the previous action succeed? Should I retry?
+- Is this result relevant? Is enough information available?
+- Is this request risky? Does it need human approval?
+- Should I continue?
+
+Each is a classification or a score over a small closed set, not a request for prose [theory]{.tag-theory}.
+
+```{mermaid}
+%%| label: fig-router
+%%| fig-cap: "A decision layer between agent state and the expensive components it can call."
+flowchart LR
+  U["user"] --> A["agent state"] --> J["decision layer<br/>Jev-style"]
+  J --> S1["search"]
+  J --> S2["database"]
+  J --> S3["coding model"]
+  J --> S4["frontier LLM"]
+  J --> S5["human review"]
+```
+
+If every such decision is a call to a frontier LLM, the cost of an agent scales with the number of small decisions it makes. A decision layer that is much cheaper per call, and that returns a probability the router can threshold, would move most steps off the expensive path and keep the frontier model for the steps that need text [inference]{.tag-inference}. Whether it can do that safely depends on the probability meaning what it says, which is the subject of Parts 2 and 3.
+
+## Alternatives
+
+Four ways to get a typed decision from text:
+
+| | Supervised classifier | Zero- or few-shot LLM | LLM with constrained output | Jev-style System One model |
+|:---|:---|:---|:---|:---|
+| Task-specific training | labelled data per task | none | none | none, per TypeSafe |
+| Task defined in natural language | no | yes | yes | yes |
+| Generates arbitrary text | no | yes | inside the schema | no |
+| Output guarantee | fixed label set | none; parse and validate | valid schema | valid type |
+| Probability output | softmax over labels | token log-probabilities or stated numbers | token-level, distorted by masking | distribution over declared answers |
+| Calibration | measurable and repairable on held-out data | often poor after post-training (Part 2) | as the LLM, plus masking distortion | claimed by TypeSafe; not independently tested |
+| Latency | lowest | seconds; grows with output length | as the LLM | 70–500 ms reported by TypeSafe |
+| Cost | lowest per call; labelling up front | per output token | per output token | input tokens only, per TypeSafe |
+| Flexibility | one task per model | any task | any task with a schema | tasks with a closed answer set |
+| Interpretability | small models inspectable | generated explanations, not guaranteed faithful | as the LLM | probabilities visible; internals undisclosed |
+| Domain adaptation | retrain or recalibrate | prompt; weights usually closed | prompt | state and instructions; same weights for every account; user-side recalibration |
+
+: Four ways to get a typed decision from text. Entries for Jev are TypeSafe's claims unless marked otherwise. {#tbl-alternatives}
+
+### When to train a classifier
+
+Suppose you have 10 million labelled examples, a stable schema with six output classes, a narrow input distribution and a strict latency budget. A small supervised classifier will likely be cheaper, faster and easier to validate: its errors can be measured on held-out data from the same distribution, and it can be recalibrated with the methods in Part 3 [theory]{.tag-theory}.
+
+A Jev-like model is more compelling when [inference]{.tag-inference}:
+
+- there are many heterogeneous decisions, each too small to justify its own labelled data set;
+- tasks are defined or changed at run time;
+- labels are few or absent;
+- inputs are rich natural language;
+- decision schemas change often;
+- the decisions sit inside agent orchestration or semantic routing.
+
+The trade-off runs along one axis:
+
+$$
+\text{specialisation} \longleftrightarrow \text{semantic generality}.
+$$
+
+## A plausible architecture — not a description of Jev internals
+
+::: {.callout-warning title="What we don't know"}
+This section is a pedagogical model of how a System One architecture could work. It is not a claim about TypeSafe's proprietary implementation [speculation]{.tag-spec}.
+:::
+
+```{mermaid}
+%%| label: fig-architecture
+%%| fig-cap: "A conceptual System One model: one encoding of the state and question, several typed heads. Not Jev's architecture."
+flowchart TB
+  Q["natural-language question<br/>and declared answers"] --> E
+  X["state"] --> E["semantic encoder"]
+  E --> J["joint representation"]
+  J --> C["choice head<br/>softmax"]
+  J --> S["score head<br/>distribution over levels"]
+  J --> N["binary head<br/>sigmoid"]
+```
+
+Such a design would:
+
+- share one representation of the state across every question;
+- avoid autoregressive decoding, since every head outputs a distribution directly;
+- evaluate many heads, and many questions, from one pass over the state;
+- expose probabilities as its native output.
+
+A general model has to classify among options it first sees at run time. One way is to score each candidate $c_k$ against the state and question, then normalise:
+
+$$
+s_k = f_\theta(x, q, c_k), \qquad
+P(Y = k \mid x, q, C) = \frac{e^{s_k}}{\sum_j e^{s_j}}.
+$$
+
+- A **cross-encoder** reads $(x, q, c_k)$ together: accurate, one pass per candidate, though the passes can be batched.
+- A **dual encoder** embeds the state and each candidate separately and compares the embeddings: cheap, and weaker on fine distinctions.
+
+Two documented behaviours fit per-candidate scoring [inference]{.tag-inference}. The Score documentation says "every level is evaluated separately. The model doesn't see a level's number or its neighbours" [vendor]{.tag-vendor}. The launch post says that for high-cardinality choices TypeSafe does "a 2 stage-system of scoring independently then making an explicit choice" [vendor]{.tag-vendor}. So does the Noul example in the documentation, where a question and its negation get 0.72 and 0.47 on the same ticket [vendor]{.tag-vendor}: separately scored questions have no reason to sum to one. Consistency with a design is not evidence for it [speculation]{.tag-spec}.
+
+## Open questions
+
+On architecture and cost:
+
+1. How large is Jev?
+2. How much of the speed-up comes from the architecture, and how much from not decoding text?
+3. How does it compare with a strong encoder classifier fine-tuned on the same task?
+4. How does it compare with constrained decoding from a small LLM?
+
+The questions about calibration, including what RLCD optimises, are in [Part 2](../calibration-and-proper-scoring-rules/) and [Part 3](../recalibration-and-decisions/).
+
+## Constraints
+
+- Every statement about Jev comes from TypeSafe's pages as of 2026-09-27, which describe `jev-1.13.0`.
+- No part of this series calls the Jev API. The response in @sec-typed-request is illustrative.
+- The architecture section is a teaching model, not reverse engineering.
+
+Types. Bound. Answers. Probabilities. Weigh. Them. Neither. Guarantees. Correctness.
+
+## References
+
+- Park, K., Wang, J., Berg-Kirkpatrick, T., Polikarpova, N. & D'Antoni, L. (2024). [Grammar-aligned decoding](https://proceedings.neurips.cc/paper_files/paper/2024/hash/2bdc2267c3d7d01523e2e17ac0a754f3-Abstract-Conference.html). *NeurIPS*.
+- Pope, R. et al. (2023). [Efficiently scaling transformer inference](https://proceedings.mlsys.org/paper_files/paper/2023/hash/c4be71ab8d24cdfb45e3d06dbfca2780-Abstract-mlsys2023.html). *MLSys*.
+- Willard, B. T. & Louf, R. (2023). [Efficient guided generation for large language models](https://arxiv.org/abs/2307.09702). arXiv.
+- Yin, W., Hay, J. & Roth, D. (2019). [Benchmarking zero-shot text classification: datasets, evaluation and entailment approach](https://doi.org/10.18653/v1/D19-1404). *EMNLP-IJCNLP*.
+- TypeSafe (2026). [Introducing System One Models & Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev). Launch post, 2026-09-15.
+- TypeSafe (2026). Documentation, accessed 2026-09-27: [System One](https://docs.typesafe.ai/concepts/system-one), [Primitives](https://docs.typesafe.ai/primitives), [Score](https://docs.typesafe.ai/primitives/score), [Noul](https://docs.typesafe.ai/primitives/noul), [Confidence](https://docs.typesafe.ai/confidence), [API reference](https://docs.typesafe.ai/api), [Models](https://docs.typesafe.ai/models), [Speculative fan-out](https://docs.typesafe.ai/patterns/fan-out), [Parallel questions cookbook](https://docs.typesafe.ai/cookbooks/parallel_questions), [Jev 1.13 jaggedness](https://docs.typesafe.ai/model-jaggedness/jev-1.13).
+- [Calibrated Decisions, Part 2: Calibration and Proper Scoring Rules](../calibration-and-proper-scoring-rules/) — what calibration is and how to measure it.
+- [Calibrated Decisions, Part 3: Recalibration and Decisions](../recalibration-and-decisions/) — repairing calibration on your own data and deciding with it.
+- [Stop Parsing Prose](../structured-json-with-claude/) — schema-constrained output from a generative model.
