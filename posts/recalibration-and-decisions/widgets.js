@@ -85,9 +85,9 @@ if (typeof WK !== "undefined") {
     var f = WK.frame({
       title: "Routing refunds on raw and recalibrated probabilities",
       note: "True P(warranted) = sigmoid(2x), x ~ N(0, 1); the model reports sigmoid(α·2x). " +
-        "The shaded bands are the Bayes actions for a true probability. Costs are exact " +
-        "expectations over x, per 1,000 requests. \"Recalibrated\" means exactly recalibrated, " +
-        "which here recovers the true probability."
+        "The shaded bands are the Bayes actions for a true probability. Costs are expectations " +
+        "over x computed by quadrature, per 1,000 requests. \"Recalibrated\" means perfectly " +
+        "recalibrated, which here recovers the true probability."
     });
     var sliders = [
       ["alpha", "Distortion α (1 = calibrated)", 0.25, 4, 0.05, WK.fmt.num],

@@ -51,8 +51,8 @@ if (typeof WK !== "undefined") {
         "outside the schema. Constrained decoding masks them one step at a time; conditioning " +
         "drops them from the whole-string distribution and renormalises once."
     });
-    [["bill", "Weight of first token \"bill\"", 0, 10, 0.5],
-     ["tech", "Weight of first token \"tech\"", 0, 10, 0.5],
+    [["bill", "Weight of first token \"bill\"", 0.5, 10, 0.5],
+     ["tech", "Weight of first token \"tech\"", 0.5, 10, 0.5],
      ["refund", "Weight of first token \"refund\" (not a label)", 0, 10, 0.5],
      ["d", "P(\"ing\" | \"bill\"); the rest is \"ed\"", 0.01, 1, 0.01],
      ["e", "P(\"nical\" | \"tech\"); the rest is \"no\"", 0.01, 1, 0.01]].forEach(function (s) {

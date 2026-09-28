@@ -221,13 +221,13 @@ if (typeof WK !== "undefined") {
 
   // ---------------------------------------------- widget 2: calibration lab
   WK.mount("widget-calibration-lab", function (root, WK) {
-    var state = { alpha: 2.5, n: 1000, bins: 10, span: 0.3, seed: 1 };
+    var state = { alpha: 2.5, n: 1000, bins: 15, span: 0.3, seed: 1 };
     var data = CAL2.sample(state.seed), order = CAL2.orderByX(data, state.n);
 
     var f = WK.frame({
       title: "Calibration lab",
       note: "X ~ N(0, 1), true probability sigmoid(2x), forecast sigmoid(α·2x). Dots are equal-width " +
-        "bins (area ∝ cases, bars are 95% intervals); the curve is LOESS with no robustness " +
+        "bins (larger dots hold more cases; bars are 95% intervals); the curve is LOESS with no robustness " +
         "iterations, left unclipped. Log loss clips forecasts to [0.001, 0.999]."
     });
     var aS = WK.slider({ label: "Distortion α (1 = calibrated)", min: -2, max: 2, step: 0.01,
