@@ -227,7 +227,7 @@ if (typeof WK !== "undefined") {
     var f = WK.frame({
       title: "Calibration lab",
       note: "X ~ N(0, 1), true probability sigmoid(2x), forecast sigmoid(α·2x). Dots are equal-width " +
-        "bins (larger dots hold more cases; bars are 95% intervals); the curve is LOESS with no robustness " +
+        "bins (larger dots hold more cases; bars are 95% Wilson intervals); the curve is LOESS with no robustness " +
         "iterations, drawn up to 0.05 beyond [0, 1] so overshoot stays visible. Log loss clips forecasts to [0.001, 0.999]."
     });
     var aS = WK.slider({ label: "Distortion α (1 = calibrated)", min: -2, max: 2, step: 0.01,
@@ -278,9 +278,11 @@ if (typeof WK !== "undefined") {
       svg.appendChild(WK.h("path", { d: d, fill: "none", stroke: "c2", "stroke-width": 2.5 }));
       var maxN = Math.max.apply(null, r.bins.map(function (b) { return b.n; }));
       r.bins.forEach(function (b) {
-        var half = 1.96 * Math.sqrt(Math.max(b.f * (1 - b.f), 1e-9) / b.n);
-        svg.appendChild(WK.h("line", { x1: sx(b.p), x2: sx(b.p), y1: sy(Math.max(0, b.f - half)),
-          y2: sy(Math.min(1, b.f + half)), stroke: "c1", "stroke-width": 1.2 }));
+        // Wilson interval: stays open when a bin's frequency is 0 or 1.
+        var z2 = 1.96 * 1.96 / b.n, centre = (b.f + z2 / 2) / (1 + z2);
+        var half = 1.96 / (1 + z2) * Math.sqrt(b.f * (1 - b.f) / b.n + z2 / (4 * b.n));
+        svg.appendChild(WK.h("line", { x1: sx(b.p), x2: sx(b.p), y1: sy(Math.max(0, centre - half)),
+          y2: sy(Math.min(1, centre + half)), stroke: "c1", "stroke-width": 1.2 }));
         svg.appendChild(WK.h("circle", { cx: sx(b.p), cy: sy(b.f), r: 3 + 8 * Math.sqrt(b.n / maxN),
           fill: "c1", "fill-opacity": 0.8, stroke: "surface", "stroke-width": 1 }));
       });

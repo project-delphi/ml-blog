@@ -115,7 +115,7 @@ the same generating process on the same small stack, so one venv serves both; ea
 still commits its own copy of the freeze. Part 1, `jev-system-one-model`, runs no code.
 
 ```bash
-uv venv .venv-calibration
+uv venv .venv-calibration --python 3.12
 uv pip install --python .venv-calibration/bin/python \
   numpy pandas scipy matplotlib scikit-learn statsmodels tabulate \
   ipykernel jupyter nbclient nbformat pyyaml

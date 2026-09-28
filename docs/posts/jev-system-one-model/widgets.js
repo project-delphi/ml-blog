@@ -111,7 +111,8 @@ if (typeof WK !== "undefined") {
       svg.appendChild(WK.h("line", { x1: 10, x2: W - 10, y1: by + bh, y2: by + bh, stroke: "rule" }));
       groups.forEach(function (g, k) {
         var gx = 20 + k * (gw + 10);
-        svg.appendChild(WK.h("text", { x: gx + gw / 2 - 10, y: by - 12, "font-size": 12, "font-weight": 600,
+        var span = g[1].length * bw + (g[1].length - 1) * 10;
+        svg.appendChild(WK.h("text", { x: gx + span / 2, y: by - 24, "font-size": 12, "font-weight": 600,
           "text-anchor": "middle", fill: "ink" }, g[0]));
         g[1].forEach(function (v, j) {
           var x = gx + j * (bw + 10);

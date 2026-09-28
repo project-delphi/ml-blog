@@ -72,7 +72,7 @@ $$
 
 - $x$ plays the role of the evidence in one ticket, and $p^*(x)$ is the true probability that the answer is yes.
 - Simulation fixes $p^*$, so a forecaster's error can be measured against the truth instead of only estimated from labels.
-- A wrong answer here has a price: a model whose high forecasts average 0.96 on cases that are yes 84% of the time automates decisions it should escalate.
+- A wrong answer here has a price: a model whose high forecasts overstate how often the answer is yes automates decisions it should escalate.
 
 Miscalibrated forecasters are built by distorting the true probability on the logit scale:
 
@@ -267,7 +267,7 @@ else:
 - An overconfident model sends more cases over the line than the line was designed for. Part 3 prices the damage.
 
 ::: {.callout-note title="Statistical subtlety"}
-TypeSafe's launch post says Jev is "Calibrated: higher confidence means higher accuracy." [vendor]{.tag-vendor} The second half describes monotonicity: accuracy rises with the score. Monotonicity is weaker than calibration. The $\alpha = 2.5$ forecaster is perfectly monotone, yet its forecasts in the top bin average 0.96 while the event happens there 84% of the time. TypeSafe's AI primer states the stronger property ("Outcomes assigned a probability of `0.8` should occur about 80% of the time"), which is the one thresholds need. [vendor]{.tag-vendor}
+TypeSafe's launch post says Jev is "Calibrated: higher confidence means higher accuracy." [vendor]{.tag-vendor} The second half describes monotonicity: accuracy rises with the score. Monotonicity is weaker than calibration. The $\alpha = 2.5$ forecaster is perfectly monotone, yet its forecasts in the top bin average `{python} f"{top_mean:.2f}"` while the event happens there `{python} f"{100 * top_freq:.0f}"`% of the time. TypeSafe's AI primer states the stronger property ("Outcomes assigned a probability of `0.8` should occur about 80% of the time"), which is the one thresholds need. [vendor]{.tag-vendor}
 :::
 
 ## Maximum likelihood, MAP and calibration
@@ -566,17 +566,19 @@ A reliability diagram (Niculescu-Mizil & Caruana 2005 popularised it in machine 
 
 ```{python}
 #| label: fig-reliability
-#| fig-cap: "Reliability diagrams for three forecasters on one sample of 5,000 cases. Error bars are 95% binomial intervals; the grey bars along the bottom are the histogram of forecasts. The overconfident forecaster's curve is flatter than the diagonal; the underconfident one's is steeper."
+#| fig-cap: "Reliability diagrams for three forecasters on one sample of 5,000 cases. Error bars are 95% Wilson intervals; the grey bars along the bottom are the histogram of forecasts. The overconfident forecaster's curve is flatter than the diagonal; the underconfident one's is steeper."
 x, p_star, y = draw(np.random.default_rng(1), 5000)
 fig, axes = plt.subplots(1, 3, figsize=(8.4, 3.2), sharey=True)
 for ax, (title, alpha, colour) in zip(axes, [("Calibrated (α = 1)", 1.0, PURPLE), ("Overconfident (α = 2.5)", 2.5, AMBER), ("Underconfident (α = 0.4)", 0.4, TEAL)]):
     p = distort(p_star, alpha)
     mp, fr, cnt = reliability_bins(p, y)
-    half = 1.96 * np.sqrt(fr * (1 - fr) / cnt)
+    z2 = 1.96**2 / cnt  # Wilson interval: stays open when a bin's frequency is 0 or 1
+    centre = (fr + z2 / 2) / (1 + z2)
+    half = 1.96 / (1 + z2) * np.sqrt(fr * (1 - fr) / cnt + z2 / (4 * cnt))
     counts, _ = np.histogram(p, bins=np.linspace(0, 1, 11))
     ax.bar(np.linspace(0.05, 0.95, 10), 0.25 * counts / counts.max(), width=0.09, color=RULE, zorder=0)
     ax.plot([0, 1], [0, 1], color=MUTED, lw=1, ls="--")
-    ax.errorbar(mp, fr, yerr=half, fmt="o-", color=colour, ms=4, lw=1.2, capsize=2)
+    ax.errorbar(mp, fr, yerr=[fr - (centre - half), centre + half - fr], fmt="o-", color=colour, ms=4, lw=1.2, capsize=2)
     ax.set(title=title, xlabel="Forecast probability", xlim=(0, 1), ylim=(0, 1))
     ax.set_aspect("equal")
 axes[0].set_ylabel("Observed frequency of Y = 1")
