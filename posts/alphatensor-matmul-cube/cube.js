@@ -21,7 +21,7 @@
 
 var TensorCube = (function () {
   var M = MatmulModel;
-  var GAP = 1.3, LIFT = 1.0, BOX = 0.66, MAX_LABELS = 28;
+  var GAP = 1.3, LIFT = 1.0, BOX = 0.66, MAX_LABELS = 64;  // a label for every cell of the 2 x 2 cube
 
   function half(n) { return (n * n - 1) / 2; }
   function view(n) {

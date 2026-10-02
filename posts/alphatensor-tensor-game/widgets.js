@@ -125,11 +125,16 @@
       draw();
     }
     // The first term of a factorization that has not been played yet.
+    // A move counts as played by its net effect: one that was later taken back
+    // (its negative subtracted, as greedy does) is due again.
     function scripted(F, whose) {
+      if (M.isZero(state.R)) { state.note = "Nothing left to subtract."; draw(); return; }
       var played = state.history.map(function (h) { return M.rankOne(h.u, h.v, h.w); });
       for (var r = 0; r < F.U.length; r++) {
         var block = M.rankOne(F.U[r], F.V[r], F.W[r]);
-        if (!played.some(function (p) { return M.equal(p, block); })) {
+        var back = block.map(function (x) { return -x; }), net = 0;
+        played.forEach(function (p) { if (M.equal(p, block)) net++; else if (M.equal(p, back)) net--; });
+        if (net <= 0) {
           play(F.U[r], F.V[r], F.W[r], whose + " move " + (r + 1) + " of " + F.U.length + ".");
           return;
         }

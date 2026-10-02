@@ -142,7 +142,10 @@
             var v = Math.round(Number(input.value));
             state[key][i] = isFinite(v) ? Math.max(-99, Math.min(99, v)) : 0;
             draw();
-          } });
+          },
+          // Typing is left alone; on leaving the field it shows the integer
+          // in -99..99 that the table was computed from.
+          onchange: function () { input.value = state[key][i]; } });
         inputs[key].push(input);
         grid.appendChild(input);
       })(i);

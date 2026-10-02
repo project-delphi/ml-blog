@@ -25,7 +25,7 @@ INK = "#1F2430"
 MUTED = "#5F6672"
 RULE = "#C4C8D0"
 PURPLE = "#4A3AA7"
-GAP = 1.35
+GAP = 1.7
 SUB = "₀₁₂₃₄₅₆₇₈₉"
 
 
@@ -79,31 +79,36 @@ def main() -> None:
                     )
                 else:
                     ax.scatter([x], [y], [z + 0.2], color=RULE, s=9, depthshade=False)
+        # Beside the tray's right-hand corner, at the tray's own height.
         ax.text(
-            size + 0.9,
-            -0.6,
-            z + 0.1,
+            size + 0.1,
+            size - 0.5,
+            z,
             name("c", c),
             color=INK,
             fontsize=15,
             fontweight="bold",
+            va="center",
         )
     for i in range(size):
-        ax.text(i, -1.5, -0.1, name("b", i), color=MUTED, fontsize=13, ha="center")
         ax.text(
-            -1.5,
+            i, -1.3, 0, name("b", i), color=MUTED, fontsize=13, ha="center", va="top"
+        )
+        ax.text(
+            -1.3,
             size - 1 - i,
-            -0.1,
+            0,
             name("a", i),
             color=MUTED,
             fontsize=13,
-            ha="center",
+            ha="right",
+            va="center",
         )
     ax.set_xlim(-2, size)
     ax.set_ylim(-2, size)
     ax.set_zlim(0, (size - 1) * GAP + 1)
     ax.set_box_aspect((size + 2, size + 2, (size - 1) * GAP + 1), zoom=1.0)
-    ax.view_init(elev=22, azim=-62)
+    ax.view_init(elev=15, azim=-62)
     ax.set_axis_off()
     fig.savefig(POST / "fig-cube.png", facecolor="white")
     plt.close(fig)
