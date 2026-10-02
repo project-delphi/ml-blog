@@ -7,6 +7,8 @@ The shared runtime and chrome for the blog's interactive widgets.
   in SVG units, and a `mount` that runs your builder once the DOM is ready.
 - `chrome.scss` — the frame (`.widget-container` and friends), compiled into both
   halves of the site theme, so it follows the reader's light/dark choice.
+- `stage.js` — a three.js stage for 3D widgets (`WKStage`), loaded only by the posts
+  that use it. See [3D widgets](#3d-widgets-stagejs).
 
 Every post loads `kit.js` through `posts/_metadata.yml`, so a widget file assumes
 `WK` exists and does not load anything itself.
@@ -66,6 +68,49 @@ Every post loads `kit.js` through `posts/_metadata.yml`, so a widget file assume
    returns numbers, and a `draw` that renders them. The prose then tells the reader
    what to drag and what they will see, and the model is what a review checks that
    claim against.
+
+## 3D widgets: `stage.js`
+
+`stage.js` is the kit's three.js stage, one global, `WKStage`. A post that draws in
+3D loads it between the kit and its own files:
+
+```{=html}
+<script src="../../widget-kit/stage.js"></script>
+<script src="model.js"></script>
+<script src="widgets.js"></script>
+```
+
+```js
+WK.mount("widget-fence", function (root) {
+  var f = WK.frame({ title: "A plane balanced on a fence", note: "..." });
+  var stage = null, plane;
+  root.appendChild(f.root);
+  WKStage.create(f.body, { label: "What the scene shows, for a screen reader.",
+                           view: { az: -120, el: 15, dist: 12 } }, function (s) {
+    stage = s;
+    plane = s.quad("c1", { opacity: 0.3 });
+    draw();
+  });
+  function draw() {
+    // update the stat tiles first: they must not depend on the scene
+    if (!stage) return;
+    plane.set([-1, -1, 0], [1, -1, 0], [1, 1, 1], [-1, 1, 1]);
+    stage.render();
+  }
+});
+```
+
+- three.js is fetched from a pinned CDN URL the first time a stage nears the viewport,
+  and once per page. When it does not load, the stage says so and `build` never runs,
+  so keep every number the prose quotes in stat tiles the scene does not own.
+- Coordinates are `[x, y, z]` with z up. Helpers: `arrow`, `line`, `quad`, `dots`,
+  `surface`, `grid`, `label` (HTML pinned to a 3D point), `clipBox`, `ramp`, `animate`.
+- Colour is a token, as everywhere in the kit. A `surface` shades by a function you
+  pass, so redraw it in `stage.onTheme`.
+- The scene renders on demand: call `stage.render()` after a change. Dragging rotates;
+  the wheel is left alone so the page still scrolls.
+- Keep the model in a separate `model.js` that also exports under node, with a
+  `src/check_model.js` that sweeps the controls. `collinearity` is the worked example.
 
 ## Why not the inline print cell
 

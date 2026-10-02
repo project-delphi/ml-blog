@@ -281,6 +281,14 @@ cell, so a prose-only post can carry a widget, and a change to `widgets.js` or t
 is republished by any project render without re-executing anything. Colour is a token
 name, never a hex value. `attention` is the first post on the kit.
 
+A 3D widget adds `widget-kit/stage.js` (one global, `WKStage`: three.js from a pinned
+CDN URL, loaded lazily, with a drag-to-orbit camera and token-coloured helpers) between
+the kit and the post's own scripts. `collinearity` is the worked example: its numbers
+live in `model.js`, apart from the drawing, and `node posts/collinearity/src/check_model.js`
+prints every figure the prose quotes from a widget. Run that script after touching a
+`model.js`, and keep every quoted number in a stat tile, since the scene is absent when
+three.js does not load.
+
 A shrinking set of older posts still print their `widgets.js` (and usually
 `widget-data/*.json`) into an inline `<script>` from a Python cell:
 `bayesian-bootstrap`, `statistical-jackknife`, `svd-rotate-stretch-rotate`,
