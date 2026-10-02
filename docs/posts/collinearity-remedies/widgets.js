@@ -78,7 +78,9 @@
   WK.mount("widget-remedy-valley", function (root) {
     var R = 4.5, CAP = 4, HS = 0.6, LIFT = 0.05, NU = 96, NV = 28, SPAN = 6.4, CENTRE = [1, 1];
     var state = { theta: PRESETS[2].theta, k: 0, method: "ols", lambda: 0.1 };
-    var stage = null, parts = null, cancel = null, mix = 1, from = 0;
+    var stage = null, parts = null, cancel = null;
+    // Least squares for the sample on screen; tweened when the noise changes.
+    var shown = M.ols(state.theta, 0);
 
     var f = WK.frame({
       title: "What each method minimises",
@@ -135,34 +137,27 @@
       draw();
     });
 
-    function settle() { if (cancel) { cancel(); cancel = null; } mix = 1; }
+    function settle() {
+      if (cancel) { cancel(); cancel = null; }
+      shown = M.ols(state.theta, state.k);
+    }
     function renoise() {
-      from = state.k;
+      var from = shown.slice();  // what is on screen, so a second click mid-tween does not jump
       state.k = (state.k + 1) % M.DRAWS;
+      var to = M.ols(state.theta, state.k);
       if (cancel) cancel();
       stats_();
-      if (!stage) { mix = 1; return; }
-      mix = 0;
-      cancel = stage.animate(650, function (t) { mix = t; scene(); });
-    }
-    // The sample on screen: least squares for the previous draw sliding to
-    // least squares for the current one while "New noise" animates.
-    function shownOls() {
-      var a = M.ols(state.theta, from), b = M.ols(state.theta, state.k);
-      return mix >= 1 ? b : [lerp(a[0], b[0], mix), lerp(a[1], b[1], mix)];
+      if (!stage) { shown = to; return; }
+      cancel = stage.animate(650, function (t) {
+        shown = [lerp(from[0], to[0], t), lerp(from[1], to[1], t)];
+        scene();
+      });
     }
     function scene() {
       if (!stage) return;
-      var c = M.corr(state.theta), q = Math.SQRT1_2, m = M.METHODS[state.method];
-      var bhat = shownOls();
-      var est = state.method === "ols" ? bhat
-        : state.method === "pcr" ? [(bhat[0] + bhat[1]) / 2, (bhat[0] + bhat[1]) / 2]
-          : M.penalised(bhat, c, state.lambda, m.l1, m.l2);
-      function value(p) {
-        var d1 = p[0] - bhat[0], d2 = p[1] - bhat[1], v = d1 * d1 + 2 * c * d1 * d2 + d2 * d2;
-        if (m.lambda) v += state.lambda * (m.l1 * (Math.abs(p[0]) + Math.abs(p[1])) + m.l2 * (p[0] * p[0] + p[1] * p[1]));
-        return v;
-      }
+      var q = Math.SQRT1_2, m = M.METHODS[state.method], bhat = shown;
+      var est = M.estimateFrom(bhat, state.theta, state.method, state.lambda);
+      var value = M.objectiveFrom(bhat, state.theta, state.method, state.lambda);
       // For one component the answer is the lowest point on the line
       // beta1 = beta2, not of the surface, so heights are measured from the
       // surface's own minimum (least squares) and the line is drawn on it.
@@ -230,7 +225,7 @@
 
   // ---------------------------------------------------------------- fence
   WK.mount("widget-remedy-fence", function (root) {
-    var SHOWN = 25, L = 2.6, H = 2.4, ZS = 0.5;
+    var SHOWN = 25, L = 2.8, H = 2.4, ZS = 0.5;  // L covers every row: max |x| over the slider is 2.77
     var state = { theta: PRESETS[2].theta, k: 0, method: "ols", lambda: 0.1 };
     var stage = null, parts = null, cancel = null;
     var shown = { beta: M.estimate(state.theta, 0, state.method, state.lambda), noise: M.NOISE[0].e.slice() };
@@ -259,14 +254,15 @@
 
     WKStage.create(f.body, {
       label: "A 3D scatter of y against two predictors with the planes one method fits to 25 samples.",
-      view: { az: -122, el: 13, dist: 13.6, target: [0, 0, -0.1] }
+      view: { az: -122, el: 13, dist: 14.6, target: [0, 0, 0.05] }
     }, function (s) {
       stage = s;
       var clip = s.clipBox([-L, L], [-L, L], [-H, H]);
       parts = { fan: [], floor: s.grid([-L, L], [-L, L], L / 4, -H, "muted", 0.28) };
       for (var i = 0; i < SHOWN; i++) parts.fan.push(s.quad("c1", { opacity: 0.04, clip: clip }));
       parts.plane = s.quad("c1", { opacity: 0.34, clip: clip });
-      parts.points = s.dots("c3", { radius: 0.055, max: M.N, clip: clip });
+      // The rows are never clipped: one that pokes out of the box is still data.
+      parts.points = s.dots("c3", { radius: 0.055, max: M.N });
       parts.shadow = s.dots("muted", { radius: 0.035, max: M.N, opacity: 0.55 });
       parts.frame = s.line("muted", { pairs: true, opacity: 0.45 });
       parts.frame.set([[-L, -L, -H], [-L, -L, H], [L, -L, -H], [L, -L, H], [L, L, -H], [L, L, H], [-L, L, -H], [-L, L, H],

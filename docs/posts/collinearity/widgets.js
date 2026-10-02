@@ -56,7 +56,7 @@
 
   // ---------------------------------------------------------------- fence
   WK.mount("widget-fence", function (root) {
-    var SHOWN = 25, L = 2.6, H = 2.4, ZS = 0.5;
+    var SHOWN = 25, L = 2.8, H = 2.4, ZS = 0.5;  // L covers every row: max |x| over the slider is 2.77
     var state = { theta: PRESETS[2].theta, k: 0, fan: true };
     var stage = null, parts = null, cancel = null;
     // What is on screen for the highlighted fit; tweened when the noise changes.
@@ -92,14 +92,15 @@
 
     WKStage.create(f.body, {
       label: "A 3D scatter of y against two predictors with fitted planes through it.",
-      view: { az: -122, el: 13, dist: 13.6, target: [0, 0, -0.1] }
+      view: { az: -122, el: 13, dist: 14.6, target: [0, 0, 0.05] }
     }, function (s) {
       stage = s;
       var clip = s.clipBox([-L, L], [-L, L], [-H, H]);
       parts = { fan: [], floor: s.grid([-L, L], [-L, L], L / 4, -H, "muted", 0.28) };
       for (var i = 0; i < SHOWN; i++) parts.fan.push(s.quad("c1", { opacity: 0.04, clip: clip }));
       parts.plane = s.quad("c1", { opacity: 0.34, clip: clip });
-      parts.points = s.dots("c3", { radius: 0.055, max: M.N, clip: clip });
+      // The rows are never clipped: one that pokes out of the box is still data.
+      parts.points = s.dots("c3", { radius: 0.055, max: M.N });
       parts.shadow = s.dots("muted", { radius: 0.035, max: M.N, opacity: 0.55 });
       parts.frame = s.line("muted", { pairs: true, opacity: 0.45 });
       parts.frame.set([[-L, -L, -H], [-L, -L, H], [L, -L, -H], [L, -L, H], [L, L, -H], [L, L, H], [-L, L, -H], [-L, L, H],

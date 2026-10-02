@@ -124,18 +124,22 @@ var RemedyModel = (function () {
     return [0, 0];
   }
 
-  /** The estimate a method returns for noise draw k. */
-  function estimate(theta, k, method, lambda) {
-    var b = ols(theta, k), m = METHODS[method];
+  /** The estimate a method returns for a sample whose least-squares
+   *  coefficients are `b`. */
+  function estimateFrom(b, theta, method, lambda) {
+    var m = METHODS[method];
     if (method === "ols") return b;
     if (method === "pcr") { var h = (b[0] + b[1]) / 2; return [h, h]; }
     return penalised(b, Math.cos(theta * RAD), lambda, m.l1, m.l2);
   }
+  /** The estimate a method returns for noise draw k. */
+  function estimate(theta, k, method, lambda) { return estimateFrom(ols(theta, k), theta, method, lambda); }
 
-  /** The objective a method minimises on draw k, measured from the
-   *  least-squares minimum: excess MSE plus the penalty. */
-  function objective(theta, k, method, lambda) {
-    var b = ols(theta, k), c = Math.cos(theta * RAD), m = METHODS[method];
+  /** The objective a method minimises on a sample whose least-squares
+   *  coefficients are `b`, measured from the least-squares minimum: excess
+   *  MSE plus the penalty. */
+  function objectiveFrom(b, theta, method, lambda) {
+    var c = Math.cos(theta * RAD), m = METHODS[method];
     return function (p) {
       var d1 = p[0] - b[0], d2 = p[1] - b[1];
       var v = d1 * d1 + 2 * c * d1 * d2 + d2 * d2;
@@ -143,6 +147,7 @@ var RemedyModel = (function () {
       return v;
     };
   }
+  function objective(theta, k, method, lambda) { return objectiveFrom(ols(theta, k), theta, method, lambda); }
 
   var QUERY = { on: [1.5, 1.5], off: [1.5, -1.5] };
   function predict(b, q) { return b[0] * q[0] + b[1] * q[1]; }
@@ -172,7 +177,8 @@ var RemedyModel = (function () {
     N: N, DRAWS: DRAWS, SIGMA: SIGMA, BETA: BETA, QUERY: QUERY, NOISE: NOISE, METHODS: METHODS,
     thetaOf: thetaOf, sliderOf: sliderOf, LAMBDA_STOPS: LAMBDA_STOPS, lambdaOf: lambdaOf, lambdaStop: lambdaStop,
     corr: corr, kappa: kappa, columns: columns, ols: ols, penalised: penalised,
-    estimate: estimate, objective: objective, predict: predict, summary: summary
+    estimate: estimate, estimateFrom: estimateFrom, objective: objective, objectiveFrom: objectiveFrom,
+    predict: predict, summary: summary
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   return api;

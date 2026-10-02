@@ -31,7 +31,8 @@ var WKStage = (function () {
 
   var CSS =
     ".wk-stage{position:relative;width:100%;aspect-ratio:16/10;max-height:540px;min-height:260px;" +
-    "border:1px solid var(--w-rule);border-radius:8px;background:var(--w-paper);overflow:hidden}" +
+    "border:1px solid var(--w-rule);border-radius:8px;background:var(--w-paper);overflow:hidden;" +
+    "-webkit-user-select:none;user-select:none}" +
     ".wk-stage canvas{display:block;width:100%;height:100%;touch-action:pan-y;cursor:grab;outline-offset:-3px}" +
     ".wk-stage canvas:active{cursor:grabbing}" +
     ".wk-stage canvas:focus-visible{outline:3px solid var(--w-accent)}" +
@@ -83,8 +84,15 @@ var WKStage = (function () {
           if (window.console) console.error("WKStage", err);
           return;
         }
+        try { build(stage); }
+        catch (err) {
+          // Past WK.mount's own try/catch by now, so say it here.
+          msg.textContent = "This scene failed to load: " + err.message;
+          box.appendChild(msg);
+          if (window.console) console.error("WKStage build", err);
+          return;
+        }
         box.removeChild(msg);
-        build(stage);
         stage.render();
       }, function () {
         msg.textContent = "This 3D scene draws with three.js, which did not load from cdn.jsdelivr.net. " +
@@ -103,7 +111,7 @@ var WKStage = (function () {
   function init(T, box, opts) {
     var view = Object.assign({ az: 35, el: 25, dist: 8, target: [0, 0, 0], fov: 32, elMin: 4, elMax: 86 },
       opts.view || {});
-    var home = { az: view.az, el: view.el, dist: view.dist };
+    var home = { az: view.az, el: view.el };
     var renderer = new T.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.localClippingEnabled = true;
@@ -127,8 +135,20 @@ var WKStage = (function () {
     function V(p) { return new T.Vector3(p[0], p[2], -p[1]); }
 
     // ---------------------------------------------------------- theme
-    var themed = [], themeCallbacks = [];
-    function colour(token) { return new T.Color(WK.palette()[token] || token); }
+    // The stage reads the tokens itself rather than through WK.palette():
+    // Quarto's toggle flips the body class in the same task that it switches
+    // the stylesheet on, so a read made in the class observer still sees the
+    // old theme, and WK.palette() would cache it.
+    var themed = [], themeCallbacks = [], tokens = null;
+    function readTokens() {
+      var cs = getComputedStyle(document.documentElement), p = {};
+      WK.tokens.forEach(function (t) { p[t] = cs.getPropertyValue("--w-" + t).trim() || "#888888"; });
+      return p;
+    }
+    function colour(token) {
+      if (!tokens) tokens = readTokens();
+      return new T.Color(tokens[token] || token);
+    }
     /** A material whose colour is a theme token and follows the toggle. */
     function material(kind, token, params) {
       var C = { basic: T.MeshBasicMaterial, lambert: T.MeshLambertMaterial,
@@ -137,11 +157,17 @@ var WKStage = (function () {
       themed.push({ m: m, token: token });
       return m;
     }
-    WK.onTheme(function () {
+    function repaint() {
+      var next = readTokens();
+      if (tokens && WK.tokens.every(function (t) { return next[t] === tokens[t]; })) return;
+      tokens = next;
       themed.forEach(function (t) { t.m.color.copy(colour(t.token)); });
       themeCallbacks.forEach(function (cb) { cb(); });
       render();
-    });
+    }
+    // Repaint once the new stylesheet has applied; it is usually there within
+    // a frame, and the later tries cover a slow first load of the other theme.
+    WK.onTheme(function () { [0, 60, 250, 1000].forEach(function (ms) { setTimeout(repaint, ms); }); });
 
     // --------------------------------------------------------- camera
     function place() {
@@ -158,14 +184,23 @@ var WKStage = (function () {
       hint.style.opacity = "0";
       render();
     }
+    var dragging = null;
     canvas.addEventListener("pointerdown", function (ev) {
-      var x = ev.clientX, y = ev.clientY;
-      canvas.setPointerCapture(ev.pointerId);
+      // One pointer orbits at a time, and only the primary button.
+      if (dragging !== null || ev.button !== 0) return;
+      var x = ev.clientX, y = ev.clientY, id = ev.pointerId;
+      dragging = id;
+      ev.preventDefault();  // no text selection when the drag leaves the box
+      canvas.focus({ preventScroll: true });
+      canvas.setPointerCapture(id);
       function move(e) {
+        if (e.pointerId !== id) return;
         orbit(-(e.clientX - x) * 0.4, (e.clientY - y) * 0.4);
         x = e.clientX; y = e.clientY;
       }
-      function up() {
+      function up(e) {
+        if (e.pointerId !== id) return;
+        dragging = null;
         canvas.removeEventListener("pointermove", move);
         canvas.removeEventListener("pointerup", up);
         canvas.removeEventListener("pointercancel", up);
@@ -181,7 +216,8 @@ var WKStage = (function () {
       orbit(step[0], step[1]);
     });
     canvas.addEventListener("dblclick", function () {
-      view.az = home.az; view.el = home.el; view.dist = home.dist;
+      // Distance and target are the widget's to set, so only the angles reset.
+      view.az = home.az; view.el = home.el;
       render();
     });
 
@@ -214,6 +250,10 @@ var WKStage = (function () {
       queued = true;
       requestAnimationFrame(frame);
     }
+    // A phone may drop the WebGL context in the background. With no idle loop
+    // nothing would repaint after three.js restores it, so ask for a frame.
+    canvas.addEventListener("webglcontextlost", function (ev) { ev.preventDefault(); });
+    canvas.addEventListener("webglcontextrestored", render);
     if (window.ResizeObserver) new ResizeObserver(render).observe(box);
     else window.addEventListener("resize", render);
 
@@ -401,9 +441,12 @@ var WKStage = (function () {
     }
 
     /** A colour ramp between theme tokens: ramp(["paper", "c2", "c1"])(t) -> THREE.Color. */
-    function ramp(tokens) {
+    function ramp(names) {
+      var cs = null, seen = null;
       return function (t) {
-        var cs = tokens.map(colour), x = clamp(t, 0, 1) * (cs.length - 1);
+        // Resolve the stops once per theme, not once per vertex.
+        if (seen !== tokens || !cs) { cs = names.map(colour); seen = tokens; }
+        var x = clamp(t, 0, 1) * (cs.length - 1);
         var i = Math.min(cs.length - 2, Math.floor(x));
         return cs[i].clone().lerp(cs[i + 1], x - i);
       };
