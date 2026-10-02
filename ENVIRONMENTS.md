@@ -124,6 +124,26 @@ uv pip install --python .venv-calibration/bin/python \
 
 The Hugging Face rule applies: re-render both posts when you bump this venv.
 
+## The Collinearity posts share one venv
+
+`collinearity` and `collinearity-remedies`, Parts 1 and 2 of one series, pin the kernel
+**`collinearity-blog`** over `.venv-collinearity`. Both read the Longley data from
+`statsmodels` and the diabetes data from scikit-learn, so neither needs a `data/`
+carve-out; each post commits its own copy of the freeze.
+
+```bash
+uv venv .venv-collinearity --python 3.12
+uv pip install --python .venv-collinearity/bin/python \
+  numpy pandas scipy matplotlib scikit-learn statsmodels tabulate \
+  ipykernel jupyter nbclient nbformat pyyaml
+.venv-collinearity/bin/python -m ipykernel install --user --name collinearity-blog
+```
+
+Re-render both posts when you bump this venv. Their widgets load `model.js` and
+`widgets.js` as resources, so a widget change needs no re-execution; run the post's
+`node posts/<slug>/src/check_model.js` after touching `model.js`, since the prose
+quotes its numbers.
+
 ## One post calls a live API
 
 `llm-agents-from-first-principles` runs an LLM agent against Groq's free tier, so
