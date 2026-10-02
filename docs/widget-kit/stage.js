@@ -381,6 +381,44 @@ var WKStage = (function () {
       };
     }
 
+    /** Cubes, each with its own token and size:
+     *  boxes(max, {opacity}).set([{at: [x, y, z], size: 0.7, token: "c1", mix: 0}, ...]).
+     *  One material serves every instance, so an instance cannot carry its own
+     *  opacity; `mix` fades its colour towards `paper` instead. */
+    function boxes(max, o) {
+      o = o || {};
+      var params = o.clip ? { clippingPlanes: o.clip } : {};
+      if (o.opacity !== undefined) { params.transparent = true; params.opacity = o.opacity; params.depthWrite = false; }
+      // White, and outside `themed`: repaint() would tint every instance alike.
+      var obj = add(new T.InstancedMesh(new T.BoxGeometry(1, 1, 1), new T.MeshLambertMaterial(params), max));
+      var m4 = new T.Matrix4(), q = new T.Quaternion(), s = new T.Vector3(), items = [];
+      obj.setColorAt(0, new T.Color(1, 1, 1));  // allocate instanceColor before the first compile
+      obj.count = 0;
+      function paint() {
+        var paper = colour("paper"), seen = {}, i, k, c;
+        for (i = 0; i < obj.count; i++) {
+          k = items[i].token || "c1";
+          c = seen[k] || (seen[k] = colour(k));
+          obj.setColorAt(i, items[i].mix ? c.clone().lerp(paper, items[i].mix) : c);
+        }
+        obj.instanceColor.needsUpdate = true;
+      }
+      themeCallbacks.push(paint);
+      return {
+        set: function (list) {
+          items = list;
+          obj.count = Math.min(list.length, max);
+          for (var i = 0; i < obj.count; i++) {
+            var z = list[i].size === undefined ? 1 : list[i].size;
+            obj.setMatrixAt(i, m4.compose(V(list[i].at), q, s.set(z, z, z)));
+          }
+          obj.instanceMatrix.needsUpdate = true;
+          paint();
+        },
+        show: shower(obj)
+      };
+    }
+
     /** A height-coloured grid surface with optional wire lines:
      *  surface(nu, nv, {wire, opacity, clip}).set(function (u, v) { return [x, y, z]; },
      *                                            function (u, v, p) { return THREE.Color; }) */
@@ -482,7 +520,7 @@ var WKStage = (function () {
       colour: colour, material: material, ramp: ramp,
       onTheme: function (cb) { themeCallbacks.push(cb); },
       clipZ: clipZ, clipBox: clipBox,
-      arrow: arrow, line: line, quad: quad, dots: dots, surface: surface, label: label, grid: grid
+      arrow: arrow, line: line, quad: quad, dots: dots, boxes: boxes, surface: surface, label: label, grid: grid
     };
   }
 

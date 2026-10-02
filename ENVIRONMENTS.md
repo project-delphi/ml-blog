@@ -144,6 +144,27 @@ Re-render both posts when you bump this venv. Their widgets load `model.js` and
 `node posts/<slug>/src/check_model.js` after touching `model.js`, since the prose
 quotes its numbers.
 
+## The AlphaTensor posts run no Python and share one model
+
+`alphatensor-matmul-cube`, `alphatensor-seven-multiplications` and
+`alphatensor-tensor-game` have no `jupyter:` field, no kernel and no freeze record.
+Their numbers come from one `model.js`, and their 3D picture from one `cube.js`; both
+live in Part 1's folder, listed in its `resources:`, and Parts 2 and 3 load them with
+`<script src="../alphatensor-matmul-cube/model.js">`. So a change to either file reaches
+all three posts, and a single-document render of Part 2 or 3 does not recopy them: use
+the project render.
+
+After touching `model.js`, run all three check scripts, which assert as well as print:
+
+```bash
+for s in matmul-cube seven-multiplications tensor-game; do
+  node posts/alphatensor-$s/src/check_model.js
+done
+```
+
+`post.css` is three identical copies, one per post. Each post's static figure and
+cover come from its `src/make_figures.py` (`uv run --no-project --with matplotlib`).
+
 ## One post calls a live API
 
 `llm-agents-from-first-principles` runs an LLM agent against Groq's free tier, so

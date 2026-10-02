@@ -104,7 +104,8 @@ WK.mount("widget-fence", function (root) {
   and once per page. When it does not load, the stage says so and `build` never runs,
   so keep every number the prose quotes in stat tiles the scene does not own.
 - Coordinates are `[x, y, z]` with z up. Helpers: `arrow`, `line`, `quad`, `dots`,
-  `surface`, `grid`, `label` (HTML pinned to a 3D point), `clipBox`, `ramp`, `animate`.
+  `boxes` (cubes, each with its own token and size), `surface`, `grid`, `label` (HTML
+  pinned to a 3D point), `clipBox`, `ramp`, `animate`.
 - Colour is a token, as everywhere in the kit. A `surface` shades by a function you
   pass, so redraw it in `stage.onTheme`.
 - The scene renders on demand: call `stage.render()` after a change. Dragging rotates;
