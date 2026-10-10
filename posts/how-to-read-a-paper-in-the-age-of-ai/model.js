@@ -70,15 +70,19 @@ var PaperLayersModel = (function () {
   // The "scale and speed" slide is arithmetic on the post's own per-paper times:
   // a first pass by hand takes 5–10 min (Keshav), AI triage ~2 min (protocol,
   // Pass 0), and the triage workflow picks five papers to read properly, each a
-  // Pass 2 of ~1 h. Hours, as [low, high] where the post gives a range.
+  // Pass 2 of ~1 h (Pass 3, the deep read, takes hours more and is left out).
+  // Hours, as [low, high] where the post gives a range.
   var SURVEY = { handMin: [5, 10], aiMin: 2, deep: 5, deepH: 1, fields: [30, 100] };
   function budget(n) {
     return { n: n, hand: [n * SURVEY.handMin[0] / 60, n * SURVEY.handMin[1] / 60], ai: n * SURVEY.aiMin / 60,
       deep: SURVEY.deep * SURVEY.deepH };
   }
+  /** Hours to one decimal: the one rounding rule the chart, its tiles and the
+   *  check script all print with. */
+  function hours(x) { return String(Math.round(x * 10) / 10); }
 
   var api = { LAYERS: LAYERS, WHO: WHO, MODES: Object.keys(MODES), passes: passes, find: find, who: who,
-    SURVEY: SURVEY, budget: budget };
+    SURVEY: SURVEY, budget: budget, hours: hours };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   return api;
 })();

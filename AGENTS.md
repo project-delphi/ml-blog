@@ -317,9 +317,10 @@ beside it as `…/<slug>/slides.html` and linked from the post's opening.
 `how-to-read-a-paper-in-the-age-of-ai` is the worked example. Five things are not
 obvious:
 
-- **The home listing leaves decks out** with `"!posts/*/slides.qmd"` in the root
-  `index.qmd`'s `contents:`. Without it a deck shows up as its own post, in the feed and
-  the category facets.
+- **The home listing takes only post entry files**: the root `index.qmd` lists
+  `posts/*/index.qmd` and `posts/*/index.ipynb`, not the whole `posts` folder. Listing
+  the folder would put a deck, or any other page in a post's folder, on the home page as
+  its own post, in the feed and in the category facets.
 - **`posts/_metadata.yml` reaches the deck.** Its `toc: true` inserts a contents slide,
   so a deck sets `toc: false`. Its kit.js include is wanted. A deck also sets
   `search: false` so the post stays the search hit.
@@ -351,11 +352,18 @@ that quotes them.
 
 The first deck added `docs/site_libs/revealjs/` and three files under
 `docs/site_libs/quarto-html/`. Later decks should change nothing under `site_libs/`.
-reveal.js keeps its runtime under `revealjs/dist/`, which the Python packaging rule
-`dist/` in `.gitignore` swallowed. Without it the published deck has no navigation and
-no styling, and nothing warns you locally, because your own render wrote the files.
-`.gitignore` now re-includes that one directory. It also ignores the copy that every
-render writes to `_freeze/site_libs/revealjs/`, since nothing frozen depends on it.
+reveal.js keeps its runtime under `revealjs/dist/`. The Python packaging rule in
+`.gitignore` used to be an unanchored `dist/`, which swallowed it, and nothing warned
+locally, because your own render had written the files. The rule is now `/dist/`.
+`.gitignore` also ignores the copy every render writes to `_freeze/site_libs/revealjs/`,
+since nothing frozen depends on it.
+
+**A stale Quarto Sass cache changes generated file names.** Quarto caches Sass
+compiles per user (`~/Library/Caches/quarto/sass` on macOS), and CI compiles from
+scratch. A cached compile left the deck's syntax-highlighting variables out, so this
+machine named the stylesheet differently from CI, and CI's render reported the committed
+copy as deleted. If CI's `docs-deleted` flags a `site_libs` file that your own render
+keeps producing, move that cache aside, re-render, and commit what comes out.
 
 ### Three things `.gitignore` swallows
 

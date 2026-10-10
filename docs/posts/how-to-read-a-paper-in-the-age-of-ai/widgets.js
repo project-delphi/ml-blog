@@ -373,7 +373,7 @@
   // Hours to survey a field and then read five papers properly, by hand and
   // with AI triage: arithmetic on the post's per-paper times (model.js,
   // budget). Colour is whose time it is, as on the layer slides: you = c1,
-  // AI-led = c3. The five deep reads come first, so the part AI does not
+  // AI-led = c3. The five Pass 2 reads (~1 h each) come first, so the part AI does not
   // shorten sits on the axis and the part it does grows to the right. A range
   // the post gives (5–10 min a paper) is solid to its low end and faded to its
   // high end. One axis, fixed across steps, so a bigger field visibly costs more.
@@ -399,7 +399,8 @@
       r.deep = WK.h("rect", { y: r.y, height: BAR, rx: 3, fill: "c1" });
       r.solid = WK.h("rect", { y: r.y, height: BAR, rx: 3, fill: r === rows[0] ? "c1" : "c3" });
       r.faded = WK.h("rect", { y: r.y, height: BAR, rx: 3, fill: "c1", "fill-opacity": 0.38 });
-      r.inDeep = WK.h("text", { y: r.y + 28, "font-size": 13, "font-weight": 700, fill: "surface" });
+      r.inDeep = WK.h("text", { x: x(0) + 7, y: r.y + 28, "font-size": 13, "font-weight": 700, fill: "surface",
+        text: M.SURVEY.deep + " × Pass 2" });
       r.end = WK.h("text", { y: r.y + 29, "font-size": 16, "font-weight": 700, fill: "ink" });
       r.inSurvey = WK.h("text", { y: r.y + 28, "font-size": 13, "font-weight": 700, fill: "surface",
         text: r === rows[0] ? "first passes" : "triage" });
@@ -407,7 +408,7 @@
     });
     root.appendChild(svg);
 
-    function h(v) { return String(Math.round(v * 10) / 10); }
+    var h = M.hours;
     function span(node, a, b) {
       node.setAttribute("x", x(a));
       node.setAttribute("width", Math.max(0, x(b) - x(a)));
@@ -417,8 +418,6 @@
       var b = M.budget(n || 0), deep = b.deep;
       rows.forEach(function (r, i) {
         span(r.deep, 0, deep);
-        r.inDeep.setAttribute("x", x(0) + 7);
-        r.inDeep.textContent = "5 deep reads";
         var lo = i === 0 ? b.hand[0] : b.ai, hi = i === 0 ? b.hand[1] : b.ai;
         var start = deep + GAP / (x(1) - x(0));
         span(r.solid, start, start + lo);
@@ -508,6 +507,16 @@
 
   if (typeof PaperGraph !== "undefined") {
     var G = PaperGraph;
+    // The slide's prose numbers come from the same snapshot as its tiles, so a
+    // re-fetch cannot leave the two disagreeing. The typed values are the fallback.
+    var GV = { citingTotal: G.citingTotal, predates: G.predates, medicine: G.tagged("Medicine"), fetched: G.fetched };
+    WK.mount("citation-graph", function (root) {
+      var section = root.closest("section") || document;
+      section.querySelectorAll("[data-g]").forEach(function (n) {
+        var v = GV[n.getAttribute("data-g")];
+        if (v !== undefined) n.textContent = String(v);
+      });
+    });
     mountScene("citation-graph", {
       view: { az: -58, el: 16, dist: 12.5, target: [0, 0, 1.0] },
       label: "Papers that Semantic Scholar lists as citing Keshav's How to Read a Paper, with height as publication year.",
@@ -537,7 +546,7 @@
   WK.mount("survey-chart", function (root) {
     var name = WK.el("div", { class: "pl-name" });
     var tiles = [WK.stat({ label: "first passes, by hand", value: "—" }),
-      WK.stat({ label: "AI triage", value: "—" }), WK.stat({ label: "deep reads, either way", value: "—" })];
+      WK.stat({ label: "AI triage", value: "—" }), WK.stat({ label: "Pass 2 on five, either way", value: "—" })];
     var draw = surveyChart(root);
     root.appendChild(WK.el("div", { class: "pl-readout" }, name,
       WK.el("div", { class: "widget-stats" }, tiles[0].root, tiles[1].root, tiles[2].root)));
@@ -546,7 +555,7 @@
       if (pass === entry.pass) return;
       entry.pass = pass;
       var n = pass === null ? 0 : Number(pass), b = M.budget(n);
-      function h(v) { return String(Math.round(v * 10) / 10); }
+      var h = M.hours;
       draw(n);
       name.textContent = n ? n + " candidates, then five read properly" : "Five papers read properly";
       tiles[0].set(n ? h(b.hand[0]) + "–" + h(b.hand[1]) + " h" : "—");

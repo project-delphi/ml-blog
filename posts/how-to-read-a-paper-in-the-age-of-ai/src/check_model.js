@@ -20,8 +20,8 @@ for (const mode of M.MODES) {
   }
 }
 
-console.log("\nsurvey time (hours): first pass by hand vs AI triage, then the deep reads");
-const h = (x) => (Math.round(x * 10) / 10).toString();
+console.log("\nsurvey time (hours): first pass by hand vs AI triage, then Pass 2 on five papers");
+const h = M.hours;
 for (const n of M.SURVEY.fields) {
   const b = M.budget(n);
   console.log(`  ${String(n).padStart(3)} candidates: by hand ${h(b.hand[0])}–${h(b.hand[1])} h, with AI triage ${h(b.ai)} h; ` +
@@ -38,7 +38,7 @@ console.log(`  papers citing Keshav: ${G.citingTotal}; with a reference list fro
   `Keshav's own list returned: ${G.seedHasRefs}`);
 console.log(`  drawn: ${G.nodes.length} papers, years ${G.yearRange[0]}–${G.yearRange[1]}`);
 console.log(`  citation links: ${G.citation.length} (${G.citation.filter((e) => e[1] === 0).length} to Keshav)`);
-console.log(`  connected links (>= ${G.MIN_SHARED} shared references, top ${G.KEEP} per paper): ${G.connected.length}, ` +
+console.log(`  connected links (>= ${G.MIN_SHARED} shared references; each paper adds its top ${G.KEEP}): ${G.connected.length}, ` +
   `of which ${G.connectedNotCiting} join papers where neither cites the other`);
 console.log(`  top ${G.TOP} by citations:`);
 G.topCited.forEach((i) => console.log("    " + short(i)));

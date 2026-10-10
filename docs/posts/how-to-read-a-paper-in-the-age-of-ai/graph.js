@@ -12,8 +12,9 @@
  * - a "connected" link joins two papers that share references (bibliographic
  *   coupling, half of what Connected Papers' similarity is built from). Every
  *   drawn paper cites Keshav, so Keshav is left out of the shared count. Each
- *   paper keeps its two strongest such links, and a link needs at least
- *   MIN_SHARED shared references.
+ *   paper adds its KEEP strongest such links to one shared set, so a paper can
+ *   end up with more than KEEP (its neighbours' picks count too). A link needs
+ *   at least MIN_SHARED shared references.
  *
  * Height is publication year, so a citation should point down. The ones that
  * point up (`upLinks`) are wrong data, and they are the slide's point. The other two
