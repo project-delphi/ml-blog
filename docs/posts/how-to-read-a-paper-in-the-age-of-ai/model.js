@@ -1,0 +1,71 @@
+/* The pass table behind the 3D "paper in layers" scenes in the slide deck.
+ *
+ * Kept apart from the drawing (widgets.js) so the deck can be checked against
+ * the post: every time, lead and layer a scene shows is a row here, and
+ * `node posts/how-to-read-a-paper-in-the-age-of-ai/src/check_model.js` prints
+ * the table for a side-by-side read with the post. Plain JavaScript with no
+ * dependencies; exposes one global, `PaperLayersModel`, and `module.exports`
+ * under node.
+ *
+ * Two modes. `classic` is Keshav's three passes as the post's first table
+ * gives them. `ai` is the post's six-step protocol. A time the post does not
+ * give is "—", never an estimate.
+ *
+ * Layers count down from the top of the stack: 1 is what a skim reads, 4 is
+ * what only a reconstruction reaches. `candidates` says what the scene does to
+ * the other papers in the field: "top" lights the top sheet of every one
+ * (triage reads wide and shallow), "cited" draws lines to two of them (the
+ * citations a skeptical read checks).
+ */
+"use strict";
+
+var PaperLayersModel = (function () {
+  var LAYERS = [
+    { id: 1, short: "abstract & headings", long: "title, abstract, intro, headings, conclusions" },
+    { id: 2, short: "figures", long: "every figure" },
+    { id: 3, short: "argument", long: "the main text: each claim and its evidence" },
+    { id: 4, short: "proofs, code, data", long: "proofs, derivations, code and data" }
+  ];
+
+  var WHO = { you: "you", ai: "AI" };
+
+  var MODES = {
+    // Post, first table: "Pass 1 (5–10 min): title, abstract, intro, headings,
+    // conclusions ... Pass 2 (~1 h): figures and argument, skip proofs.
+    // Pass 3: virtually re-implement the work."
+    classic: [
+      { pass: "1", name: "Pass 1 · the five Cs", lead: "you", second: null,
+        time: "5–10 min", layers: [1], candidates: null },
+      { pass: "2", name: "Pass 2 · figures and argument", lead: "you", second: null,
+        time: "~1 h", layers: [2, 3], candidates: null },
+      { pass: "3", name: "Pass 3 · virtually re-implement", lead: "you", second: null,
+        time: "—", layers: [4], candidates: null }
+    ],
+    // Post, "A protocol: the three passes, updated for AI", steps 1–6.
+    ai: [
+      { pass: "0", name: "Pass 0 · triage", lead: "ai", second: null,
+        time: "~2 min per paper", layers: [1], candidates: "top" },
+      { pass: "1", name: "Pass 1 · the bird's-eye view", lead: "you", second: null,
+        time: "5–10 min", layers: [1, 2], candidates: null },
+      { pass: "2", name: "Pass 2 · the argument", lead: "you", second: "ai",
+        role: "you, with AI as tutor", time: "~1 h", layers: [2, 3], candidates: null },
+      { pass: "3", name: "Pass 3 · the field-specific deep read", lead: "you", second: null,
+        time: "hours", layers: [4], candidates: null },
+      { pass: "4", name: "Pass 4 · adversarial check", lead: "ai", second: "you",
+        role: "AI as skeptic, then you", time: "—", layers: [3], candidates: "cited" },
+      { pass: "integrate", name: "Integrate", lead: "you", second: null,
+        time: "—", layers: ["note"], candidates: null }
+    ]
+  };
+
+  function passes(mode) { return MODES[mode] || []; }
+  function find(mode, pass) {
+    return passes(mode).filter(function (p) { return p.pass === pass; })[0] || null;
+  }
+  /** Who the readout names: the role line when there is one, else the lead. */
+  function who(p) { return p.role || WHO[p.lead]; }
+
+  var api = { LAYERS: LAYERS, WHO: WHO, MODES: Object.keys(MODES), passes: passes, find: find, who: who };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  return api;
+})();

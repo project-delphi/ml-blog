@@ -310,6 +310,39 @@ A different mechanism handles browser-run Python exercises: the vendored
 `format: live-html`, and a `pyodide:` package list. Don't reinvent it as a hand-rolled
 widget, and don't edit the vendored extension.
 
+### Slide decks
+
+A post's talk version is `posts/<slug>/slides.qmd` with `format: revealjs`, published
+beside it as `…/<slug>/slides.html` and linked from the post's opening.
+`how-to-read-a-paper-in-the-age-of-ai` is the worked example. Four things are not
+obvious:
+
+- **The home listing leaves decks out** with `"!posts/*/slides.qmd"` in the root
+  `index.qmd`'s `contents:`. Without it a deck shows up as its own post, in the feed and
+  the category facets.
+- **`posts/_metadata.yml` reaches the deck.** Its `toc: true` inserts a contents slide,
+  so a deck sets `toc: false`. Its kit.js include is wanted. A deck also sets
+  `search: false` so the post stays the search hit.
+- **The tokens come from the theme list.** A deck has no light/dark pair, so it gets
+  the `--w-*` tokens by listing `../../theme/light.scss` and `../../widget-kit/chrome.scss`
+  in its revealjs `theme:`, and styles itself against those in a `slides.scss`.
+- **Keyboard and swipe belong to Reveal.** A presenter's clicker sends arrow keys, which
+  `WKStage` also binds on a focused canvas. A deck's scene removes the canvas `tabindex`
+  once built and puts `data-prevent-swipe` on its mount, so a drag orbits and the next
+  click still advances. Fragments, not buttons, step a scene: listen for Reveal's
+  `fragmentshown`/`fragmenthidden`/`slidechanged` on `document` and read the slide's last
+  visible `.fragment[data-pass]`.
+
+`check_posts.py`, `render-post`, `freeze_realign.py` and `docs_query.py post` all look
+only at `index.qmd`, so they don't check a deck. Render it with
+`quarto render posts/<slug>/slides.qmd` while iterating, and step every slide in a
+browser before shipping. A scene drawn from outside data reads a committed snapshot
+written by a fetch script under `src/` (`graph-data.js`, from
+`src/fetch_citation_graph.js`), and the slide quotes the snapshot's date. Re-fetching
+changes the numbers, so re-run `src/check_model.js` afterwards and update any slide text
+that quotes them. The first deck added `docs/site_libs/revealjs/`. Later decks
+should change nothing under `site_libs/`.
+
 ### Three things `.gitignore` swallows
 
 - **`data/` is ignored everywhere.** A post reading a data file at render time needs
