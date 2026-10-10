@@ -340,8 +340,15 @@ browser before shipping. A scene drawn from outside data reads a committed snaps
 written by a fetch script under `src/` (`graph-data.js`, from
 `src/fetch_citation_graph.js`), and the slide quotes the snapshot's date. Re-fetching
 changes the numbers, so re-run `src/check_model.js` afterwards and update any slide text
-that quotes them. The first deck added `docs/site_libs/revealjs/`. Later decks
-should change nothing under `site_libs/`.
+that quotes them.
+
+The first deck added `docs/site_libs/revealjs/` and three files under
+`docs/site_libs/quarto-html/`. Later decks should change nothing under `site_libs/`.
+reveal.js keeps its runtime under `revealjs/dist/`, which the Python packaging rule
+`dist/` in `.gitignore` swallowed. Without it the published deck has no navigation and
+no styling, and nothing warns you locally, because your own render wrote the files.
+`.gitignore` now re-includes that one directory. It also ignores the copy that every
+render writes to `_freeze/site_libs/revealjs/`, since nothing frozen depends on it.
 
 ### Three things `.gitignore` swallows
 
@@ -391,9 +398,11 @@ or `theme/dark.scss`, plus `widget-kit/chrome.scss`. Both halves define the same
 series c1–c6) under different values, and the mermaid palette. Anything styled with
 `var(--w-*)` follows the reader's toggle; anything with a hex value does not.
 
-- **Never set `theme:` in a post.** Quarto 1.6 cannot merge a document-level `theme:`
-  with the project's light/dark pair: the render dies with `Path must be a string` on
-  that post, after `docs/` is deleted. Per-post styling goes in a plain CSS file via
+- **Never set `theme:` in a post's `html` format.** Quarto 1.6 cannot merge a
+  document-level `theme:` with the project's light/dark pair: the render dies with
+  `Path must be a string` on that post, after `docs/` is deleted. A slide deck's
+  `revealjs` format is the one exception, since the pair doesn't apply to it (see
+  [Slide decks](#slide-decks)). Per-post styling goes in a plain CSS file via
   `css: post.css`, written against the tokens. The eleven posts that carried a `theme:`
   from before the pair existed were converted with `make freeze-realign` (their
   `theme.scss` compiled to `post.css` with Quarto's bundled dart-sass,

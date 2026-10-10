@@ -16,7 +16,7 @@
  * needs from them, to count shared references, and it keeps the file small.
  *
  * The API rate-limits unauthenticated callers hard, so every request retries
- * with a growing wait on HTTP 429. Re-running it on a later date gives a
+ * with a growing wait on HTTP 429 or a 5xx. Re-running it on a later date gives a
  * different snapshot; the deck quotes the date it was taken.
  */
 "use strict";
@@ -33,7 +33,8 @@ async function call(url, body) {
     const res = await fetch(url, body
       ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
       : {});
-    if (res.status === 429) { await sleep(3000 + 2000 * i); continue; }
+    // 429 is the rate limit; a 5xx is the batch endpoint under load. Both pass.
+    if (res.status === 429 || res.status >= 500) { await sleep(3000 + 2000 * i); continue; }
     if (!res.ok) throw new Error(`${res.status} ${url}`);
     return res.json();
   }

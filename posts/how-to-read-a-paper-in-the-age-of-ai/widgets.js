@@ -311,7 +311,7 @@
     // Labels: Keshav always, the most-cited when ranking, any paper under the pointer.
     function trim(t, k) { return t.length > k ? t.slice(0, k - 1).trim() + "…" : t; }
     stage.label("Keshav 2007", "c1", { dy: -18 }).set(P[0]);
-    var ranked = G.topCited.filter(function (i) { return i !== 0; }).map(function (i) {
+    var ranked = G.topCited.map(function (i) {
       // Counts only: the most-cited cluster near 2007, where titles would collide.
       // Hovering a paper still gives its title.
       var l = stage.label(G.nodes[i].cites + " citations", "ink", { dy: -16 });
@@ -326,7 +326,8 @@
       arrows.forEach(function (a) { a.show(view === "cites"); });
       linked.forEach(function (l) { l.show(view === "connected"); });
       ranked.forEach(function (l) { l.show(view === "ranked"); });
-      paint(view === "ranked" ? G.topCited : view === "connected" ? inLinks : null);
+      // Keshav stays lit when ranking, as the paper they all supposedly cite.
+      paint(view === "ranked" ? G.topCited.concat([0]) : view === "connected" ? inLinks : null);
       stage.render();
     }
     show(null);
@@ -334,6 +335,8 @@
     return {
       show: show,
       hover: function (canvasEl) {
+        // Redraw only when the paper under the pointer changes, not on every move.
+        var last = -1;
         canvasEl.addEventListener("pointermove", function (ev) {
           if (ev.buttons) return;
           var rect = canvasEl.getBoundingClientRect(), best = -1, bestD = 14 * 14;
@@ -343,13 +346,20 @@
             var d = (x - ev.clientX) * (x - ev.clientX) + (y - ev.clientY) * (y - ev.clientY);
             if (d < bestD) { bestD = d; best = i; }
           });
+          if (best === last) return;
+          last = best;
           if (best < 0) { hover.show(false); stage.render(); return; }
           var nd = G.nodes[best];
           hover.set(P[best], trim(nd.title, 56) + " (" + nd.year + ") · " + nd.cites + " citations");
           hover.show(true);
           stage.render();
         });
-        canvasEl.addEventListener("pointerleave", function () { hover.show(false); stage.render(); });
+        canvasEl.addEventListener("pointerleave", function () {
+          if (last < 0) return;
+          last = -1;
+          hover.show(false);
+          stage.render();
+        });
       }
     };
   }
@@ -444,7 +454,7 @@
             tiles: [["connected links", String(G.connected.length)],
               ["where neither cites the other", String(G.connectedNotCiting)]] },
           ranked: { name: "Ranked by citations",
-            tiles: [["of the top " + G.TOP + " are medical", String(G.topCitedMed)],
+            tiles: [["of the top " + G.TOP + " citing papers are medical", String(G.topCitedMed)],
               ["also among the " + G.TOP + " best connected", String(G.overlap)]] }
         }[pass === null ? "null" : pass];
       },

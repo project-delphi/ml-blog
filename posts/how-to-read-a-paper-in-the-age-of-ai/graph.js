@@ -4,7 +4,8 @@
  * Data is graph-data.js, a Semantic Scholar snapshot around Keshav's "How to
  * read a paper" (2007). The slide draws Keshav plus every citing paper whose
  * reference list the API returned -- the only ones a link between two citing
- * papers can be computed for -- so there is no threshold to choose.
+ * papers can be computed for -- so there is no threshold to choose. A paper with
+ * no year is left out rather than placed on a guessed one, since height is year.
  *
  * Two kinds of link:
  * - a citation link joins a paper to a paper it cites;
@@ -14,7 +15,8 @@
  *   paper keeps its two strongest such links, and a link needs at least
  *   MIN_SHARED shared references.
  *
- * Height is publication year, so a citation always points down. The other two
+ * Height is publication year, so a citation should point down. The ones that
+ * point up (`upLinks`) are wrong data, and they are the slide's point. The other two
  * coordinates come from a small seeded force layout over both kinds of link,
  * computed once here so the slide and `src/check_model.js` see the same
  * picture. Plain JavaScript; one global, `PaperGraph`, and module.exports
@@ -39,12 +41,12 @@ var PaperGraph = (function () {
   var seed = 0;
   var citingAll = pool.filter(function (p) { return p.k === "citing"; });
   var drawn = [seed].concat(pool.map(function (p, i) { return i; })
-    .filter(function (i) { return pool[i].k === "citing" && pool[i].r.length; }));
+    .filter(function (i) { return pool[i].k === "citing" && pool[i].r.length && pool[i].y; }));
   var at = {};  // pool index -> drawn index
   drawn.forEach(function (pi, i) { at[pi] = i; });
   var nodes = drawn.map(function (pi) {
     var p = pool[pi];
-    return { id: p.id, title: p.t, year: p.y || Y0, cites: p.c, seed: pi === seed, field: fieldOf(p),
+    return { id: p.id, title: p.t, year: p.y, cites: p.c, seed: pi === seed, field: fieldOf(p),
       refs: p.r.filter(function (r) { return r !== seed; }) };
   });
 
@@ -83,7 +85,8 @@ var PaperGraph = (function () {
     .sort(function (x, y) { return x.a - y.a || x.b - y.b; });
 
   // ------------------------------------------------------------ rankings
-  var byCites = nodes.map(function (n, i) { return i; })
+  // Both rankings are of the citing papers; Keshav is what they cite, not a rival.
+  var byCites = nodes.map(function (n, i) { return i; }).filter(function (i) { return !nodes[i].seed; })
     .sort(function (x, y) { return nodes[y].cites - nodes[x].cites || x - y; });
   var strength = nodes.map(function () { return 0; });
   connected.forEach(function (p) { strength[p.a] += p.w; strength[p.b] += p.w; });
@@ -132,7 +135,7 @@ var PaperGraph = (function () {
     }
   }
   // Scale the spread to fit inside the 2007 floor the slide draws (radius REACH).
-  var far = Math.max.apply(null, xy.map(function (p) { return Math.sqrt(p[0] * p[0] + p[1] * p[1]); }));
+  var far = Math.max.apply(null, xy.map(function (p) { return Math.sqrt(p[0] * p[0] + p[1] * p[1]); })) || 1;
   var pos = nodes.map(function (n, i) {
     return [xy[i][0] * REACH / far, xy[i][1] * REACH / far, (n.year - Y0) * PER_YEAR];
   });
