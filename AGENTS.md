@@ -314,7 +314,7 @@ widget, and don't edit the vendored extension.
 
 A post's talk version is `posts/<slug>/slides.qmd` with `format: revealjs`, published
 beside it as `…/<slug>/slides.html` and linked from the post's opening.
-`how-to-read-a-paper-in-the-age-of-ai` is the worked example. Four things are not
+`how-to-read-a-paper-in-the-age-of-ai` is the worked example. Five things are not
 obvious:
 
 - **The home listing leaves decks out** with `"!posts/*/slides.qmd"` in the root
@@ -323,9 +323,16 @@ obvious:
 - **`posts/_metadata.yml` reaches the deck.** Its `toc: true` inserts a contents slide,
   so a deck sets `toc: false`. Its kit.js include is wanted. A deck also sets
   `search: false` so the post stays the search hit.
-- **The tokens come from the theme list.** A deck has no light/dark pair, so it gets
-  the `--w-*` tokens by listing `../../theme/light.scss` and `../../widget-kit/chrome.scss`
-  in its revealjs `theme:`, and styles itself against those in a `slides.scss`.
+- **The tokens come from the theme list.** A deck has no light/dark pair, so it picks
+  one half: `[dark, ../../theme/dark.scss, ../../widget-kit/chrome.scss, slides.scss]`
+  (or `default` with `light.scss`). `dark.scss` also sets reveal's own `$body-bg`,
+  `$body-color` and `$link-color`, so the deck goes dark without naming a colour, and
+  `slides.scss` styles against the tokens. Re-run the dataviz validator against the
+  half you pick: a pair that separates on light can merge on dark.
+- **`#` headings stack slides vertically.** A level-1 heading makes a section slide,
+  and the slides under it become a vertical stack. Navigation stays linear, so
+  presenting is unaffected, but `Reveal.slide(i)` no longer counts slides. A browser
+  check should go to `Reveal.getIndices(Reveal.getSlides()[i])`.
 - **Keyboard and swipe belong to Reveal.** A presenter's clicker sends arrow keys, which
   `WKStage` also binds on a focused canvas. A deck's scene removes the canvas `tabindex`
   once built and puts `data-prevent-swipe` on its mount, so a drag orbits and the next

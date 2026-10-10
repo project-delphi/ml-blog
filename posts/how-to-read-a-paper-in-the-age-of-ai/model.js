@@ -8,8 +8,9 @@
  * under node.
  *
  * Two modes. `classic` is Keshav's three passes as the post's first table
- * gives them. `ai` is the post's six-step protocol. A time the post does not
- * give is "—", never an estimate.
+ * gives them, with his own Pass 3 time from the paper ("about four or five hours
+ * for beginners, and about an hour for an experienced reader"). `ai` is the
+ * post's six-step protocol. A time neither gives is "—", never an estimate.
  *
  * Layers count down from the top of the stack: 1 is what a skim reads, 4 is
  * what only a reconstruction reaches. `candidates` says what the scene does to
@@ -39,7 +40,7 @@ var PaperLayersModel = (function () {
       { pass: "2", name: "Pass 2 · figures and argument", lead: "you", second: null,
         time: "~1 h", layers: [2, 3], candidates: null },
       { pass: "3", name: "Pass 3 · virtually re-implement", lead: "you", second: null,
-        time: "—", layers: [4], candidates: null }
+        time: "4–5 h (~1 h expert)", layers: [4], candidates: null }
     ],
     // Post, "A protocol: the three passes, updated for AI", steps 1–6.
     ai: [
@@ -65,7 +66,19 @@ var PaperLayersModel = (function () {
   /** Who the readout names: the role line when there is one, else the lead. */
   function who(p) { return p.role || WHO[p.lead]; }
 
-  var api = { LAYERS: LAYERS, WHO: WHO, MODES: Object.keys(MODES), passes: passes, find: find, who: who };
+  // ---------------------------------------------------------- survey time
+  // The "scale and speed" slide is arithmetic on the post's own per-paper times:
+  // a first pass by hand takes 5–10 min (Keshav), AI triage ~2 min (protocol,
+  // Pass 0), and the triage workflow picks five papers to read properly, each a
+  // Pass 2 of ~1 h. Hours, as [low, high] where the post gives a range.
+  var SURVEY = { handMin: [5, 10], aiMin: 2, deep: 5, deepH: 1, fields: [30, 100] };
+  function budget(n) {
+    return { n: n, hand: [n * SURVEY.handMin[0] / 60, n * SURVEY.handMin[1] / 60], ai: n * SURVEY.aiMin / 60,
+      deep: SURVEY.deep * SURVEY.deepH };
+  }
+
+  var api = { LAYERS: LAYERS, WHO: WHO, MODES: Object.keys(MODES), passes: passes, find: find, who: who,
+    SURVEY: SURVEY, budget: budget };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   return api;
 })();

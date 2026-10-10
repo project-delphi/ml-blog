@@ -20,6 +20,14 @@ for (const mode of M.MODES) {
   }
 }
 
+console.log("\nsurvey time (hours): first pass by hand vs AI triage, then the deep reads");
+const h = (x) => (Math.round(x * 10) / 10).toString();
+for (const n of M.SURVEY.fields) {
+  const b = M.budget(n);
+  console.log(`  ${String(n).padStart(3)} candidates: by hand ${h(b.hand[0])}–${h(b.hand[1])} h, with AI triage ${h(b.ai)} h; ` +
+    `then ${M.SURVEY.deep} papers × Pass 2 = ${h(b.deep)} h either way`);
+}
+
 const G = require("../graph.js");
 const short = (i) => {
   const n = G.nodes[i];

@@ -9,7 +9,8 @@
  * the deep pass reads the bottom of one.
  *
  * The citation graph (graphScene, below) draws graph.js's Semantic Scholar
- * snapshot; its own comment says how.
+ * snapshot; its own comment says how. The survey chart (surveyChart) is plain SVG,
+ * not three.js, and steps the same way.
  *
  * The pass rows come from model.js. Reveal fragments drive every scene: each 3D
  * slide carries `.fragment[data-pass]` steps, and the scene shows the pass of
@@ -238,7 +239,9 @@
   // graph.js. Height is publication year, so a citation should point down; a
   // faint floor at 2007 marks Keshav's year, and anything under it predates
   // the paper it supposedly cites. Colour is Semantic Scholar's own field tag.
-  var FIELD = { seed: "c1", cs: "c5", med: "c3", other: "muted" };
+  // On the dark ground: Keshav in ink (also labelled), and three field colours
+  // that the dataviz validator separates for normal and colour-deficient vision.
+  var FIELD = { seed: "ink", cs: "c5", med: "c3", other: "c6" };
 
   function graphScene(stage) {
     var G = PaperGraph, T = stage.THREE, n = G.nodes.length;
@@ -279,7 +282,9 @@
       return [a[0] + d[0] * k, a[1] + d[1] * k, a[2] + d[2] * k];
     }
     var up = G.upLinks;
-    var down = stage.line("muted", { pairs: true, opacity: 0.55 });
+    // Dim on purpose: lightness, not hue, is what keeps the up arrows apart from
+    // these for every kind of colour vision.
+    var down = stage.line("rule", { pairs: true });
     down.set([].concat.apply([], G.citation.filter(function (e) { return up.indexOf(e) < 0; })
       .map(function (e) { return [P[e[0]], P[e[1]]]; })));
     var arrows = up.map(function (e) {
@@ -310,7 +315,7 @@
 
     // Labels: Keshav always, the most-cited when ranking, any paper under the pointer.
     function trim(t, k) { return t.length > k ? t.slice(0, k - 1).trim() + "…" : t; }
-    stage.label("Keshav 2007", "c1", { dy: -18 }).set(P[0]);
+    stage.label("Keshav 2007", "ink", { dy: -18 }).set(P[0]);
     var ranked = G.topCited.map(function (i) {
       // Counts only: the most-cited cluster near 2007, where titles would collide.
       // Hovering a paper still gives its title.
@@ -364,6 +369,68 @@
     };
   }
 
+  // ------------------------------------------------------- the survey chart
+  // Hours to survey a field and then read five papers properly, by hand and
+  // with AI triage: arithmetic on the post's per-paper times (model.js,
+  // budget). Colour is whose time it is, as on the layer slides: you = c1,
+  // AI-led = c3. The five deep reads come first, so the part AI does not
+  // shorten sits on the axis and the part it does grows to the right. A range
+  // the post gives (5–10 min a paper) is solid to its low end and faded to its
+  // high end. One axis, fixed across steps, so a bigger field visibly costs more.
+  function surveyChart(root) {
+    // X1 leaves room past the axis for the longest end label ("+ 8.3–16.7 h").
+    var W = 640, H = 250, X0 = 140, X1 = 505, MAXH = 22;
+    var x = WK.lin([0, MAXH], [X0, X1]);
+    var svg = WK.svg(W, H, { class: "pl-chart-svg", "aria-label":
+      "Hours to survey a field and read five papers in depth, by hand and with AI triage." });
+    WK.ticks(0, MAXH, 4).forEach(function (t) {
+      svg.appendChild(WK.h("line", { x1: x(t), x2: x(t), y1: 18, y2: 200, stroke: "rule" }));
+      svg.appendChild(WK.h("text", { x: x(t), y: 222, "text-anchor": "middle", fill: "muted", "font-size": 15,
+        text: t + " h" }));
+    });
+    var rows = [
+      { y: 40, label: "By hand", sub: "5–10 min a paper" },
+      { y: 125, label: "With AI triage", sub: "~2 min a paper" }
+    ];
+    var BAR = 46, GAP = 2;
+    rows.forEach(function (r) {
+      svg.appendChild(WK.h("text", { x: 0, y: r.y + 20, fill: "ink", "font-size": 17, "font-weight": 700, text: r.label }));
+      svg.appendChild(WK.h("text", { x: 0, y: r.y + 40, fill: "muted", "font-size": 13, text: r.sub }));
+      r.deep = WK.h("rect", { y: r.y, height: BAR, rx: 3, fill: "c1" });
+      r.solid = WK.h("rect", { y: r.y, height: BAR, rx: 3, fill: r === rows[0] ? "c1" : "c3" });
+      r.faded = WK.h("rect", { y: r.y, height: BAR, rx: 3, fill: "c1", "fill-opacity": 0.38 });
+      r.inDeep = WK.h("text", { y: r.y + 28, "font-size": 13, "font-weight": 700, fill: "surface" });
+      r.end = WK.h("text", { y: r.y + 29, "font-size": 16, "font-weight": 700, fill: "ink" });
+      r.inSurvey = WK.h("text", { y: r.y + 28, "font-size": 13, "font-weight": 700, fill: "surface",
+        text: r === rows[0] ? "first passes" : "triage" });
+      [r.deep, r.solid, r.faded, r.inDeep, r.end, r.inSurvey].forEach(function (n) { svg.appendChild(n); });
+    });
+    root.appendChild(svg);
+
+    function h(v) { return String(Math.round(v * 10) / 10); }
+    function span(node, a, b) {
+      node.setAttribute("x", x(a));
+      node.setAttribute("width", Math.max(0, x(b) - x(a)));
+      node.style.display = b > a ? "" : "none";
+    }
+    return function (n) {
+      var b = M.budget(n || 0), deep = b.deep;
+      rows.forEach(function (r, i) {
+        span(r.deep, 0, deep);
+        r.inDeep.setAttribute("x", x(0) + 7);
+        r.inDeep.textContent = "5 deep reads";
+        var lo = i === 0 ? b.hand[0] : b.ai, hi = i === 0 ? b.hand[1] : b.ai;
+        var start = deep + GAP / (x(1) - x(0));
+        span(r.solid, start, start + lo);
+        span(r.faded, start + lo, start + hi);
+        // Name the survey segment inside it when it is wide enough to hold the words.
+        r.inSurvey.setAttribute("x", x(start) + 7);
+        r.inSurvey.style.display = x(start + lo) - x(start) > (i === 0 ? 92 : 52) ? "" : "none";
+        r.end.setAttribute("x", x(start + hi) + 8);
+        r.end.textContent = n ? "+ " + (lo === hi ? h(lo) : h(lo) + "–" + h(hi)) + " h" : deep + " h";
+      });
+    };
+  }
   // --------------------------------------------------------------- mount
   // A scene on a slide: the stage, a readout of a name and two tiles under it,
   // and a set(pass) that the fragment sync below calls. `describe(pass)` gives
@@ -465,4 +532,28 @@
       }
     });
   }
+
+  // The survey chart: an SVG, not a stage, on the same fragment sync.
+  WK.mount("survey-chart", function (root) {
+    var name = WK.el("div", { class: "pl-name" });
+    var tiles = [WK.stat({ label: "first passes, by hand", value: "—" }),
+      WK.stat({ label: "AI triage", value: "—" }), WK.stat({ label: "deep reads, either way", value: "—" })];
+    var draw = surveyChart(root);
+    root.appendChild(WK.el("div", { class: "pl-readout" }, name,
+      WK.el("div", { class: "widget-stats" }, tiles[0].root, tiles[1].root, tiles[2].root)));
+    var entry = { section: root.closest("section"), pass: undefined };
+    entry.set = function (pass) {
+      if (pass === entry.pass) return;
+      entry.pass = pass;
+      var n = pass === null ? 0 : Number(pass), b = M.budget(n);
+      function h(v) { return String(Math.round(v * 10) / 10); }
+      draw(n);
+      name.textContent = n ? n + " candidates, then five read properly" : "Five papers read properly";
+      tiles[0].set(n ? h(b.hand[0]) + "–" + h(b.hand[1]) + " h" : "—");
+      tiles[1].set(n ? h(b.ai) + " h" : "—");
+      tiles[2].set(h(b.deep) + " h");
+    };
+    mounted.push(entry);
+    sync();
+  });
 })();
