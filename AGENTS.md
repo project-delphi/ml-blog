@@ -310,6 +310,61 @@ A different mechanism handles browser-run Python exercises: the vendored
 `format: live-html`, and a `pyodide:` package list. Don't reinvent it as a hand-rolled
 widget, and don't edit the vendored extension.
 
+### Slide decks
+
+A post's talk version is `posts/<slug>/slides.qmd` with `format: revealjs`, published
+beside it as `…/<slug>/slides.html` and linked from the post's opening.
+`how-to-read-a-paper-in-the-age-of-ai` is the worked example. Five things are not
+obvious:
+
+- **The home listing takes only post entry files**: the root `index.qmd` lists
+  `posts/*/index.qmd` and `posts/*/index.ipynb`, not the whole `posts` folder. Listing
+  the folder would put a deck, or any other page in a post's folder, on the home page as
+  its own post, in the feed and in the category facets.
+- **`posts/_metadata.yml` reaches the deck.** Its `toc: true` inserts a contents slide,
+  so a deck sets `toc: false`. Its kit.js include is wanted. A deck also sets
+  `search: false` so the post stays the search hit.
+- **The tokens come from the theme list.** A deck has no light/dark pair, so it picks
+  one half: `[dark, ../../theme/dark.scss, ../../widget-kit/chrome.scss, slides.scss]`
+  (or `default` with `light.scss`). `dark.scss` also sets reveal's own `$body-bg`,
+  `$body-color` and `$link-color`, so the deck goes dark without naming a colour, and
+  `slides.scss` styles against the tokens. Re-run the dataviz validator against the
+  half you pick: a pair that separates on light can merge on dark.
+- **`#` headings stack slides vertically.** A level-1 heading makes a section slide,
+  and the slides under it become a vertical stack. Navigation stays linear, so
+  presenting is unaffected, but `Reveal.slide(i)` no longer counts slides. A browser
+  check should go to `Reveal.getIndices(Reveal.getSlides()[i])`.
+- **Keyboard and swipe belong to Reveal.** A presenter's clicker sends arrow keys, which
+  `WKStage` also binds on a focused canvas. A deck's scene removes the canvas `tabindex`
+  once built and puts `data-prevent-swipe` on its mount, so a drag orbits and the next
+  click still advances. Fragments, not buttons, step a scene: listen for Reveal's
+  `fragmentshown`/`fragmenthidden`/`slidechanged` on `document` and read the slide's last
+  visible `.fragment[data-pass]`.
+
+`check_posts.py`, `render-post`, `freeze_realign.py` and `docs_query.py post` all look
+only at `index.qmd`, so they don't check a deck. Render it with
+`quarto render posts/<slug>/slides.qmd` while iterating, and step every slide in a
+browser before shipping. A scene drawn from outside data reads a committed snapshot
+written by a fetch script under `src/` (`graph-data.js`, from
+`src/fetch_citation_graph.js`), and the slide quotes the snapshot's date. Re-fetching
+changes the numbers, so re-run `src/check_model.js` afterwards and update any slide text
+that quotes them.
+
+The first deck added `docs/site_libs/revealjs/` and three files under
+`docs/site_libs/quarto-html/`. Later decks should change nothing under `site_libs/`.
+reveal.js keeps its runtime under `revealjs/dist/`. The Python packaging rule in
+`.gitignore` used to be an unanchored `dist/`, which swallowed it, and nothing warned
+locally, because your own render had written the files. The rule is now `/dist/`.
+`.gitignore` also ignores the copy every render writes to `_freeze/site_libs/revealjs/`,
+since nothing frozen depends on it.
+
+**A stale Quarto Sass cache changes generated file names.** Quarto caches Sass
+compiles per user (`~/Library/Caches/quarto/sass` on macOS), and CI compiles from
+scratch. A cached compile left the deck's syntax-highlighting variables out, so this
+machine named the stylesheet differently from CI, and CI's render reported the committed
+copy as deleted. If CI's `docs-deleted` flags a `site_libs` file that your own render
+keeps producing, move that cache aside, re-render, and commit what comes out.
+
 ### Three things `.gitignore` swallows
 
 - **`data/` is ignored everywhere.** A post reading a data file at render time needs
@@ -358,9 +413,11 @@ or `theme/dark.scss`, plus `widget-kit/chrome.scss`. Both halves define the same
 series c1–c6) under different values, and the mermaid palette. Anything styled with
 `var(--w-*)` follows the reader's toggle; anything with a hex value does not.
 
-- **Never set `theme:` in a post.** Quarto 1.6 cannot merge a document-level `theme:`
-  with the project's light/dark pair: the render dies with `Path must be a string` on
-  that post, after `docs/` is deleted. Per-post styling goes in a plain CSS file via
+- **Never set `theme:` in a post's `html` format.** Quarto 1.6 cannot merge a
+  document-level `theme:` with the project's light/dark pair: the render dies with
+  `Path must be a string` on that post, after `docs/` is deleted. A slide deck's
+  `revealjs` format is the one exception, since the pair doesn't apply to it (see
+  [Slide decks](#slide-decks)). Per-post styling goes in a plain CSS file via
   `css: post.css`, written against the tokens. The eleven posts that carried a `theme:`
   from before the pair existed were converted with `make freeze-realign` (their
   `theme.scss` compiled to `post.css` with Quarto's bundled dart-sass,
