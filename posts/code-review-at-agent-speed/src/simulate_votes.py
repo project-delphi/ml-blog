@@ -1,7 +1,8 @@
 r"""Simulate a k-of-n verifier vote on candidate findings, and print every figure
-section "Vote thresholds" quotes.
+section "Vote thresholds" quotes, apart from the precision and accuracy columns
+of its verifier table, which copy Du et al.'s Table 2.
 
-The inputs are measured, not assumed. Du et al. (ICSE 2026 SEIP,
+The inputs are measured, not assumed. Du et al. (2026,
 arXiv:2601.18844) took 433 alarms from Tencent's in-house static analyzer,
 105 of them real bugs and 328 false positives, and asked four LLMs to judge
 each one. Table 2 gives every model's recall (its true positive rate) and its
@@ -75,7 +76,9 @@ def simulate(panel, rho, rng):
         false = votes(rng, fpr, N_FALSE, rho).sum(axis=1)
         for k in range(1, n + 1):
             tp, fp = (real >= k).sum(), (false >= k).sum()
-            out[run, k - 1] = tp / max(tp + fp, 1), tp / N_REAL, tp, fp
+            # A set that posts nothing has no precision, not a precision of 0.
+            prec = tp / (tp + fp) if tp + fp else np.nan
+            out[run, k - 1] = prec, tp / N_REAL, tp, fp
     return out
 
 
@@ -121,8 +124,8 @@ def main():
             print(f"         {outcomes(t * N_REAL, f * N_FALSE)}")
         for rho in RHOS:
             sims = simulate(panel, rho, rng)
-            mean = sims.mean(axis=0)
-            lo, hi = np.percentile(sims, [5, 95], axis=0)
+            mean = np.nanmean(sims, axis=0)
+            lo, hi = np.nanpercentile(sims, [5, 95], axis=0)
             fooled = votes(rng, fpr, 200_000, rho).all(axis=1).mean()
             print(
                 f"  rho={rho}  (non-bugs every verifier calls real: {100 * fooled:.1f}%)"
@@ -140,6 +143,8 @@ def main():
                     et, ef = exact(tpr, k), exact(fpr, k)
                     ep = et * N_REAL / (et * N_REAL + ef * N_FALSE)
                     assert abs(r - et) < 0.01, (k, r, et)
+                    # The mean of a ratio sits a little off the ratio of means.
+                    assert abs(p - ep) < 0.02, (k, p, ep)
                     line += f"   exact: precision {pct(ep)} recall {pct(et)}"
                 print(line)
 

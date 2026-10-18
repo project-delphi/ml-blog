@@ -315,7 +315,7 @@ Two of the study's setups serve as two grades of verifier:
 | | Qwen3-Coder | 79% | 2% | 93% | 94% |
 | | DeepSeek-R1 | 86% | 5% | 84% | 93% |
 
-: Four LLMs judging 433 static-analysis alarms (Du et al., 2026, Table 2). Each figure is already the majority of three runs of one model. {#tbl-verifiers}
+: Four LLMs judging 433 static-analysis alarms (Du et al., 2026, Table 2). Each figure is already the majority of three runs of one model. Precision and accuracy are as the paper reports them; recomputed from the rounded recall and false positive rates, a few move by one or two points. {#tbl-verifiers}
 
 By accuracy, every prompt-only verifier (50–72%) does worse than a reviewer that drops every alarm (76%), yet each catches between 59% and 83% of the real bugs. By accuracy, the four agents look alike (93–94%); recall separates them, from 75% to 88%.
 
@@ -906,32 +906,34 @@ The billing directory adds its own checks, which apply on top of the root file t
 #!/usr/bin/env bash
 # PreToolUse hook on Bash: enforces the "Never" list in AGENTS.md.
 # Matches raw command text, so it also blocks an echo that merely
-# names a forbidden command. That is the safe failure.
+# names a forbidden command. Blocking too much is the safe failure,
+# so the hook also blocks when it cannot read its input.
 set -uo pipefail
-cmd=$(jq -r '.tool_input.command // ""')
 
-deny() {
-  jq -n --arg why "$1" '{hookSpecificOutput: {
-    hookEventName: "PreToolUse",
-    permissionDecision: "deny",
-    permissionDecisionReason: $why}}'
-  exit 0
-}
+deny() { echo "$1" >&2; exit 2; }  # exit 2 blocks the tool call
+
+command -v jq >/dev/null || deny "guard-commands.sh needs jq."
+cmd=$(jq -er '.tool_input.command') || deny "Unreadable hook input."
 
 case "$cmd" in
   *"pip install"*)
     deny "Use 'uv add <pkg>', not pip (AGENTS.md, Never)." ;;
   *"alembic downgrade"*)
     deny "CI checks downgrades; don't run them (AGENTS.md)." ;;
-  *"git push"*"--force"* | *"git push"*" -f"*)
-    deny "No force-pushes (AGENTS.md, Never)." ;;
-  *"git push"*" main"* | *"git push"*":main"*)
-    deny "Open a PR; never push to main (AGENTS.md)." ;;
 esac
+
+if [[ $cmd == *"git push"* ]]; then
+  force='(--force|[[:space:]]-[a-z]*f[a-z]*([[:space:]]|$)|[[:space:]:]\+)'
+  main='(^|[[:space:]:/])main([[:space:];&|)]|$)'
+  [[ $cmd =~ $force ]] && deny "No force-pushes (AGENTS.md, Never)."
+  [[ $cmd =~ $main ]] && deny "Open a PR; never push to main (AGENTS.md)."
+  [[ $(git branch --show-current 2>/dev/null) == main ]] &&
+    deny "On main: push from a feature branch (AGENTS.md)."
+fi
 exit 0
 ```
 
-Fed nine sample commands, it denies `pip install requests`, `uv run alembic downgrade -1`, `git push origin main`, `git push origin HEAD:main`, `git push -f origin x` and `git push --force-with-lease origin feat/x`. It allows `uv add requests`, `git push origin feat/late-fees` and `uv run pytest tests/unit -q`.
+A `PreToolUse` hook that exits with code 2 blocks the call, and Claude sees the message on standard error. Fed 21 sample commands, from a feature branch and from `main`, it denies `pip install requests`, `uv run alembic downgrade -1`, `git push origin main`, `git push origin HEAD:refs/heads/main`, `git push origin +main`, `git push -uf origin feat/x`, `git push --force-with-lease origin feat/x`, and a bare `git push` while `main` is checked out. It allows `uv add requests`, `git push -u origin feat/late-fees`, `git push origin main-hotfix` and `uv run pytest tests/unit -q`. It also blocks when `jq` is missing or the hook's input does not parse.
 
 ### Pull request template and CODEOWNERS
 
@@ -951,7 +953,8 @@ Fed nine sample commands, it denies `pip install requests`, `uv run alembic down
 <!-- "Revert this PR", "turn off flag X", or the steps. -->
 
 ## Directed by
-<!-- Who prompted the agent. That person answers for this change. -->
+<!-- @handle of whoever prompted the agent. They answer for this
+     change, and the gate does not count their approval. -->
 ```
 
 `.github/CODEOWNERS` routes review requests to the right people. With **Require review from Code Owners** on, it also makes their approval mandatory for those paths:
@@ -1107,7 +1110,7 @@ jobs:
       group: risk-gate-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
         with:
@@ -1123,7 +1126,7 @@ Four choices in that workflow close gaps that are easy to miss:
 - **`--bare` with a schema.** `--bare` skips the repository's hooks, skills and instruction files, and the JSON schema limits the reply to a tier, a yes or no, and a reason. A diff that tries to talk the classifier down still cannot lower the path rules, which the gate applies without asking a model.
 - **The gate waits for the AI review.** Otherwise a low-tier PR could pass CI in five minutes and merge before a review that averages twenty minutes has posted. The managed service's check run cannot simply be made a required check: the service reviews pull requests, so it never reports on the merge queue's temporary branches, and GitHub fails a queued merge whose required check is not reported.
 
-Because the gate wants a review of the head commit, it fits a repository whose **Review runs** setting is **After every push**, the costly setting from @sec-ships. On **Once after PR creation**, a comment of `@claude review` after the last push gives the gate the review it waits for.
+Because the gate wants a review of the head commit, it fits a repository whose **Review runs** setting is **After every push**, the costly setting from @sec-ships. The gate waits up to 50 minutes for that review, then fails. Nothing re-runs it when a late review lands: the events that fire then, `check_run` and `issue_comment`, run workflows against the default branch, so their checks would not attach to the PR's head commit. Re-run the failed gate job by hand once the review is in (`gh run rerun <run-id> --failed`). On **Once after PR creation**, a comment of `@claude review` after the last push starts the review, and the same re-run picks it up.
 
 `scripts/risk_gate.py` does the counting. It is the version that passed the test cases:
 
@@ -1135,15 +1138,18 @@ Runs from the base branch, so a PR cannot edit the rules it is judged by.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 from fnmatch import fnmatch
 from pathlib import Path
+from urllib.parse import quote
 
 import yaml
 
 BAD_REVIEW = ("failed", "timed out", "declined")
+GOOD_CONCLUSIONS = ("success", "neutral")
 
 
 def gh(*args):
@@ -1159,6 +1165,13 @@ def touches(files, globs):
     return any(fnmatch(f, g) for f in files for g in globs)
 
 
+def directed_by(body):
+    """The @handle under the template's "Directed by" heading, if any."""
+    section = (body or "").partition("## Directed by")[2]
+    match = re.search(r"@([A-Za-z0-9-]+)", section.split("\n## ")[0])
+    return match.group(1) if match else None
+
+
 def required_approvals(cfg, tier, author, files, needs_human):
     need = cfg["approvals"][tier]
     if author not in cfg["trusted_authors"]:
@@ -1170,10 +1183,10 @@ def required_approvals(cfg, tier, author, files, needs_human):
     return need
 
 
-def human_approvals(reviews, author, head_sha):
+def human_approvals(reviews, skip, head_sha):
     latest = {}
     for r in reviews:  # the API lists reviews oldest first
-        if r["type"] == "Bot" or r["user"] == author:
+        if r["type"] == "Bot" or r["user"] in skip:
             continue
         if r["state"] in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
             latest[r["user"]] = r
@@ -1185,30 +1198,39 @@ def human_approvals(reviews, author, head_sha):
 
 
 def ai_review_state(checks, name):
-    runs = sorted((c for c in checks if c["name"] == name), key=lambda c: c["started"])
+    runs = [c for c in checks if c["name"] == name]
+    runs.sort(key=lambda c: c["started"] or "")  # a queued run has no start
     if not runs or runs[-1]["status"] != "completed":
         return "pending"
-    title = (runs[-1]["title"] or "").lower()
+    last = runs[-1]
+    title = (last["title"] or "").lower()
+    if last["conclusion"] not in GOOD_CONCLUSIONS:
+        return "failed"  # an Actions job that failed or was cancelled
     return "failed" if any(word in title for word in BAD_REVIEW) else "done"
 
 
 def main():
     repo, pr = os.environ["GITHUB_REPOSITORY"], os.environ["PR"]
     cfg = yaml.safe_load(Path(".github/risk-tiers.yml").read_text())
-    info = json.loads(gh("pr", "view", pr, "--json", "author,headRefOid,labels"))
+    info = json.loads(gh("pr", "view", pr, "--json", "author,body,headRefOid,labels"))
     head, author = info["headRefOid"], info["author"]["login"]
+    director = directed_by(info["body"])
+    if info["author"].get("is_bot") and not director:
+        sys.exit("An agent's PR must name a person under 'Directed by'.")
 
-    for _ in range(60):  # Code Review averages about 20 minutes
+    name = cfg["ai_review_check"]
+    for _ in range(100):  # Code Review averages about 20 minutes
         checks = jsonl(
             gh(
                 "api",
-                f"repos/{repo}/commits/{head}/check-runs",
+                "--paginate",
+                f"repos/{repo}/commits/{head}/check-runs?check_name={quote(name)}",
                 "--jq",
-                ".check_runs[] | {name, status, started: .started_at,"
-                " title: .output.title}",
+                ".check_runs[] | {name, status, conclusion,"
+                " started: .started_at, title: .output.title}",
             )
         )
-        state = ai_review_state(checks, cfg["ai_review_check"])
+        state = ai_review_state(checks, name)
         if state != "pending":
             break
         time.sleep(30)
@@ -1232,7 +1254,7 @@ def main():
     tiers = [t for t in ("high", "medium", "low") if f"risk:{t}" in labels]
     tier = tiers[0] if tiers else "high"  # no label: fail closed
     need = required_approvals(cfg, tier, author, files, "needs-human" in labels)
-    have = human_approvals(reviews, author, head)
+    have = human_approvals(reviews, {author, director} - {None}, head)
     print(f"tier={tier} need={need} have={len(have)} {sorted(have)}")
     sys.exit(0 if len(have) >= need else 1)
 
@@ -1250,12 +1272,12 @@ Each approval rule from the risk-tier layer maps to a line of the example:
 | Some paths always need a person | `always_human` and `two_person` in `risk-tiers.yml` |
 | Only trusted authors get the lighter paths | `trusted_authors`, `untrusted_minimum` |
 | An agent's approval never counts | reviews from accounts of type `Bot` are skipped |
-| The person directing the agent is on the hook | the author's own approval is skipped; the PR template names them |
+| The person directing the agent is on the hook | the PR template names them; their approval and the author's are skipped, and an agent's PR that names nobody fails |
 | An approval covers one commit | only approvals whose `commit_id` is the head commit count |
 
 : Where each approval rule from the source lands in the worked example. {#tbl-rules}
 
-`acme-invoices` is stricter than Anthropic in one place. Anthropic counts the person directing the agent as one of a PR's required reviewers; this gate never counts the author, so a medium PR needs someone else. That is the "start strict" end of the dial.
+`acme-invoices` is stricter than Anthropic in one place. Anthropic counts the person directing the agent as one of a PR's required reviewers; this gate never counts the author or the person named under **Directed by**, so a medium PR needs someone else. That is the "start strict" end of the dial. The name comes from the PR body, which the agent writes, so the rule holds only while the agent names the right person.
 
 ### CI and security workflows
 
@@ -1514,7 +1536,7 @@ Overnight, Claude adds a unique constraint on `(invoice_id, period)` and an inse
 
 **Layer 3, security review.** The new endpoint loads the invoice with `session.get(Invoice, invoice_id)` and never checks its tenant, so any signed-in customer could read another business's fees by changing the id in the URL. The AI review missed it; the security review, reading the same diff for a different class of failure, did not. The fix moves the query to `TenantSession`, and the thread is resolved.
 
-**Layer 4, CI.** The migration's downgrade drops the `late_fees` table but leaves a new `invoices.late_fee_cents` column behind, so the second `upgrade` fails with "column already exists". Claude fixes the downgrade.
+**Layer 4, CI.** The migration gives `late_fees` a `status` column of a new Postgres enum type. Its downgrade drops the table but not the type, so the second `upgrade` fails with "type already exists". Claude fixes the downgrade.
 
 **Layer 5, approval.** The classifier returns:
 
@@ -1524,7 +1546,7 @@ Overnight, Claude adds a unique constraint on `(invoice_id, period)` and an inse
 
 The diff touches `src/acme/billing/**`, a two-person path, so the gate needs two approvals that are neither Bo's nor a bot's. Chen reads the evidence and approves. Dee, a billing owner, asks the one question no check can answer: do the customer contracts allow late fees, and do they require notice? The product lead answers that they apply to invoices issued after 1 November, with 14 days' notice. Dee approves on the condition that customers stay behind the flag until then.
 
-**Layer 6, merge queue.** An earlier PR in the queue renamed `Invoice.due_on` to `Invoice.due_date`. Both PRs passed on their own; together, `mypy` fails on the late-fee code. The queue removes the PR, and Claude rebases and fixes the name. The rebase is a new head commit, so the earlier approvals stop counting, and Chen and Dee approve again after reading the rebase diff.
+**Layer 6, merge queue.** An earlier PR in the queue renamed `Invoice.due_on` to `Invoice.due_date`. Both PRs passed on their own; together, `mypy` fails on the late-fee code. The queue removes the PR, and Claude merges `main` into the branch and fixes the name. A rebase would need a force-push, which the hook blocks. The merge is a new head commit, so the earlier approvals stop counting, and Chen and Dee approve again after reading the merge diff.
 
 **Layer 7, detection.** The flag moves to `internal`. Two days later, a finance colleague at Acme notices a fee on a staff tenant's invoice that was half paid: the fee was charged on the invoice total, not the remaining balance. The flag never left `internal`, so no customer saw it. Claude fixes it forward, the case becomes `INC-0142` in the eval set, and the incident review asks which layer should have caught it. The AI review had the code in front of it but not the business rule, so the rule goes where the reviewer reads it, in the billing `REVIEW.md`:
 
@@ -1538,9 +1560,9 @@ The diff touches `src/acme/billing/**`, a two-person path, so the gate needs two
 | 1 Verification | float arithmetic on money | integer basis points |
 | 2 AI review | double charge when the nightly job retries | unique constraint, insert-or-ignore |
 | 3 Security review | fee endpoint reads any tenant's invoice | `TenantSession` |
-| 4 CI | migration does not downgrade cleanly | downgrade drops the new column |
+| 4 CI | migration does not downgrade cleanly | downgrade drops the enum type too |
 | 5 Approval | whether late fees are allowed at all | flag held until the contract terms apply |
-| 6 Merge queue | a field renamed by another PR | rebase, then fresh approvals |
+| 6 Merge queue | a field renamed by another PR | merge `main`, then fresh approvals |
 | 7 Detection | fee on the total, not the balance | fix forward, eval case, `REVIEW.md` rule |
 
 : What each layer caught in the late-fee change. {#tbl-walkthrough}
