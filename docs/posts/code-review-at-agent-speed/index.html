@@ -312,7 +312,7 @@ window.Quarto = {
   <li><a href="#pull-request-template-and-codeowners" id="toc-pull-request-template-and-codeowners" class="nav-link" data-scroll-target="#pull-request-template-and-codeowners"><span class="header-section-number">9.4</span> Pull request template and CODEOWNERS</a></li>
   <li><a href="#risk-tiers-and-the-approval-gate" id="toc-risk-tiers-and-the-approval-gate" class="nav-link" data-scroll-target="#risk-tiers-and-the-approval-gate"><span class="header-section-number">9.5</span> Risk tiers and the approval gate</a></li>
   <li><a href="#ci-and-security-workflows" id="toc-ci-and-security-workflows" class="nav-link" data-scroll-target="#ci-and-security-workflows"><span class="header-section-number">9.6</span> CI and security workflows</a></li>
-  <li><a href="#branch-protection" id="toc-branch-protection" class="nav-link" data-scroll-target="#branch-protection"><span class="header-section-number">9.7</span> Branch protection</a></li>
+  <li><a href="#sec-protection" id="toc-sec-protection" class="nav-link" data-scroll-target="#sec-protection"><span class="header-section-number">9.7</span> Branch protection</a></li>
   <li><a href="#flags-release-and-rollback" id="toc-flags-release-and-rollback" class="nav-link" data-scroll-target="#flags-release-and-rollback"><span class="header-section-number">9.8</span> Flags, release and rollback</a></li>
   <li><a href="#incident-eval-set" id="toc-incident-eval-set" class="nav-link" data-scroll-target="#incident-eval-set"><span class="header-section-number">9.9</span> Incident eval set</a></li>
   </ul></li>
@@ -1101,7 +1101,7 @@ Table&nbsp;6: What each rule does with Du et al.’s 433 candidates, 105 real bu
 </div>
 <ul>
 <li><strong>The threshold sets the trade.</strong> Each extra vote required raises precision and lowers recall. For the agents at <span class="math inline">\(\rho = 0.5\)</span>, one vote of four lets 2 of the 105 real bugs merge and sends authors 38 false alarms; three of four lets 20 merge and sends 2.</li>
-<li><strong>A vote improves on good verifiers, not weak ones.</strong> At <span class="math inline">\(\rho = 0\)</span>, a two-of-four vote of the agents lets 2 bugs merge and posts 2 false alarms, fewer of both than any agent alone; Claude Opus 4 alone lets 13 merge and posts 20. No threshold does that for the prompt-only verifiers. Against Claude Opus 4 alone, every vote buys fewer missed bugs with more false alarms, or the reverse.</li>
+<li><strong>A vote beats its best members only when they are good.</strong> At <span class="math inline">\(\rho = 0\)</span>, a two-of-four vote of the agents lets 2 bugs merge and posts 2 false alarms, fewer of both than any agent alone; Claude Opus 4 alone lets 13 merge and posts 20. Prompt-only votes beat GPT-4o and Qwen3-Coder, the two prompt-only verifiers with the lowest recall and precision, on both counts at some thresholds. No threshold beats Claude Opus 4 or DeepSeek-R1 alone: against either, every vote buys fewer missed bugs with more false alarms, or the reverse.</li>
 <li><strong>Overlapping mistakes shrink the gain.</strong> At <span class="math inline">\(\rho = 0.5\)</span> the agents’ two-of-four vote lets 9 bugs merge and posts 9 false alarms. That still beats Claude Opus 4 alone on both counts. Against GPT-4o alone, which lets 26 merge and posts 7, it trades 2 more false alarms for 17 fewer missed bugs. The prompt-only majority lets 37 bugs merge to Claude Opus 4’s 27, and cuts false alarms only from 92 to 79.</li>
 <li><strong>Accuracy rewards the cautious error.</strong> Among the prompt-only rules in <a href="#tbl-vote-counts" class="quarto-xref">Table&nbsp;6</a>, four of four has the highest accuracy, 78%, and lets 64 of the 105 bugs merge. Claude Opus 4 alone scores 72% and lets 27 merge.</li>
 <li><strong>One industry bar for false alarms.</strong> Google lets an analyzer that comments during code review show at most 10% <em>effective false positives</em>, findings the developer takes no action on, and disables any analyzer above that. A check that stops the build must show none (Sadowski et al., 2018). By that bar no prompt-only rule qualifies at either <span class="math inline">\(\rho\)</span>, and the agents qualify from two votes of four.</li>
@@ -1634,8 +1634,9 @@ REVIEW.md needs a protected default branch
 <h3 data-number="8.4" class="anchored" data-anchor-id="hooks-for-the-prohibitions"><span class="header-section-number">8.4</span> Hooks for the prohibitions</h3>
 <p>A <code>PreToolUse</code> hook runs before Claude uses a tool and can deny the call. A hook on the <code>Bash</code> tool can therefore enforce the “never” list in <code>AGENTS.md</code>, whatever the model decides.</p>
 <ul>
-<li>The hook receives the tool call as JSON on standard input, and denies it by printing a <code>permissionDecision</code> of <code>deny</code> with a reason, which Claude sees.</li>
+<li>The hook receives the tool call as JSON on standard input. It denies the call either by printing a <code>permissionDecision</code> of <code>deny</code> with a reason, or by exiting with code 2 and a reason on standard error. Claude sees the reason either way.</li>
 <li>Matching on raw command text is crude. It also blocks an <code>echo</code> or a heredoc that merely contains a forbidden command. This blog’s repository has the same limitation in its own hooks, and blocking too much is the safe way for a guard to fail.</li>
+<li>It can also be talked around. A command routed through a script, an alias or a variable gets past it, so a hook stops the usual forms of a forbidden command, not a determined one. Branch protection (<a href="#sec-protection" class="quarto-xref">Section&nbsp;9.7</a>) is what stops a push to <code>main</code> for certain.</li>
 <li>Hooks cover agent sessions only. A person at a terminal is not stopped, so the same rules still belong in branch protection and CI.</li>
 </ul>
 </section>
@@ -1903,23 +1904,35 @@ Table&nbsp;11: How the two files divide the same concerns.
 <span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="bu">command</span> <span class="at">-v</span> jq <span class="op">&gt;</span>/dev/null <span class="kw">||</span> <span class="ex">deny</span> <span class="st">"guard-commands.sh needs jq."</span></span>
 <span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a><span class="va">cmd</span><span class="op">=</span><span class="va">$(</span><span class="ex">jq</span> <span class="at">-er</span> <span class="st">'.tool_input.command'</span><span class="va">)</span> <span class="kw">||</span> <span class="ex">deny</span> <span class="st">"Unreadable hook input."</span></span>
 <span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a><span class="cf">case</span> <span class="st">"</span><span class="va">$cmd</span><span class="st">"</span> <span class="kw">in</span></span>
-<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a>  <span class="pp">*</span><span class="st">"pip install"</span><span class="pp">*</span><span class="kw">)</span></span>
-<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a>    <span class="ex">deny</span> <span class="st">"Use 'uv add &lt;pkg&gt;', not pip (AGENTS.md, Never)."</span> <span class="cf">;;</span></span>
-<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>  <span class="pp">*</span><span class="st">"alembic downgrade"</span><span class="pp">*</span><span class="kw">)</span></span>
-<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a>    <span class="ex">deny</span> <span class="st">"CI checks downgrades; don't run them (AGENTS.md)."</span> <span class="cf">;;</span></span>
-<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a><span class="cf">esac</span></span>
-<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="kw">[[</span> <span class="va">$cmd</span> <span class="ot">==</span> <span class="pp">*</span><span class="st">"git push"</span><span class="pp">*</span> <span class="kw">]];</span> <span class="cf">then</span></span>
-<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a>  <span class="va">force</span><span class="op">=</span><span class="st">'(--force|[[:space:]]-[a-z]*f[a-z]*([[:space:]]|$)|[[:space:]:]\+)'</span></span>
-<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a>  <span class="va">main</span><span class="op">=</span><span class="st">'(^|[[:space:]:/])main([[:space:];&amp;|)]|$)'</span></span>
-<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a>  <span class="kw">[[</span> <span class="va">$cmd</span> <span class="ot">=~</span> <span class="va">$force</span> <span class="kw">]]</span> <span class="kw">&amp;&amp;</span> <span class="ex">deny</span> <span class="st">"No force-pushes (AGENTS.md, Never)."</span></span>
-<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a>  <span class="kw">[[</span> <span class="va">$cmd</span> <span class="ot">=~</span> <span class="va">$main</span> <span class="kw">]]</span> <span class="kw">&amp;&amp;</span> <span class="ex">deny</span> <span class="st">"Open a PR; never push to main (AGENTS.md)."</span></span>
-<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a>  <span class="kw">[[</span> <span class="va">$(</span><span class="fu">git</span> branch <span class="at">--show-current</span> <span class="dv">2</span><span class="op">&gt;</span>/dev/null<span class="va">)</span> <span class="ot">==</span> main <span class="kw">]]</span> <span class="kw">&amp;&amp;</span></span>
-<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a>    <span class="ex">deny</span> <span class="st">"On main: push from a feature branch (AGENTS.md)."</span></span>
-<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a><span class="cf">fi</span></span>
-<span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a><span class="bu">exit</span> 0</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<p>A <code>PreToolUse</code> hook that exits with code 2 blocks the call, and Claude sees the message on standard error. Fed 21 sample commands, from a feature branch and from <code>main</code>, it denies <code>pip install requests</code>, <code>uv run alembic downgrade -1</code>, <code>git push origin main</code>, <code>git push origin HEAD:refs/heads/main</code>, <code>git push origin +main</code>, <code>git push -uf origin feat/x</code>, <code>git push --force-with-lease origin feat/x</code>, and a bare <code>git push</code> while <code>main</code> is checked out. It allows <code>uv add requests</code>, <code>git push -u origin feat/late-fees</code>, <code>git push origin main-hotfix</code> and <code>uv run pytest tests/unit -q</code>. It also blocks when <code>jq</code> is missing or the hook’s input does not parse.</p>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a><span class="va">flat</span><span class="op">=</span><span class="va">${cmd</span><span class="op">//</span><span class="ss">[</span><span class="dt">\"\'</span><span class="ss">]</span><span class="op">/</span> <span class="va">}</span>  <span class="co"># quotes become spaces, so 'main' reads as main</span></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a><span class="co"># True when the command contains $1 as a whole word, wherever it sits.</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a><span class="fu">word()</span> <span class="kw">{</span></span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a>  <span class="bu">local</span> <span class="va">re</span><span class="op">=</span><span class="st">"(^|[^[:alnum:]_-])</span><span class="va">$1</span><span class="st">([^[:alnum:]_-]|</span><span class="dt">\$</span><span class="st">)"</span></span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>  <span class="kw">[[</span> <span class="va">$flat</span> <span class="ot">=~</span> <span class="va">$re</span> <span class="kw">]]</span></span>
+<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span>
+<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="ex">word</span> <span class="st">'pip[0-9.]*'</span> <span class="kw">&amp;&amp;</span> <span class="ex">word</span> install<span class="kw">;</span> <span class="cf">then</span></span>
+<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a>  <span class="ex">deny</span> <span class="st">"Use 'uv add &lt;pkg&gt;', not pip (AGENTS.md, Never)."</span></span>
+<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a><span class="cf">fi</span></span>
+<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="ex">word</span> alembic <span class="kw">&amp;&amp;</span> <span class="ex">word</span> downgrade<span class="kw">;</span> <span class="cf">then</span></span>
+<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a>  <span class="ex">deny</span> <span class="st">"CI checks downgrades; don't run them (AGENTS.md)."</span></span>
+<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a><span class="cf">fi</span></span>
+<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a><span class="co"># git, any options before the subcommand (-C dir, -c key=value), then push.</span></span>
+<span id="cb8-29"><a href="#cb8-29" aria-hidden="true" tabindex="-1"></a><span class="co"># A commit message that mentions "push" does not count.</span></span>
+<span id="cb8-30"><a href="#cb8-30" aria-hidden="true" tabindex="-1"></a><span class="va">opts</span><span class="op">=</span><span class="st">'([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*'</span></span>
+<span id="cb8-31"><a href="#cb8-31" aria-hidden="true" tabindex="-1"></a><span class="va">push</span><span class="op">=</span><span class="st">"(^|[^[:alnum:]_-])git</span><span class="va">${opts}</span><span class="st">[[:space:]]+push([[:space:]]|</span><span class="dt">\$</span><span class="st">)"</span></span>
+<span id="cb8-32"><a href="#cb8-32" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="kw">[[</span> <span class="va">$flat</span> <span class="ot">=~</span> <span class="va">$push</span> <span class="kw">]];</span> <span class="cf">then</span></span>
+<span id="cb8-33"><a href="#cb8-33" aria-hidden="true" tabindex="-1"></a>  <span class="va">force</span><span class="op">=</span><span class="st">'(--force|[[:space:]]-[a-z]*f[a-z]*([[:space:]]|$)|[[:space:]:]\+)'</span></span>
+<span id="cb8-34"><a href="#cb8-34" aria-hidden="true" tabindex="-1"></a>  <span class="va">main</span><span class="op">=</span><span class="st">'(^|[[:space:]:/])main([[:space:];&amp;|)]|$)'</span></span>
+<span id="cb8-35"><a href="#cb8-35" aria-hidden="true" tabindex="-1"></a>  <span class="kw">[[</span> <span class="va">$flat</span> <span class="ot">=~</span> <span class="va">$force</span> <span class="kw">]]</span> <span class="kw">&amp;&amp;</span> <span class="ex">deny</span> <span class="st">"No force-pushes (AGENTS.md, Never)."</span></span>
+<span id="cb8-36"><a href="#cb8-36" aria-hidden="true" tabindex="-1"></a>  <span class="kw">[[</span> <span class="va">$flat</span> <span class="ot">=~</span> <span class="va">$main</span> <span class="kw">]]</span> <span class="kw">&amp;&amp;</span> <span class="ex">deny</span> <span class="st">"Open a PR; never push to main (AGENTS.md)."</span></span>
+<span id="cb8-37"><a href="#cb8-37" aria-hidden="true" tabindex="-1"></a>  <span class="kw">[[</span> <span class="va">$(</span><span class="fu">git</span> branch <span class="at">--show-current</span> <span class="dv">2</span><span class="op">&gt;</span>/dev/null<span class="va">)</span> <span class="ot">==</span> main <span class="kw">]]</span> <span class="kw">&amp;&amp;</span></span>
+<span id="cb8-38"><a href="#cb8-38" aria-hidden="true" tabindex="-1"></a>    <span class="ex">deny</span> <span class="st">"On main: push from a feature branch (AGENTS.md)."</span></span>
+<span id="cb8-39"><a href="#cb8-39" aria-hidden="true" tabindex="-1"></a><span class="cf">fi</span></span>
+<span id="cb8-40"><a href="#cb8-40" aria-hidden="true" tabindex="-1"></a><span class="bu">exit</span> 0</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>Fed 35 sample commands, from a feature branch and from <code>main</code>, it denies <code>pip3 install requests</code>, <code>python -m pip install requests</code>, <code>uv run alembic downgrade -1</code>, <code>git push origin main</code>, <code>git push origin 'main'</code>, <code>git -C . push origin main</code>, <code>git push origin HEAD:refs/heads/main</code>, <code>git push origin +main</code>, <code>git push -uf origin feat/x</code>, <code>git push --force-with-lease origin feat/x</code>, and a bare <code>git push</code> while <code>main</code> is checked out. It allows <code>uv add requests</code>, <code>git push -u origin feat/late-fees</code>, <code>git push origin main-hotfix</code>, <code>uv run pytest tests/unit -q</code>, and <code>git commit -m 'push the late-fee fix'</code> on either branch. It also blocks when <code>jq</code> is missing or the hook’s input does not parse.</p>
 </section>
 <section id="pull-request-template-and-codeowners" class="level3" data-number="9.4">
 <h3 data-number="9.4" class="anchored" data-anchor-id="pull-request-template-and-codeowners"><span class="header-section-number">9.4</span> Pull request template and CODEOWNERS</h3>
@@ -1943,6 +1956,7 @@ Table&nbsp;11: How the two files divide the same concerns.
 <pre class="text"><code># The files that set the bar, and the code that is expensive to get wrong.
 # No catch-all line: a `*` rule would put a person on every PR.
 /.github/                 @acme/platform
+/.claude/                 @acme/platform
 /scripts/risk_gate.py     @acme/platform
 /AGENTS.md                @acme/invoices-leads
 /CLAUDE.md                @acme/invoices-leads
@@ -1984,19 +1998,20 @@ No catch-all in CODEOWNERS
 <span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a><span class="fu">always_human</span><span class="kw">:</span><span class="co">           # at least one approval, whatever the tier</span></span>
 <span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">".github/**"</span></span>
-<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"scripts/risk_gate.py"</span></span>
-<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"migrations/**"</span></span>
-<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"src/acme/flags.py"</span></span>
-<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"AGENTS.md"</span></span>
-<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"CLAUDE.md"</span></span>
-<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"REVIEW.md"</span></span>
-<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"*/REVIEW.md"</span></span>
-<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a><span class="fu">two_person</span><span class="kw">:</span><span class="co">             # always two approvals</span></span>
-<span id="cb11-27"><a href="#cb11-27" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"src/acme/billing/**"</span></span>
-<span id="cb11-28"><a href="#cb11-28" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"src/acme/auth/**"</span></span>
-<span id="cb11-29"><a href="#cb11-29" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"deploy/**"</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<p>The files that set the bar — the tiers, the gate, the reviewer’s instructions, the workflows — are themselves always-human paths, so an agent cannot lower its own bar.</p>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">".claude/**"</span></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"scripts/risk_gate.py"</span></span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"migrations/**"</span></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"src/acme/flags.py"</span></span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"AGENTS.md"</span></span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"CLAUDE.md"</span></span>
+<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"REVIEW.md"</span></span>
+<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"*/REVIEW.md"</span></span>
+<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-27"><a href="#cb11-27" aria-hidden="true" tabindex="-1"></a><span class="fu">two_person</span><span class="kw">:</span><span class="co">             # always two approvals</span></span>
+<span id="cb11-28"><a href="#cb11-28" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"src/acme/billing/**"</span></span>
+<span id="cb11-29"><a href="#cb11-29" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"src/acme/auth/**"</span></span>
+<span id="cb11-30"><a href="#cb11-30" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="st">"deploy/**"</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>The files that set the bar — the tiers, the gate, the reviewer’s instructions, the hook, the workflows — are themselves always-human paths, so an agent cannot lower its own bar.</p>
 <p>The classifier’s instructions live in <code>.github/prompts/risk-tier.md</code>:</p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode markdown code-with-copy"><code class="sourceCode markdown"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>Classify the pull request diff on standard input into a risk tier.</span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a></span>
@@ -2095,7 +2110,7 @@ No catch-all in CODEOWNERS
 <li><strong>Both jobs check out the base branch.</strong> A <code>pull_request</code> workflow otherwise runs on the PR’s own copy of the repository, which would let a PR edit the tiers, the prompt or the gate script that judge it. The workflow file itself still comes from the PR, which is why <code>.github/</code> needs a code owner’s approval.</li>
 <li><strong>Labels are cleared first.</strong> If the classifier fails, the PR is left with no tier, and the gate treats no tier as high.</li>
 <li><strong><code>--bare</code> with a schema.</strong> <code>--bare</code> skips the repository’s hooks, skills and instruction files, and the JSON schema limits the reply to a tier, a yes or no, and a reason. A diff that tries to talk the classifier down still cannot lower the path rules, which the gate applies without asking a model.</li>
-<li><strong>The gate waits for the AI review.</strong> Otherwise a low-tier PR could pass CI in five minutes and merge before a review that averages twenty minutes has posted. The managed service’s check run cannot simply be made a required check: the service reviews pull requests, so it never reports on the merge queue’s temporary branches, and GitHub fails a queued merge whose required check is not reported.</li>
+<li><strong>The gate waits for the AI review.</strong> Otherwise a low-tier PR could pass CI in five minutes and merge before a review that averages twenty minutes has posted. The managed service’s check run cannot simply be made a required check: the service reviews pull requests, so it never reports on the merge queue’s temporary branches. The queue waits for an unreported required check until its status-check timeout, then removes the PR.</li>
 </ul>
 <p>Because the gate wants a review of the head commit, it fits a repository whose <strong>Review runs</strong> setting is <strong>After every push</strong>, the costly setting from <a href="#sec-ships" class="quarto-xref">Section&nbsp;7</a>. The gate waits up to 50 minutes for that review, then fails. Nothing re-runs it when a late review lands: the events that fire then, <code>check_run</code> and <code>issue_comment</code>, run workflows against the default branch, so their checks would not attach to the PR’s head commit. Re-run the failed gate job by hand once the review is in (<code>gh run rerun &lt;run-id&gt; --failed</code>). On <strong>Once after PR creation</strong>, a comment of <code>@claude review</code> after the last push starts the review, and the same re-run picks it up.</p>
 <p><code>scripts/risk_gate.py</code> does the counting. It is the version that passed the test cases:</p>
@@ -2135,100 +2150,108 @@ No catch-all in CODEOWNERS
 <span id="cb15-34"><a href="#cb15-34" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb15-35"><a href="#cb15-35" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> directed_by(body):</span>
 <span id="cb15-36"><a href="#cb15-36" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""The @handle under the template's "Directed by" heading, if any."""</span></span>
-<span id="cb15-37"><a href="#cb15-37" aria-hidden="true" tabindex="-1"></a>    section <span class="op">=</span> (body <span class="kw">or</span> <span class="st">""</span>).partition(<span class="st">"## Directed by"</span>)[<span class="dv">2</span>]</span>
-<span id="cb15-38"><a href="#cb15-38" aria-hidden="true" tabindex="-1"></a>    match <span class="op">=</span> re.search(<span class="vs">r"@([A-Za-z0-9-]+)"</span>, section.split(<span class="st">"</span><span class="ch">\n</span><span class="st">## "</span>)[<span class="dv">0</span>])</span>
-<span id="cb15-39"><a href="#cb15-39" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> match.group(<span class="dv">1</span>) <span class="cf">if</span> match <span class="cf">else</span> <span class="va">None</span></span>
-<span id="cb15-40"><a href="#cb15-40" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-37"><a href="#cb15-37" aria-hidden="true" tabindex="-1"></a>    section <span class="op">=</span> (body <span class="kw">or</span> <span class="st">""</span>).partition(<span class="st">"## Directed by"</span>)[<span class="dv">2</span>].split(<span class="st">"</span><span class="ch">\n</span><span class="st">## "</span>)[<span class="dv">0</span>]</span>
+<span id="cb15-38"><a href="#cb15-38" aria-hidden="true" tabindex="-1"></a>    section <span class="op">=</span> re.sub(<span class="vs">r"&lt;!--.*?--&gt;"</span>, <span class="st">""</span>, section, flags<span class="op">=</span>re.S)  <span class="co"># the placeholder</span></span>
+<span id="cb15-39"><a href="#cb15-39" aria-hidden="true" tabindex="-1"></a>    match <span class="op">=</span> re.search(<span class="vs">r"@([A-Za-z0-9-]+)"</span>, section)</span>
+<span id="cb15-40"><a href="#cb15-40" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> match.group(<span class="dv">1</span>) <span class="cf">if</span> match <span class="cf">else</span> <span class="va">None</span></span>
 <span id="cb15-41"><a href="#cb15-41" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-42"><a href="#cb15-42" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> required_approvals(cfg, tier, author, files, needs_human):</span>
-<span id="cb15-43"><a href="#cb15-43" aria-hidden="true" tabindex="-1"></a>    need <span class="op">=</span> cfg[<span class="st">"approvals"</span>][tier]</span>
-<span id="cb15-44"><a href="#cb15-44" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> author <span class="kw">not</span> <span class="kw">in</span> cfg[<span class="st">"trusted_authors"</span>]:</span>
-<span id="cb15-45"><a href="#cb15-45" aria-hidden="true" tabindex="-1"></a>        need <span class="op">=</span> <span class="bu">max</span>(need, cfg[<span class="st">"untrusted_minimum"</span>])</span>
-<span id="cb15-46"><a href="#cb15-46" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> needs_human <span class="kw">or</span> touches(files, cfg[<span class="st">"always_human"</span>]):</span>
-<span id="cb15-47"><a href="#cb15-47" aria-hidden="true" tabindex="-1"></a>        need <span class="op">=</span> <span class="bu">max</span>(need, <span class="dv">1</span>)</span>
-<span id="cb15-48"><a href="#cb15-48" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> touches(files, cfg[<span class="st">"two_person"</span>]):</span>
-<span id="cb15-49"><a href="#cb15-49" aria-hidden="true" tabindex="-1"></a>        need <span class="op">=</span> <span class="bu">max</span>(need, <span class="dv">2</span>)</span>
-<span id="cb15-50"><a href="#cb15-50" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> need</span>
-<span id="cb15-51"><a href="#cb15-51" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-42"><a href="#cb15-42" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-43"><a href="#cb15-43" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> required_approvals(cfg, tier, author, files, needs_human):</span>
+<span id="cb15-44"><a href="#cb15-44" aria-hidden="true" tabindex="-1"></a>    need <span class="op">=</span> cfg[<span class="st">"approvals"</span>][tier]</span>
+<span id="cb15-45"><a href="#cb15-45" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> author <span class="kw">not</span> <span class="kw">in</span> cfg[<span class="st">"trusted_authors"</span>]:</span>
+<span id="cb15-46"><a href="#cb15-46" aria-hidden="true" tabindex="-1"></a>        need <span class="op">=</span> <span class="bu">max</span>(need, cfg[<span class="st">"untrusted_minimum"</span>])</span>
+<span id="cb15-47"><a href="#cb15-47" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> needs_human <span class="kw">or</span> touches(files, cfg[<span class="st">"always_human"</span>]):</span>
+<span id="cb15-48"><a href="#cb15-48" aria-hidden="true" tabindex="-1"></a>        need <span class="op">=</span> <span class="bu">max</span>(need, <span class="dv">1</span>)</span>
+<span id="cb15-49"><a href="#cb15-49" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> touches(files, cfg[<span class="st">"two_person"</span>]):</span>
+<span id="cb15-50"><a href="#cb15-50" aria-hidden="true" tabindex="-1"></a>        need <span class="op">=</span> <span class="bu">max</span>(need, <span class="dv">2</span>)</span>
+<span id="cb15-51"><a href="#cb15-51" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> need</span>
 <span id="cb15-52"><a href="#cb15-52" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-53"><a href="#cb15-53" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> human_approvals(reviews, skip, head_sha):</span>
-<span id="cb15-54"><a href="#cb15-54" aria-hidden="true" tabindex="-1"></a>    latest <span class="op">=</span> {}</span>
-<span id="cb15-55"><a href="#cb15-55" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> r <span class="kw">in</span> reviews:  <span class="co"># the API lists reviews oldest first</span></span>
-<span id="cb15-56"><a href="#cb15-56" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> r[<span class="st">"type"</span>] <span class="op">==</span> <span class="st">"Bot"</span> <span class="kw">or</span> r[<span class="st">"user"</span>] <span class="kw">in</span> skip:</span>
-<span id="cb15-57"><a href="#cb15-57" aria-hidden="true" tabindex="-1"></a>            <span class="cf">continue</span></span>
-<span id="cb15-58"><a href="#cb15-58" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> r[<span class="st">"state"</span>] <span class="kw">in</span> (<span class="st">"APPROVED"</span>, <span class="st">"CHANGES_REQUESTED"</span>, <span class="st">"DISMISSED"</span>):</span>
-<span id="cb15-59"><a href="#cb15-59" aria-hidden="true" tabindex="-1"></a>            latest[r[<span class="st">"user"</span>]] <span class="op">=</span> r</span>
-<span id="cb15-60"><a href="#cb15-60" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> {</span>
-<span id="cb15-61"><a href="#cb15-61" aria-hidden="true" tabindex="-1"></a>        user</span>
-<span id="cb15-62"><a href="#cb15-62" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> user, r <span class="kw">in</span> latest.items()</span>
-<span id="cb15-63"><a href="#cb15-63" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> r[<span class="st">"state"</span>] <span class="op">==</span> <span class="st">"APPROVED"</span> <span class="kw">and</span> r[<span class="st">"commit"</span>] <span class="op">==</span> head_sha</span>
-<span id="cb15-64"><a href="#cb15-64" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb15-65"><a href="#cb15-65" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-53"><a href="#cb15-53" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-54"><a href="#cb15-54" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> human_approvals(reviews, skip, head_sha):</span>
+<span id="cb15-55"><a href="#cb15-55" aria-hidden="true" tabindex="-1"></a>    latest <span class="op">=</span> {}</span>
+<span id="cb15-56"><a href="#cb15-56" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> r <span class="kw">in</span> reviews:  <span class="co"># the API lists reviews oldest first</span></span>
+<span id="cb15-57"><a href="#cb15-57" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> r[<span class="st">"type"</span>] <span class="op">==</span> <span class="st">"Bot"</span> <span class="kw">or</span> r[<span class="st">"user"</span>] <span class="kw">in</span> skip:</span>
+<span id="cb15-58"><a href="#cb15-58" aria-hidden="true" tabindex="-1"></a>            <span class="cf">continue</span></span>
+<span id="cb15-59"><a href="#cb15-59" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> r[<span class="st">"state"</span>] <span class="kw">in</span> (<span class="st">"APPROVED"</span>, <span class="st">"CHANGES_REQUESTED"</span>, <span class="st">"DISMISSED"</span>):</span>
+<span id="cb15-60"><a href="#cb15-60" aria-hidden="true" tabindex="-1"></a>            latest[r[<span class="st">"user"</span>]] <span class="op">=</span> r</span>
+<span id="cb15-61"><a href="#cb15-61" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> {</span>
+<span id="cb15-62"><a href="#cb15-62" aria-hidden="true" tabindex="-1"></a>        user</span>
+<span id="cb15-63"><a href="#cb15-63" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> user, r <span class="kw">in</span> latest.items()</span>
+<span id="cb15-64"><a href="#cb15-64" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> r[<span class="st">"state"</span>] <span class="op">==</span> <span class="st">"APPROVED"</span> <span class="kw">and</span> r[<span class="st">"commit"</span>] <span class="op">==</span> head_sha</span>
+<span id="cb15-65"><a href="#cb15-65" aria-hidden="true" tabindex="-1"></a>    }</span>
 <span id="cb15-66"><a href="#cb15-66" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-67"><a href="#cb15-67" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> ai_review_state(checks, name):</span>
-<span id="cb15-68"><a href="#cb15-68" aria-hidden="true" tabindex="-1"></a>    runs <span class="op">=</span> [c <span class="cf">for</span> c <span class="kw">in</span> checks <span class="cf">if</span> c[<span class="st">"name"</span>] <span class="op">==</span> name]</span>
-<span id="cb15-69"><a href="#cb15-69" aria-hidden="true" tabindex="-1"></a>    runs.sort(key<span class="op">=</span><span class="kw">lambda</span> c: c[<span class="st">"started"</span>] <span class="kw">or</span> <span class="st">""</span>)  <span class="co"># a queued run has no start</span></span>
-<span id="cb15-70"><a href="#cb15-70" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">not</span> runs <span class="kw">or</span> runs[<span class="op">-</span><span class="dv">1</span>][<span class="st">"status"</span>] <span class="op">!=</span> <span class="st">"completed"</span>:</span>
-<span id="cb15-71"><a href="#cb15-71" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="st">"pending"</span></span>
-<span id="cb15-72"><a href="#cb15-72" aria-hidden="true" tabindex="-1"></a>    last <span class="op">=</span> runs[<span class="op">-</span><span class="dv">1</span>]</span>
-<span id="cb15-73"><a href="#cb15-73" aria-hidden="true" tabindex="-1"></a>    title <span class="op">=</span> (last[<span class="st">"title"</span>] <span class="kw">or</span> <span class="st">""</span>).lower()</span>
-<span id="cb15-74"><a href="#cb15-74" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> last[<span class="st">"conclusion"</span>] <span class="kw">not</span> <span class="kw">in</span> GOOD_CONCLUSIONS:</span>
-<span id="cb15-75"><a href="#cb15-75" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="st">"failed"</span>  <span class="co"># an Actions job that failed or was cancelled</span></span>
-<span id="cb15-76"><a href="#cb15-76" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="st">"failed"</span> <span class="cf">if</span> <span class="bu">any</span>(word <span class="kw">in</span> title <span class="cf">for</span> word <span class="kw">in</span> BAD_REVIEW) <span class="cf">else</span> <span class="st">"done"</span></span>
-<span id="cb15-77"><a href="#cb15-77" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-78"><a href="#cb15-78" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-79"><a href="#cb15-79" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> main():</span>
-<span id="cb15-80"><a href="#cb15-80" aria-hidden="true" tabindex="-1"></a>    repo, pr <span class="op">=</span> os.environ[<span class="st">"GITHUB_REPOSITORY"</span>], os.environ[<span class="st">"PR"</span>]</span>
-<span id="cb15-81"><a href="#cb15-81" aria-hidden="true" tabindex="-1"></a>    cfg <span class="op">=</span> yaml.safe_load(Path(<span class="st">".github/risk-tiers.yml"</span>).read_text())</span>
-<span id="cb15-82"><a href="#cb15-82" aria-hidden="true" tabindex="-1"></a>    info <span class="op">=</span> json.loads(gh(<span class="st">"pr"</span>, <span class="st">"view"</span>, pr, <span class="st">"--json"</span>, <span class="st">"author,body,headRefOid,labels"</span>))</span>
-<span id="cb15-83"><a href="#cb15-83" aria-hidden="true" tabindex="-1"></a>    head, author <span class="op">=</span> info[<span class="st">"headRefOid"</span>], info[<span class="st">"author"</span>][<span class="st">"login"</span>]</span>
-<span id="cb15-84"><a href="#cb15-84" aria-hidden="true" tabindex="-1"></a>    director <span class="op">=</span> directed_by(info[<span class="st">"body"</span>])</span>
-<span id="cb15-85"><a href="#cb15-85" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> info[<span class="st">"author"</span>].get(<span class="st">"is_bot"</span>) <span class="kw">and</span> <span class="kw">not</span> director:</span>
-<span id="cb15-86"><a href="#cb15-86" aria-hidden="true" tabindex="-1"></a>        sys.exit(<span class="st">"An agent's PR must name a person under 'Directed by'."</span>)</span>
-<span id="cb15-87"><a href="#cb15-87" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-88"><a href="#cb15-88" aria-hidden="true" tabindex="-1"></a>    name <span class="op">=</span> cfg[<span class="st">"ai_review_check"</span>]</span>
-<span id="cb15-89"><a href="#cb15-89" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> _ <span class="kw">in</span> <span class="bu">range</span>(<span class="dv">100</span>):  <span class="co"># Code Review averages about 20 minutes</span></span>
-<span id="cb15-90"><a href="#cb15-90" aria-hidden="true" tabindex="-1"></a>        checks <span class="op">=</span> jsonl(</span>
-<span id="cb15-91"><a href="#cb15-91" aria-hidden="true" tabindex="-1"></a>            gh(</span>
-<span id="cb15-92"><a href="#cb15-92" aria-hidden="true" tabindex="-1"></a>                <span class="st">"api"</span>,</span>
-<span id="cb15-93"><a href="#cb15-93" aria-hidden="true" tabindex="-1"></a>                <span class="st">"--paginate"</span>,</span>
-<span id="cb15-94"><a href="#cb15-94" aria-hidden="true" tabindex="-1"></a>                <span class="ss">f"repos/</span><span class="sc">{</span>repo<span class="sc">}</span><span class="ss">/commits/</span><span class="sc">{</span>head<span class="sc">}</span><span class="ss">/check-runs?check_name=</span><span class="sc">{</span>quote(name)<span class="sc">}</span><span class="ss">"</span>,</span>
-<span id="cb15-95"><a href="#cb15-95" aria-hidden="true" tabindex="-1"></a>                <span class="st">"--jq"</span>,</span>
-<span id="cb15-96"><a href="#cb15-96" aria-hidden="true" tabindex="-1"></a>                <span class="st">".check_runs[] | {name, status, conclusion,"</span></span>
-<span id="cb15-97"><a href="#cb15-97" aria-hidden="true" tabindex="-1"></a>                <span class="st">" started: .started_at, title: .output.title}"</span>,</span>
-<span id="cb15-98"><a href="#cb15-98" aria-hidden="true" tabindex="-1"></a>            )</span>
-<span id="cb15-99"><a href="#cb15-99" aria-hidden="true" tabindex="-1"></a>        )</span>
-<span id="cb15-100"><a href="#cb15-100" aria-hidden="true" tabindex="-1"></a>        state <span class="op">=</span> ai_review_state(checks, name)</span>
-<span id="cb15-101"><a href="#cb15-101" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> state <span class="op">!=</span> <span class="st">"pending"</span>:</span>
-<span id="cb15-102"><a href="#cb15-102" aria-hidden="true" tabindex="-1"></a>            <span class="cf">break</span></span>
-<span id="cb15-103"><a href="#cb15-103" aria-hidden="true" tabindex="-1"></a>        time.sleep(<span class="dv">30</span>)</span>
-<span id="cb15-104"><a href="#cb15-104" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> state <span class="op">!=</span> <span class="st">"done"</span>:</span>
-<span id="cb15-105"><a href="#cb15-105" aria-hidden="true" tabindex="-1"></a>        sys.exit(<span class="ss">f"No finished AI review on </span><span class="sc">{</span>head[:<span class="dv">7</span>]<span class="sc">}</span><span class="ss"> (</span><span class="sc">{</span>state<span class="sc">}</span><span class="ss">)."</span>)</span>
-<span id="cb15-106"><a href="#cb15-106" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-107"><a href="#cb15-107" aria-hidden="true" tabindex="-1"></a>    files <span class="op">=</span> gh(</span>
-<span id="cb15-108"><a href="#cb15-108" aria-hidden="true" tabindex="-1"></a>        <span class="st">"api"</span>, <span class="st">"--paginate"</span>, <span class="ss">f"repos/</span><span class="sc">{</span>repo<span class="sc">}</span><span class="ss">/pulls/</span><span class="sc">{</span>pr<span class="sc">}</span><span class="ss">/files"</span>, <span class="st">"--jq"</span>, <span class="st">".[].filename"</span></span>
-<span id="cb15-109"><a href="#cb15-109" aria-hidden="true" tabindex="-1"></a>    ).splitlines()</span>
-<span id="cb15-110"><a href="#cb15-110" aria-hidden="true" tabindex="-1"></a>    reviews <span class="op">=</span> jsonl(</span>
-<span id="cb15-111"><a href="#cb15-111" aria-hidden="true" tabindex="-1"></a>        gh(</span>
-<span id="cb15-112"><a href="#cb15-112" aria-hidden="true" tabindex="-1"></a>            <span class="st">"api"</span>,</span>
-<span id="cb15-113"><a href="#cb15-113" aria-hidden="true" tabindex="-1"></a>            <span class="st">"--paginate"</span>,</span>
-<span id="cb15-114"><a href="#cb15-114" aria-hidden="true" tabindex="-1"></a>            <span class="ss">f"repos/</span><span class="sc">{</span>repo<span class="sc">}</span><span class="ss">/pulls/</span><span class="sc">{</span>pr<span class="sc">}</span><span class="ss">/reviews"</span>,</span>
-<span id="cb15-115"><a href="#cb15-115" aria-hidden="true" tabindex="-1"></a>            <span class="st">"--jq"</span>,</span>
-<span id="cb15-116"><a href="#cb15-116" aria-hidden="true" tabindex="-1"></a>            <span class="st">".[] | {user: .user.login, type: .user.type, state, commit: .commit_id}"</span>,</span>
-<span id="cb15-117"><a href="#cb15-117" aria-hidden="true" tabindex="-1"></a>        )</span>
-<span id="cb15-118"><a href="#cb15-118" aria-hidden="true" tabindex="-1"></a>    )</span>
-<span id="cb15-119"><a href="#cb15-119" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-120"><a href="#cb15-120" aria-hidden="true" tabindex="-1"></a>    labels <span class="op">=</span> {label[<span class="st">"name"</span>] <span class="cf">for</span> label <span class="kw">in</span> info[<span class="st">"labels"</span>]}</span>
-<span id="cb15-121"><a href="#cb15-121" aria-hidden="true" tabindex="-1"></a>    tiers <span class="op">=</span> [t <span class="cf">for</span> t <span class="kw">in</span> (<span class="st">"high"</span>, <span class="st">"medium"</span>, <span class="st">"low"</span>) <span class="cf">if</span> <span class="ss">f"risk:</span><span class="sc">{</span>t<span class="sc">}</span><span class="ss">"</span> <span class="kw">in</span> labels]</span>
-<span id="cb15-122"><a href="#cb15-122" aria-hidden="true" tabindex="-1"></a>    tier <span class="op">=</span> tiers[<span class="dv">0</span>] <span class="cf">if</span> tiers <span class="cf">else</span> <span class="st">"high"</span>  <span class="co"># no label: fail closed</span></span>
-<span id="cb15-123"><a href="#cb15-123" aria-hidden="true" tabindex="-1"></a>    need <span class="op">=</span> required_approvals(cfg, tier, author, files, <span class="st">"needs-human"</span> <span class="kw">in</span> labels)</span>
-<span id="cb15-124"><a href="#cb15-124" aria-hidden="true" tabindex="-1"></a>    have <span class="op">=</span> human_approvals(reviews, {author, director} <span class="op">-</span> {<span class="va">None</span>}, head)</span>
-<span id="cb15-125"><a href="#cb15-125" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"tier=</span><span class="sc">{</span>tier<span class="sc">}</span><span class="ss"> need=</span><span class="sc">{</span>need<span class="sc">}</span><span class="ss"> have=</span><span class="sc">{</span><span class="bu">len</span>(have)<span class="sc">}</span><span class="ss"> </span><span class="sc">{</span><span class="bu">sorted</span>(have)<span class="sc">}</span><span class="ss">"</span>)</span>
-<span id="cb15-126"><a href="#cb15-126" aria-hidden="true" tabindex="-1"></a>    sys.exit(<span class="dv">0</span> <span class="cf">if</span> <span class="bu">len</span>(have) <span class="op">&gt;=</span> need <span class="cf">else</span> <span class="dv">1</span>)</span>
-<span id="cb15-127"><a href="#cb15-127" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-128"><a href="#cb15-128" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-129"><a href="#cb15-129" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="va">__name__</span> <span class="op">==</span> <span class="st">"__main__"</span>:</span>
-<span id="cb15-130"><a href="#cb15-130" aria-hidden="true" tabindex="-1"></a>    main()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb15-67"><a href="#cb15-67" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-68"><a href="#cb15-68" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> ai_review_state(checks, name):</span>
+<span id="cb15-69"><a href="#cb15-69" aria-hidden="true" tabindex="-1"></a>    runs <span class="op">=</span> [c <span class="cf">for</span> c <span class="kw">in</span> checks <span class="cf">if</span> c[<span class="st">"name"</span>] <span class="op">==</span> name]</span>
+<span id="cb15-70"><a href="#cb15-70" aria-hidden="true" tabindex="-1"></a>    <span class="co"># Newest last. A queued run has no start time yet, and is the newest.</span></span>
+<span id="cb15-71"><a href="#cb15-71" aria-hidden="true" tabindex="-1"></a>    runs.sort(key<span class="op">=</span><span class="kw">lambda</span> c: (c[<span class="st">"started"</span>] <span class="kw">is</span> <span class="va">None</span>, c[<span class="st">"started"</span>] <span class="kw">or</span> <span class="st">""</span>))</span>
+<span id="cb15-72"><a href="#cb15-72" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">not</span> runs <span class="kw">or</span> runs[<span class="op">-</span><span class="dv">1</span>][<span class="st">"status"</span>] <span class="op">!=</span> <span class="st">"completed"</span>:</span>
+<span id="cb15-73"><a href="#cb15-73" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="st">"pending"</span></span>
+<span id="cb15-74"><a href="#cb15-74" aria-hidden="true" tabindex="-1"></a>    last <span class="op">=</span> runs[<span class="op">-</span><span class="dv">1</span>]</span>
+<span id="cb15-75"><a href="#cb15-75" aria-hidden="true" tabindex="-1"></a>    title <span class="op">=</span> (last[<span class="st">"title"</span>] <span class="kw">or</span> <span class="st">""</span>).lower()</span>
+<span id="cb15-76"><a href="#cb15-76" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> last[<span class="st">"conclusion"</span>] <span class="kw">not</span> <span class="kw">in</span> GOOD_CONCLUSIONS:</span>
+<span id="cb15-77"><a href="#cb15-77" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="st">"failed"</span>  <span class="co"># an Actions job that failed or was cancelled</span></span>
+<span id="cb15-78"><a href="#cb15-78" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="st">"failed"</span> <span class="cf">if</span> <span class="bu">any</span>(word <span class="kw">in</span> title <span class="cf">for</span> word <span class="kw">in</span> BAD_REVIEW) <span class="cf">else</span> <span class="st">"done"</span></span>
+<span id="cb15-79"><a href="#cb15-79" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-80"><a href="#cb15-80" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-81"><a href="#cb15-81" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> main():</span>
+<span id="cb15-82"><a href="#cb15-82" aria-hidden="true" tabindex="-1"></a>    repo, pr <span class="op">=</span> os.environ[<span class="st">"GITHUB_REPOSITORY"</span>], os.environ[<span class="st">"PR"</span>]</span>
+<span id="cb15-83"><a href="#cb15-83" aria-hidden="true" tabindex="-1"></a>    cfg <span class="op">=</span> yaml.safe_load(Path(<span class="st">".github/risk-tiers.yml"</span>).read_text())</span>
+<span id="cb15-84"><a href="#cb15-84" aria-hidden="true" tabindex="-1"></a>    info <span class="op">=</span> json.loads(gh(<span class="st">"pr"</span>, <span class="st">"view"</span>, pr, <span class="st">"--json"</span>, <span class="st">"author,body,headRefOid"</span>))</span>
+<span id="cb15-85"><a href="#cb15-85" aria-hidden="true" tabindex="-1"></a>    head, author <span class="op">=</span> info[<span class="st">"headRefOid"</span>], info[<span class="st">"author"</span>][<span class="st">"login"</span>]</span>
+<span id="cb15-86"><a href="#cb15-86" aria-hidden="true" tabindex="-1"></a>    director <span class="op">=</span> directed_by(info[<span class="st">"body"</span>])</span>
+<span id="cb15-87"><a href="#cb15-87" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> info[<span class="st">"author"</span>].get(<span class="st">"is_bot"</span>) <span class="kw">and</span> <span class="kw">not</span> director:</span>
+<span id="cb15-88"><a href="#cb15-88" aria-hidden="true" tabindex="-1"></a>        sys.exit(<span class="st">"An agent's PR must name a person under 'Directed by'."</span>)</span>
+<span id="cb15-89"><a href="#cb15-89" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-90"><a href="#cb15-90" aria-hidden="true" tabindex="-1"></a>    name <span class="op">=</span> cfg[<span class="st">"ai_review_check"</span>]</span>
+<span id="cb15-91"><a href="#cb15-91" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> _ <span class="kw">in</span> <span class="bu">range</span>(<span class="dv">100</span>):  <span class="co"># Code Review averages about 20 minutes</span></span>
+<span id="cb15-92"><a href="#cb15-92" aria-hidden="true" tabindex="-1"></a>        checks <span class="op">=</span> jsonl(</span>
+<span id="cb15-93"><a href="#cb15-93" aria-hidden="true" tabindex="-1"></a>            gh(</span>
+<span id="cb15-94"><a href="#cb15-94" aria-hidden="true" tabindex="-1"></a>                <span class="st">"api"</span>,</span>
+<span id="cb15-95"><a href="#cb15-95" aria-hidden="true" tabindex="-1"></a>                <span class="st">"--paginate"</span>,</span>
+<span id="cb15-96"><a href="#cb15-96" aria-hidden="true" tabindex="-1"></a>                <span class="ss">f"repos/</span><span class="sc">{</span>repo<span class="sc">}</span><span class="ss">/commits/</span><span class="sc">{</span>head<span class="sc">}</span><span class="ss">/check-runs?check_name=</span><span class="sc">{</span>quote(name)<span class="sc">}</span><span class="ss">"</span>,</span>
+<span id="cb15-97"><a href="#cb15-97" aria-hidden="true" tabindex="-1"></a>                <span class="st">"--jq"</span>,</span>
+<span id="cb15-98"><a href="#cb15-98" aria-hidden="true" tabindex="-1"></a>                <span class="st">".check_runs[] | {name, status, conclusion,"</span></span>
+<span id="cb15-99"><a href="#cb15-99" aria-hidden="true" tabindex="-1"></a>                <span class="st">" started: .started_at, title: .output.title}"</span>,</span>
+<span id="cb15-100"><a href="#cb15-100" aria-hidden="true" tabindex="-1"></a>            )</span>
+<span id="cb15-101"><a href="#cb15-101" aria-hidden="true" tabindex="-1"></a>        )</span>
+<span id="cb15-102"><a href="#cb15-102" aria-hidden="true" tabindex="-1"></a>        state <span class="op">=</span> ai_review_state(checks, name)</span>
+<span id="cb15-103"><a href="#cb15-103" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> state <span class="op">!=</span> <span class="st">"pending"</span>:</span>
+<span id="cb15-104"><a href="#cb15-104" aria-hidden="true" tabindex="-1"></a>            <span class="cf">break</span></span>
+<span id="cb15-105"><a href="#cb15-105" aria-hidden="true" tabindex="-1"></a>        time.sleep(<span class="dv">30</span>)</span>
+<span id="cb15-106"><a href="#cb15-106" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> state <span class="op">!=</span> <span class="st">"done"</span>:</span>
+<span id="cb15-107"><a href="#cb15-107" aria-hidden="true" tabindex="-1"></a>        sys.exit(<span class="ss">f"No finished AI review on </span><span class="sc">{</span>head[:<span class="dv">7</span>]<span class="sc">}</span><span class="ss"> (</span><span class="sc">{</span>state<span class="sc">}</span><span class="ss">)."</span>)</span>
+<span id="cb15-108"><a href="#cb15-108" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-109"><a href="#cb15-109" aria-hidden="true" tabindex="-1"></a>    files <span class="op">=</span> gh(</span>
+<span id="cb15-110"><a href="#cb15-110" aria-hidden="true" tabindex="-1"></a>        <span class="st">"api"</span>, <span class="st">"--paginate"</span>, <span class="ss">f"repos/</span><span class="sc">{</span>repo<span class="sc">}</span><span class="ss">/pulls/</span><span class="sc">{</span>pr<span class="sc">}</span><span class="ss">/files"</span>, <span class="st">"--jq"</span>, <span class="st">".[].filename"</span></span>
+<span id="cb15-111"><a href="#cb15-111" aria-hidden="true" tabindex="-1"></a>    ).splitlines()</span>
+<span id="cb15-112"><a href="#cb15-112" aria-hidden="true" tabindex="-1"></a>    reviews <span class="op">=</span> jsonl(</span>
+<span id="cb15-113"><a href="#cb15-113" aria-hidden="true" tabindex="-1"></a>        gh(</span>
+<span id="cb15-114"><a href="#cb15-114" aria-hidden="true" tabindex="-1"></a>            <span class="st">"api"</span>,</span>
+<span id="cb15-115"><a href="#cb15-115" aria-hidden="true" tabindex="-1"></a>            <span class="st">"--paginate"</span>,</span>
+<span id="cb15-116"><a href="#cb15-116" aria-hidden="true" tabindex="-1"></a>            <span class="ss">f"repos/</span><span class="sc">{</span>repo<span class="sc">}</span><span class="ss">/pulls/</span><span class="sc">{</span>pr<span class="sc">}</span><span class="ss">/reviews"</span>,</span>
+<span id="cb15-117"><a href="#cb15-117" aria-hidden="true" tabindex="-1"></a>            <span class="st">"--jq"</span>,</span>
+<span id="cb15-118"><a href="#cb15-118" aria-hidden="true" tabindex="-1"></a>            <span class="st">".[] | {user: .user.login, type: .user.type, state, commit: .commit_id}"</span>,</span>
+<span id="cb15-119"><a href="#cb15-119" aria-hidden="true" tabindex="-1"></a>        )</span>
+<span id="cb15-120"><a href="#cb15-120" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb15-121"><a href="#cb15-121" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-122"><a href="#cb15-122" aria-hidden="true" tabindex="-1"></a>    <span class="co"># Labels are re-read after the wait: a gate started by a review can begin</span></span>
+<span id="cb15-123"><a href="#cb15-123" aria-hidden="true" tabindex="-1"></a>    <span class="co"># while a push's classifier is still labelling. A push during the wait</span></span>
+<span id="cb15-124"><a href="#cb15-124" aria-hidden="true" tabindex="-1"></a>    <span class="co"># starts its own gate, so this one stands down.</span></span>
+<span id="cb15-125"><a href="#cb15-125" aria-hidden="true" tabindex="-1"></a>    now <span class="op">=</span> json.loads(gh(<span class="st">"pr"</span>, <span class="st">"view"</span>, pr, <span class="st">"--json"</span>, <span class="st">"headRefOid,labels"</span>))</span>
+<span id="cb15-126"><a href="#cb15-126" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> now[<span class="st">"headRefOid"</span>] <span class="op">!=</span> head:</span>
+<span id="cb15-127"><a href="#cb15-127" aria-hidden="true" tabindex="-1"></a>        sys.exit(<span class="ss">f"Head moved from </span><span class="sc">{</span>head[:<span class="dv">7</span>]<span class="sc">}</span><span class="ss"> during the wait."</span>)</span>
+<span id="cb15-128"><a href="#cb15-128" aria-hidden="true" tabindex="-1"></a>    labels <span class="op">=</span> {label[<span class="st">"name"</span>] <span class="cf">for</span> label <span class="kw">in</span> now[<span class="st">"labels"</span>]}</span>
+<span id="cb15-129"><a href="#cb15-129" aria-hidden="true" tabindex="-1"></a>    tiers <span class="op">=</span> [t <span class="cf">for</span> t <span class="kw">in</span> (<span class="st">"high"</span>, <span class="st">"medium"</span>, <span class="st">"low"</span>) <span class="cf">if</span> <span class="ss">f"risk:</span><span class="sc">{</span>t<span class="sc">}</span><span class="ss">"</span> <span class="kw">in</span> labels]</span>
+<span id="cb15-130"><a href="#cb15-130" aria-hidden="true" tabindex="-1"></a>    tier <span class="op">=</span> tiers[<span class="dv">0</span>] <span class="cf">if</span> tiers <span class="cf">else</span> <span class="st">"high"</span>  <span class="co"># no label: fail closed</span></span>
+<span id="cb15-131"><a href="#cb15-131" aria-hidden="true" tabindex="-1"></a>    need <span class="op">=</span> required_approvals(cfg, tier, author, files, <span class="st">"needs-human"</span> <span class="kw">in</span> labels)</span>
+<span id="cb15-132"><a href="#cb15-132" aria-hidden="true" tabindex="-1"></a>    have <span class="op">=</span> human_approvals(reviews, {author, director} <span class="op">-</span> {<span class="va">None</span>}, head)</span>
+<span id="cb15-133"><a href="#cb15-133" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"tier=</span><span class="sc">{</span>tier<span class="sc">}</span><span class="ss"> need=</span><span class="sc">{</span>need<span class="sc">}</span><span class="ss"> have=</span><span class="sc">{</span><span class="bu">len</span>(have)<span class="sc">}</span><span class="ss"> </span><span class="sc">{</span><span class="bu">sorted</span>(have)<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb15-134"><a href="#cb15-134" aria-hidden="true" tabindex="-1"></a>    sys.exit(<span class="dv">0</span> <span class="cf">if</span> <span class="bu">len</span>(have) <span class="op">&gt;=</span> need <span class="cf">else</span> <span class="dv">1</span>)</span>
+<span id="cb15-135"><a href="#cb15-135" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-136"><a href="#cb15-136" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-137"><a href="#cb15-137" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="va">__name__</span> <span class="op">==</span> <span class="st">"__main__"</span>:</span>
+<span id="cb15-138"><a href="#cb15-138" aria-hidden="true" tabindex="-1"></a>    main()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 <p>Each approval rule from the risk-tier layer maps to a line of the example:</p>
 <div id="tbl-rules" class="quarto-float quarto-figure quarto-figure-center anchored">
 <figure class="quarto-float quarto-float-tbl figure">
@@ -2285,7 +2308,7 @@ Table&nbsp;12: Where each approval rule from the source lands in the worked exam
 </section>
 <section id="ci-and-security-workflows" class="level3" data-number="9.6">
 <h3 data-number="9.6" class="anchored" data-anchor-id="ci-and-security-workflows"><span class="header-section-number">9.6</span> CI and security workflows</h3>
-<p><code>.github/workflows/ci.yml</code> runs on pull requests and on merge-queue commits. A required check that never reports on <code>merge_group</code> stalls the queue.</p>
+<p><code>.github/workflows/ci.yml</code> runs on pull requests and on merge-queue commits. A required check that never reports on <code>merge_group</code> holds each queued PR until the queue’s status-check timeout, which then removes it.</p>
 <div class="sourceCode" id="cb16"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="fu">name</span><span class="kw">:</span><span class="at"> ci</span></span>
 <span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="fu">on</span><span class="kw">:</span></span>
 <span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">pull_request</span><span class="kw">:</span></span>
@@ -2372,8 +2395,8 @@ Table&nbsp;12: Where each approval rule from the source lands in the worked exam
 <span id="cb18-23"><a href="#cb18-23" aria-hidden="true" tabindex="-1"></a><span class="at">          </span><span class="fu">prompt</span><span class="kw">:</span><span class="at"> </span><span class="st">"/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"</span></span>
 <span id="cb18-24"><a href="#cb18-24" aria-hidden="true" tabindex="-1"></a><span class="at">          </span><span class="fu">claude_args</span><span class="kw">:</span><span class="at"> </span><span class="st">'--allowedTools "mcp__github_inline_comment__create_inline_comment"'</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </section>
-<section id="branch-protection" class="level3" data-number="9.7">
-<h3 data-number="9.7" class="anchored" data-anchor-id="branch-protection"><span class="header-section-number">9.7</span> Branch protection</h3>
+<section id="sec-protection" class="level3" data-number="9.7">
+<h3 data-number="9.7" class="anchored" data-anchor-id="sec-protection"><span class="header-section-number">9.7</span> Branch protection</h3>
 <p>A classic branch protection rule on <code>main</code>, which also lets the Code Review service honour <code>REVIEW.md</code>:</p>
 <ul>
 <li><strong>Require a pull request before merging</strong>, with no fixed approval count; the risk gate does the counting.</li>
@@ -2425,8 +2448,8 @@ Table&nbsp;12: Where each approval rule from the source lands in the worked exam
 <section id="incident-eval-set" class="level3" data-number="9.9">
 <h3 data-number="9.9" class="anchored" data-anchor-id="incident-eval-set"><span class="header-section-number">9.9</span> Incident eval set</h3>
 <p><code>evals/incidents.jsonl</code> holds one confirmed bug per line. The first entry comes from the late-fee walk-through (<a href="#sec-walk" class="quarto-xref">Section&nbsp;10</a>):</p>
-<div class="sourceCode" id="cb20"><pre class="sourceCode json code-with-copy"><code class="sourceCode json"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"id"</span><span class="fu">:</span> <span class="st">"INC-0142"</span><span class="fu">,</span> <span class="dt">"pr"</span><span class="fu">:</span> <span class="dv">1874</span><span class="fu">,</span> <span class="dt">"base"</span><span class="fu">:</span> <span class="st">"4f1c2e9"</span><span class="fu">,</span> <span class="dt">"head"</span><span class="fu">:</span> <span class="st">"a77d031"</span><span class="fu">,</span> <span class="dt">"file"</span><span class="fu">:</span> <span class="st">"src/acme/billing/late_fees.py"</span><span class="fu">,</span> <span class="dt">"line"</span><span class="fu">:</span> <span class="dv">38</span><span class="fu">,</span> <span class="dt">"bug"</span><span class="fu">:</span> <span class="st">"late fee charged on the invoice total, not the remaining balance"</span><span class="fu">,</span> <span class="dt">"confirmed_by"</span><span class="fu">:</span> <span class="st">"dee-acme"</span><span class="fu">}</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
-<p><code>evals/score_reviewer.py</code> re-runs the reviewer on each case and counts a case as caught when a finding cites the right file within five lines of the confirmed bug:</p>
+<div class="sourceCode" id="cb20"><pre class="sourceCode json code-with-copy"><code class="sourceCode json"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">"id"</span><span class="fu">:</span> <span class="st">"INC-0142"</span><span class="fu">,</span> <span class="dt">"pr"</span><span class="fu">:</span> <span class="dv">1874</span><span class="fu">,</span> <span class="dt">"base"</span><span class="fu">:</span> <span class="st">"4f1c2e9"</span><span class="fu">,</span> <span class="dt">"head"</span><span class="fu">:</span> <span class="st">"a77d031"</span><span class="fu">,</span> <span class="dt">"file"</span><span class="fu">:</span> <span class="st">"src/acme/billing/late_fees.py"</span><span class="fu">,</span> <span class="dt">"line"</span><span class="fu">:</span> <span class="dv">38</span><span class="fu">,</span> <span class="dt">"bug"</span><span class="fu">:</span> <span class="st">"late fee charged on the invoice total, not the remaining balance"</span><span class="fu">,</span> <span class="dt">"keywords"</span><span class="fu">:</span> <span class="ot">[</span><span class="st">"balance"</span><span class="ot">]</span><span class="fu">,</span> <span class="dt">"confirmed_by"</span><span class="fu">:</span> <span class="st">"dee-acme"</span><span class="fu">}</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><code>evals/score_reviewer.py</code> re-runs the reviewer on each case, in a separate worktree so the eval repository stays where it is. A case counts as caught when one finding both cites the right file within five lines of the confirmed bug and uses one of the case’s keywords. A finding runs from a <code>file:line</code> citation to the next citation or blank line, the shape of the review output in the walkthrough. Location alone is not enough: the walkthrough’s double-charge finding sits three lines from <code>INC-0142</code> and is about a different bug.</p>
 <div class="sourceCode" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="co">"""Score the reviewer against past incidents.</span></span>
 <span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a><span class="co">Run daily, and again whenever the reviewer's prompts, tools or model change.</span></span>
@@ -2435,44 +2458,64 @@ Table&nbsp;12: Where each approval rule from the source lands in the worked exam
 <span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> json</span>
 <span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> re</span>
 <span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> subprocess</span>
-<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
-<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>CITE <span class="op">=</span> re.<span class="bu">compile</span>(<span class="vs">r"([\w./-]+\.\w+):(\d+)"</span>)</span>
-<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>WINDOW <span class="op">=</span> <span class="dv">5</span>  <span class="co"># a finding within five lines of the confirmed bug counts</span></span>
-<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> cited(text):</span>
-<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> {(path, <span class="bu">int</span>(line)) <span class="cf">for</span> path, line <span class="kw">in</span> CITE.findall(text)}</span>
-<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> caught(case, text):</span>
-<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="bu">any</span>(</span>
-<span id="cb21-21"><a href="#cb21-21" aria-hidden="true" tabindex="-1"></a>        path <span class="op">==</span> case[<span class="st">"file"</span>] <span class="kw">and</span> <span class="bu">abs</span>(line <span class="op">-</span> case[<span class="st">"line"</span>]) <span class="op">&lt;=</span> WINDOW</span>
-<span id="cb21-22"><a href="#cb21-22" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> path, line <span class="kw">in</span> cited(text)</span>
-<span id="cb21-23"><a href="#cb21-23" aria-hidden="true" tabindex="-1"></a>    )</span>
-<span id="cb21-24"><a href="#cb21-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-25"><a href="#cb21-25" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-26"><a href="#cb21-26" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> review(case):</span>
-<span id="cb21-27"><a href="#cb21-27" aria-hidden="true" tabindex="-1"></a>    subprocess.run([<span class="st">"git"</span>, <span class="st">"checkout"</span>, <span class="st">"-q"</span>, case[<span class="st">"head"</span>]], check<span class="op">=</span><span class="va">True</span>)</span>
-<span id="cb21-28"><a href="#cb21-28" aria-hidden="true" tabindex="-1"></a>    prompt <span class="op">=</span> <span class="ss">f"/code-review high </span><span class="sc">{</span>case[<span class="st">'base'</span>]<span class="sc">}</span><span class="ss">..</span><span class="sc">{</span>case[<span class="st">'head'</span>]<span class="sc">}</span><span class="ss">"</span></span>
-<span id="cb21-29"><a href="#cb21-29" aria-hidden="true" tabindex="-1"></a>    run <span class="op">=</span> subprocess.run(</span>
-<span id="cb21-30"><a href="#cb21-30" aria-hidden="true" tabindex="-1"></a>        [<span class="st">"claude"</span>, <span class="st">"-p"</span>, prompt, <span class="st">"--output-format"</span>, <span class="st">"json"</span>],</span>
-<span id="cb21-31"><a href="#cb21-31" aria-hidden="true" tabindex="-1"></a>        capture_output<span class="op">=</span><span class="va">True</span>,</span>
-<span id="cb21-32"><a href="#cb21-32" aria-hidden="true" tabindex="-1"></a>        text<span class="op">=</span><span class="va">True</span>,</span>
-<span id="cb21-33"><a href="#cb21-33" aria-hidden="true" tabindex="-1"></a>        check<span class="op">=</span><span class="va">True</span>,</span>
-<span id="cb21-34"><a href="#cb21-34" aria-hidden="true" tabindex="-1"></a>    )</span>
-<span id="cb21-35"><a href="#cb21-35" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> json.loads(run.stdout)[<span class="st">"result"</span>]</span>
-<span id="cb21-36"><a href="#cb21-36" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-37"><a href="#cb21-37" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-38"><a href="#cb21-38" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> main():</span>
-<span id="cb21-39"><a href="#cb21-39" aria-hidden="true" tabindex="-1"></a>    lines <span class="op">=</span> Path(<span class="st">"evals/incidents.jsonl"</span>).read_text().splitlines()</span>
-<span id="cb21-40"><a href="#cb21-40" aria-hidden="true" tabindex="-1"></a>    cases <span class="op">=</span> [json.loads(line) <span class="cf">for</span> line <span class="kw">in</span> lines]</span>
-<span id="cb21-41"><a href="#cb21-41" aria-hidden="true" tabindex="-1"></a>    missed <span class="op">=</span> [c[<span class="st">"id"</span>] <span class="cf">for</span> c <span class="kw">in</span> cases <span class="cf">if</span> <span class="kw">not</span> caught(c, review(c))]</span>
-<span id="cb21-42"><a href="#cb21-42" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"caught </span><span class="sc">{</span><span class="bu">len</span>(cases) <span class="op">-</span> <span class="bu">len</span>(missed)<span class="sc">}</span><span class="ss">/</span><span class="sc">{</span><span class="bu">len</span>(cases)<span class="sc">}</span><span class="ss">; missed: </span><span class="sc">{</span>missed<span class="sc">}</span><span class="ss">"</span>)</span>
-<span id="cb21-43"><a href="#cb21-43" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-44"><a href="#cb21-44" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-45"><a href="#cb21-45" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="va">__name__</span> <span class="op">==</span> <span class="st">"__main__"</span>:</span>
-<span id="cb21-46"><a href="#cb21-46" aria-hidden="true" tabindex="-1"></a>    main()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> sys</span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> tempfile</span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>CITE <span class="op">=</span> re.<span class="bu">compile</span>(<span class="vs">r"(?&lt;![\w./-])([\w./-]+\.\w+):(\d+)"</span>)</span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>WINDOW <span class="op">=</span> <span class="dv">5</span>  <span class="co"># a finding within five lines of the confirmed bug counts</span></span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> findings(text):</span>
+<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""One finding per file:line citation, up to the next citation or blank line."""</span></span>
+<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>    starts <span class="op">=</span> [m.start() <span class="cf">for</span> m <span class="kw">in</span> CITE.finditer(text)]</span>
+<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a>    chunks <span class="op">=</span> [text[a:b] <span class="cf">for</span> a, b <span class="kw">in</span> <span class="bu">zip</span>(starts, [<span class="op">*</span>starts[<span class="dv">1</span>:], <span class="bu">len</span>(text)])]</span>
+<span id="cb21-21"><a href="#cb21-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> [re.split(<span class="vs">r"\n\s*\n"</span>, chunk)[<span class="dv">0</span>] <span class="cf">for</span> chunk <span class="kw">in</span> chunks]</span>
+<span id="cb21-22"><a href="#cb21-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-23"><a href="#cb21-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-24"><a href="#cb21-24" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> caught(case, text):</span>
+<span id="cb21-25"><a href="#cb21-25" aria-hidden="true" tabindex="-1"></a>    <span class="co">"""True when one finding cites the bug's location and names the bug."""</span></span>
+<span id="cb21-26"><a href="#cb21-26" aria-hidden="true" tabindex="-1"></a>    words <span class="op">=</span> [w.lower() <span class="cf">for</span> w <span class="kw">in</span> case[<span class="st">"keywords"</span>]]</span>
+<span id="cb21-27"><a href="#cb21-27" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> finding <span class="kw">in</span> findings(text):</span>
+<span id="cb21-28"><a href="#cb21-28" aria-hidden="true" tabindex="-1"></a>        path, line <span class="op">=</span> CITE.match(finding).groups()</span>
+<span id="cb21-29"><a href="#cb21-29" aria-hidden="true" tabindex="-1"></a>        near <span class="op">=</span> path <span class="op">==</span> case[<span class="st">"file"</span>] <span class="kw">and</span> <span class="bu">abs</span>(<span class="bu">int</span>(line) <span class="op">-</span> case[<span class="st">"line"</span>]) <span class="op">&lt;=</span> WINDOW</span>
+<span id="cb21-30"><a href="#cb21-30" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> near <span class="kw">and</span> <span class="bu">any</span>(w <span class="kw">in</span> finding.lower() <span class="cf">for</span> w <span class="kw">in</span> words):</span>
+<span id="cb21-31"><a href="#cb21-31" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="va">True</span></span>
+<span id="cb21-32"><a href="#cb21-32" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="va">False</span></span>
+<span id="cb21-33"><a href="#cb21-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-34"><a href="#cb21-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-35"><a href="#cb21-35" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> review(case):</span>
+<span id="cb21-36"><a href="#cb21-36" aria-hidden="true" tabindex="-1"></a>    <span class="cf">with</span> tempfile.TemporaryDirectory() <span class="im">as</span> tmp:</span>
+<span id="cb21-37"><a href="#cb21-37" aria-hidden="true" tabindex="-1"></a>        tree <span class="op">=</span> Path(tmp) <span class="op">/</span> <span class="st">"tree"</span>  <span class="co"># a separate checkout leaves this one alone</span></span>
+<span id="cb21-38"><a href="#cb21-38" aria-hidden="true" tabindex="-1"></a>        git <span class="op">=</span> [<span class="st">"git"</span>, <span class="st">"worktree"</span>]</span>
+<span id="cb21-39"><a href="#cb21-39" aria-hidden="true" tabindex="-1"></a>        subprocess.run([<span class="op">*</span>git, <span class="st">"add"</span>, <span class="st">"-q"</span>, <span class="st">"--detach"</span>, tree, case[<span class="st">"head"</span>]], check<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb21-40"><a href="#cb21-40" aria-hidden="true" tabindex="-1"></a>        <span class="cf">try</span>:</span>
+<span id="cb21-41"><a href="#cb21-41" aria-hidden="true" tabindex="-1"></a>            prompt <span class="op">=</span> <span class="ss">f"/code-review high </span><span class="sc">{</span>case[<span class="st">'base'</span>]<span class="sc">}</span><span class="ss">..</span><span class="sc">{</span>case[<span class="st">'head'</span>]<span class="sc">}</span><span class="ss">"</span></span>
+<span id="cb21-42"><a href="#cb21-42" aria-hidden="true" tabindex="-1"></a>            run <span class="op">=</span> subprocess.run(</span>
+<span id="cb21-43"><a href="#cb21-43" aria-hidden="true" tabindex="-1"></a>                [<span class="st">"claude"</span>, <span class="st">"-p"</span>, prompt, <span class="st">"--output-format"</span>, <span class="st">"json"</span>],</span>
+<span id="cb21-44"><a href="#cb21-44" aria-hidden="true" tabindex="-1"></a>                capture_output<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb21-45"><a href="#cb21-45" aria-hidden="true" tabindex="-1"></a>                text<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb21-46"><a href="#cb21-46" aria-hidden="true" tabindex="-1"></a>                check<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb21-47"><a href="#cb21-47" aria-hidden="true" tabindex="-1"></a>                cwd<span class="op">=</span>tree,</span>
+<span id="cb21-48"><a href="#cb21-48" aria-hidden="true" tabindex="-1"></a>            )</span>
+<span id="cb21-49"><a href="#cb21-49" aria-hidden="true" tabindex="-1"></a>        <span class="cf">finally</span>:</span>
+<span id="cb21-50"><a href="#cb21-50" aria-hidden="true" tabindex="-1"></a>            <span class="co"># No check: a failed cleanup must not hide the review's own error.</span></span>
+<span id="cb21-51"><a href="#cb21-51" aria-hidden="true" tabindex="-1"></a>            subprocess.run([<span class="op">*</span>git, <span class="st">"remove"</span>, <span class="st">"--force"</span>, tree])</span>
+<span id="cb21-52"><a href="#cb21-52" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> json.loads(run.stdout)[<span class="st">"result"</span>]</span>
+<span id="cb21-53"><a href="#cb21-53" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-54"><a href="#cb21-54" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-55"><a href="#cb21-55" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> main():</span>
+<span id="cb21-56"><a href="#cb21-56" aria-hidden="true" tabindex="-1"></a>    lines <span class="op">=</span> Path(<span class="st">"evals/incidents.jsonl"</span>).read_text().splitlines()</span>
+<span id="cb21-57"><a href="#cb21-57" aria-hidden="true" tabindex="-1"></a>    cases <span class="op">=</span> [json.loads(line) <span class="cf">for</span> line <span class="kw">in</span> lines]</span>
+<span id="cb21-58"><a href="#cb21-58" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> bad <span class="op">:=</span> [c[<span class="st">"id"</span>] <span class="cf">for</span> c <span class="kw">in</span> cases <span class="cf">if</span> <span class="kw">not</span> c.get(<span class="st">"keywords"</span>)]:</span>
+<span id="cb21-59"><a href="#cb21-59" aria-hidden="true" tabindex="-1"></a>        sys.exit(<span class="ss">f"Cases without keywords can never be caught: </span><span class="sc">{</span>bad<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb21-60"><a href="#cb21-60" aria-hidden="true" tabindex="-1"></a>    subprocess.run([<span class="st">"git"</span>, <span class="st">"worktree"</span>, <span class="st">"prune"</span>], check<span class="op">=</span><span class="va">True</span>)  <span class="co"># after a kill</span></span>
+<span id="cb21-61"><a href="#cb21-61" aria-hidden="true" tabindex="-1"></a>    missed <span class="op">=</span> [c[<span class="st">"id"</span>] <span class="cf">for</span> c <span class="kw">in</span> cases <span class="cf">if</span> <span class="kw">not</span> caught(c, review(c))]</span>
+<span id="cb21-62"><a href="#cb21-62" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"caught </span><span class="sc">{</span><span class="bu">len</span>(cases) <span class="op">-</span> <span class="bu">len</span>(missed)<span class="sc">}</span><span class="ss">/</span><span class="sc">{</span><span class="bu">len</span>(cases)<span class="sc">}</span><span class="ss">; missed: </span><span class="sc">{</span>missed<span class="sc">}</span><span class="ss">"</span>)</span>
+<span id="cb21-63"><a href="#cb21-63" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-64"><a href="#cb21-64" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-65"><a href="#cb21-65" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="va">__name__</span> <span class="op">==</span> <span class="st">"__main__"</span>:</span>
+<span id="cb21-66"><a href="#cb21-66" aria-hidden="true" tabindex="-1"></a>    main()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 <p>The script measures recall only. Noise needs the second half of the source’s method: the reviewer run on PRs known to be clean, and a person judging whether each finding would have led to a harmful change.</p>
 </section>
 </section>

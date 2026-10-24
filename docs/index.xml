@@ -779,7 +779,7 @@ Table&nbsp;6: What each rule does with Du et al.’s 433 candidates, 105 real bu
 </div>
 <ul>
 <li><strong>The threshold sets the trade.</strong> Each extra vote required raises precision and lowers recall. For the agents at <img src="https://latex.codecogs.com/png.latex?%5Crho%20=%200.5">, one vote of four lets 2 of the 105 real bugs merge and sends authors 38 false alarms; three of four lets 20 merge and sends 2.</li>
-<li><strong>A vote improves on good verifiers, not weak ones.</strong> At <img src="https://latex.codecogs.com/png.latex?%5Crho%20=%200">, a two-of-four vote of the agents lets 2 bugs merge and posts 2 false alarms, fewer of both than any agent alone; Claude Opus 4 alone lets 13 merge and posts 20. No threshold does that for the prompt-only verifiers. Against Claude Opus 4 alone, every vote buys fewer missed bugs with more false alarms, or the reverse.</li>
+<li><strong>A vote beats its best members only when they are good.</strong> At <img src="https://latex.codecogs.com/png.latex?%5Crho%20=%200">, a two-of-four vote of the agents lets 2 bugs merge and posts 2 false alarms, fewer of both than any agent alone; Claude Opus 4 alone lets 13 merge and posts 20. Prompt-only votes beat GPT-4o and Qwen3-Coder, the two prompt-only verifiers with the lowest recall and precision, on both counts at some thresholds. No threshold beats Claude Opus 4 or DeepSeek-R1 alone: against either, every vote buys fewer missed bugs with more false alarms, or the reverse.</li>
 <li><strong>Overlapping mistakes shrink the gain.</strong> At <img src="https://latex.codecogs.com/png.latex?%5Crho%20=%200.5"> the agents’ two-of-four vote lets 9 bugs merge and posts 9 false alarms. That still beats Claude Opus 4 alone on both counts. Against GPT-4o alone, which lets 26 merge and posts 7, it trades 2 more false alarms for 17 fewer missed bugs. The prompt-only majority lets 37 bugs merge to Claude Opus 4’s 27, and cuts false alarms only from 92 to 79.</li>
 <li><strong>Accuracy rewards the cautious error.</strong> Among the prompt-only rules in Table&nbsp;6, four of four has the highest accuracy, 78%, and lets 64 of the 105 bugs merge. Claude Opus 4 alone scores 72% and lets 27 merge.</li>
 <li><strong>One industry bar for false alarms.</strong> Google lets an analyzer that comments during code review show at most 10% <em>effective false positives</em>, findings the developer takes no action on, and disables any analyzer above that. A check that stops the build must show none (Sadowski et al., 2018). By that bar no prompt-only rule qualifies at either <img src="https://latex.codecogs.com/png.latex?%5Crho">, and the agents qualify from two votes of four.</li>
@@ -1458,8 +1458,9 @@ REVIEW.md needs a protected default branch
 <h3 data-number="8.4" class="anchored" data-anchor-id="hooks-for-the-prohibitions"><span class="header-section-number">8.4</span> Hooks for the prohibitions</h3>
 <p>A <code>PreToolUse</code> hook runs before Claude uses a tool and can deny the call. A hook on the <code>Bash</code> tool can therefore enforce the “never” list in <code>AGENTS.md</code>, whatever the model decides.</p>
 <ul>
-<li>The hook receives the tool call as JSON on standard input, and denies it by printing a <code>permissionDecision</code> of <code>deny</code> with a reason, which Claude sees.</li>
+<li>The hook receives the tool call as JSON on standard input. It denies the call either by printing a <code>permissionDecision</code> of <code>deny</code> with a reason, or by exiting with code 2 and a reason on standard error. Claude sees the reason either way.</li>
 <li>Matching on raw command text is crude. It also blocks an <code>echo</code> or a heredoc that merely contains a forbidden command. This blog’s repository has the same limitation in its own hooks, and blocking too much is the safe way for a guard to fail.</li>
+<li>It can also be talked around. A command routed through a script, an alias or a variable gets past it, so a hook stops the usual forms of a forbidden command, not a determined one. Branch protection (Section&nbsp;9.7) is what stops a push to <code>main</code> for certain.</li>
 <li>Hooks cover agent sessions only. A person at a terminal is not stopped, so the same rules still belong in branch protection and CI.</li>
 </ul>
 </section>
@@ -2017,61 +2018,156 @@ font-style: inherit;">deny</span> <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"Unreadable hook input."</span></span>
 <span id="cb8-12"></span>
-<span id="cb8-13"><span class="cf" style="color: #003B4F;
+<span id="cb8-13"><span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">flat</span><span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">${cmd</span><span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">//</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">[</span><span class="dt" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">\"\'</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">]</span><span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">/</span> <span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">}</span>  <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># quotes become spaces, so 'main' reads as main</span></span>
+<span id="cb8-14"></span>
+<span id="cb8-15"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># True when the command contains $1 as a whole word, wherever it sits.</span></span>
+<span id="cb8-16"><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">word()</span> <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
-font-style: inherit;">case</span> <span class="st" style="color: #20794D;
+font-style: inherit;">{</span></span>
+<span id="cb8-17">  <span class="bu" style="color: null;
 background-color: null;
-font-style: inherit;">"</span><span class="va" style="color: #111111;
+font-style: inherit;">local</span> <span class="va" style="color: #111111;
 background-color: null;
-font-style: inherit;">$cmd</span><span class="st" style="color: #20794D;
+font-style: inherit;">re</span><span class="op" style="color: #5E5E5E;
 background-color: null;
-font-style: inherit;">"</span> <span class="kw" style="color: #003B4F;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"(^|[^[:alnum:]_-])</span><span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">$1</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">([^[:alnum:]_-]|</span><span class="dt" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">\$</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">)"</span></span>
+<span id="cb8-18">  <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
-font-style: inherit;">in</span></span>
-<span id="cb8-14">  <span class="pp" style="color: #AD0000;
+font-style: inherit;">[[</span> <span class="va" style="color: #111111;
 background-color: null;
-font-style: inherit;">*</span><span class="st" style="color: #20794D;
+font-style: inherit;">$flat</span> <span class="ot" style="color: #003B4F;
 background-color: null;
-font-style: inherit;">"pip install"</span><span class="pp" style="color: #AD0000;
+font-style: inherit;">=~</span> <span class="va" style="color: #111111;
 background-color: null;
-font-style: inherit;">*</span><span class="kw" style="color: #003B4F;
+font-style: inherit;">$re</span> <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
-font-style: inherit;">)</span></span>
-<span id="cb8-15">    <span class="ex" style="color: null;
+font-style: inherit;">]]</span></span>
+<span id="cb8-19"><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">}</span></span>
+<span id="cb8-20"></span>
+<span id="cb8-21"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">if</span> <span class="ex" style="color: null;
+background-color: null;
+font-style: inherit;">word</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">'pip[0-9.]*'</span> <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">&amp;&amp;</span> <span class="ex" style="color: null;
+background-color: null;
+font-style: inherit;">word</span> install<span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">;</span> <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">then</span></span>
+<span id="cb8-22">  <span class="ex" style="color: null;
 background-color: null;
 font-style: inherit;">deny</span> <span class="st" style="color: #20794D;
 background-color: null;
-font-style: inherit;">"Use 'uv add &lt;pkg&gt;', not pip (AGENTS.md, Never)."</span> <span class="cf" style="color: #003B4F;
+font-style: inherit;">"Use 'uv add &lt;pkg&gt;', not pip (AGENTS.md, Never)."</span></span>
+<span id="cb8-23"><span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
-font-style: inherit;">;;</span></span>
-<span id="cb8-16">  <span class="pp" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">*</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"alembic downgrade"</span><span class="pp" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">*</span><span class="kw" style="color: #003B4F;
+font-style: inherit;">fi</span></span>
+<span id="cb8-24"><span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
-font-style: inherit;">)</span></span>
-<span id="cb8-17">    <span class="ex" style="color: null;
+font-style: inherit;">if</span> <span class="ex" style="color: null;
+background-color: null;
+font-style: inherit;">word</span> alembic <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">&amp;&amp;</span> <span class="ex" style="color: null;
+background-color: null;
+font-style: inherit;">word</span> downgrade<span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">;</span> <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">then</span></span>
+<span id="cb8-25">  <span class="ex" style="color: null;
 background-color: null;
 font-style: inherit;">deny</span> <span class="st" style="color: #20794D;
 background-color: null;
-font-style: inherit;">"CI checks downgrades; don't run them (AGENTS.md)."</span> <span class="cf" style="color: #003B4F;
+font-style: inherit;">"CI checks downgrades; don't run them (AGENTS.md)."</span></span>
+<span id="cb8-26"><span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
-font-style: inherit;">;;</span></span>
-<span id="cb8-18"><span class="cf" style="color: #003B4F;
+font-style: inherit;">fi</span></span>
+<span id="cb8-27"></span>
+<span id="cb8-28"><span class="co" style="color: #5E5E5E;
 background-color: null;
-font-weight: bold;
-font-style: inherit;">esac</span></span>
-<span id="cb8-19"></span>
-<span id="cb8-20"><span class="cf" style="color: #003B4F;
+font-style: inherit;"># git, any options before the subcommand (-C dir, -c key=value), then push.</span></span>
+<span id="cb8-29"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># A commit message that mentions "push" does not count.</span></span>
+<span id="cb8-30"><span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">opts</span><span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">'([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*'</span></span>
+<span id="cb8-31"><span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">push</span><span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"(^|[^[:alnum:]_-])git</span><span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">${opts}</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">[[:space:]]+push([[:space:]]|</span><span class="dt" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">\$</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">)"</span></span>
+<span id="cb8-32"><span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">if</span> <span class="kw" style="color: #003B4F;
@@ -2079,41 +2175,37 @@ background-color: null;
 font-weight: bold;
 font-style: inherit;">[[</span> <span class="va" style="color: #111111;
 background-color: null;
-font-style: inherit;">$cmd</span> <span class="ot" style="color: #003B4F;
+font-style: inherit;">$flat</span> <span class="ot" style="color: #003B4F;
 background-color: null;
-font-style: inherit;">==</span> <span class="pp" style="color: #AD0000;
+font-style: inherit;">=~</span> <span class="va" style="color: #111111;
 background-color: null;
-font-style: inherit;">*</span><span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"git push"</span><span class="pp" style="color: #AD0000;
-background-color: null;
-font-style: inherit;">*</span> <span class="kw" style="color: #003B4F;
+font-style: inherit;">$push</span> <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">]];</span> <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">then</span></span>
-<span id="cb8-21">  <span class="va" style="color: #111111;
+<span id="cb8-33">  <span class="va" style="color: #111111;
 background-color: null;
 font-style: inherit;">force</span><span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span><span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">'(--force|[[:space:]]-[a-z]*f[a-z]*([[:space:]]|$)|[[:space:]:]\+)'</span></span>
-<span id="cb8-22">  <span class="va" style="color: #111111;
+<span id="cb8-34">  <span class="va" style="color: #111111;
 background-color: null;
 font-style: inherit;">main</span><span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span><span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">'(^|[[:space:]:/])main([[:space:];&amp;|)]|$)'</span></span>
-<span id="cb8-23">  <span class="kw" style="color: #003B4F;
+<span id="cb8-35">  <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">[[</span> <span class="va" style="color: #111111;
 background-color: null;
-font-style: inherit;">$cmd</span> <span class="ot" style="color: #003B4F;
+font-style: inherit;">$flat</span> <span class="ot" style="color: #003B4F;
 background-color: null;
 font-style: inherit;">=~</span> <span class="va" style="color: #111111;
 background-color: null;
@@ -2128,12 +2220,12 @@ background-color: null;
 font-style: inherit;">deny</span> <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"No force-pushes (AGENTS.md, Never)."</span></span>
-<span id="cb8-24">  <span class="kw" style="color: #003B4F;
+<span id="cb8-36">  <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">[[</span> <span class="va" style="color: #111111;
 background-color: null;
-font-style: inherit;">$cmd</span> <span class="ot" style="color: #003B4F;
+font-style: inherit;">$flat</span> <span class="ot" style="color: #003B4F;
 background-color: null;
 font-style: inherit;">=~</span> <span class="va" style="color: #111111;
 background-color: null;
@@ -2148,7 +2240,7 @@ background-color: null;
 font-style: inherit;">deny</span> <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"Open a PR; never push to main (AGENTS.md)."</span></span>
-<span id="cb8-25">  <span class="kw" style="color: #003B4F;
+<span id="cb8-37">  <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">[[</span> <span class="va" style="color: #111111;
@@ -2172,19 +2264,19 @@ font-style: inherit;">]]</span> <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">&amp;&amp;</span></span>
-<span id="cb8-26">    <span class="ex" style="color: null;
+<span id="cb8-38">    <span class="ex" style="color: null;
 background-color: null;
 font-style: inherit;">deny</span> <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"On main: push from a feature branch (AGENTS.md)."</span></span>
-<span id="cb8-27"><span class="cf" style="color: #003B4F;
+<span id="cb8-39"><span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">fi</span></span>
-<span id="cb8-28"><span class="bu" style="color: null;
+<span id="cb8-40"><span class="bu" style="color: null;
 background-color: null;
 font-style: inherit;">exit</span> 0</span></code></pre></div>
-<p>A <code>PreToolUse</code> hook that exits with code 2 blocks the call, and Claude sees the message on standard error. Fed 21 sample commands, from a feature branch and from <code>main</code>, it denies <code>pip install requests</code>, <code>uv run alembic downgrade -1</code>, <code>git push origin main</code>, <code>git push origin HEAD:refs/heads/main</code>, <code>git push origin +main</code>, <code>git push -uf origin feat/x</code>, <code>git push --force-with-lease origin feat/x</code>, and a bare <code>git push</code> while <code>main</code> is checked out. It allows <code>uv add requests</code>, <code>git push -u origin feat/late-fees</code>, <code>git push origin main-hotfix</code> and <code>uv run pytest tests/unit -q</code>. It also blocks when <code>jq</code> is missing or the hook’s input does not parse.</p>
+<p>Fed 35 sample commands, from a feature branch and from <code>main</code>, it denies <code>pip3 install requests</code>, <code>python -m pip install requests</code>, <code>uv run alembic downgrade -1</code>, <code>git push origin main</code>, <code>git push origin 'main'</code>, <code>git -C . push origin main</code>, <code>git push origin HEAD:refs/heads/main</code>, <code>git push origin +main</code>, <code>git push -uf origin feat/x</code>, <code>git push --force-with-lease origin feat/x</code>, and a bare <code>git push</code> while <code>main</code> is checked out. It allows <code>uv add requests</code>, <code>git push -u origin feat/late-fees</code>, <code>git push origin main-hotfix</code>, <code>uv run pytest tests/unit -q</code>, and <code>git commit -m 'push the late-fee fix'</code> on either branch. It also blocks when <code>jq</code> is missing or the hook’s input does not parse.</p>
 </section>
 <section id="pull-request-template-and-codeowners" class="level3" data-number="9.4">
 <h3 data-number="9.4" class="anchored" data-anchor-id="pull-request-template-and-codeowners"><span class="header-section-number">9.4</span> Pull request template and CODEOWNERS</h3>
@@ -2230,6 +2322,7 @@ font-style: inherit;">     change, and the gate does not count their approval. -
 <pre class="text"><code># The files that set the bar, and the code that is expensive to get wrong.
 # No catch-all line: a `*` rule would put a person on every PR.
 /.github/                 @acme/platform
+/.claude/                 @acme/platform
 /scripts/risk_gate.py     @acme/platform
 /AGENTS.md                @acme/invoices-leads
 /CLAUDE.md                @acme/invoices-leads
@@ -2388,7 +2481,7 @@ font-style: inherit;">-</span><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;"> </span><span class="st" style="color: #20794D;
 background-color: null;
-font-style: inherit;">"scripts/risk_gate.py"</span></span>
+font-style: inherit;">".claude/**"</span></span>
 <span id="cb11-19"><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;">  </span><span class="kw" style="color: #003B4F;
@@ -2398,7 +2491,7 @@ font-style: inherit;">-</span><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;"> </span><span class="st" style="color: #20794D;
 background-color: null;
-font-style: inherit;">"migrations/**"</span></span>
+font-style: inherit;">"scripts/risk_gate.py"</span></span>
 <span id="cb11-20"><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;">  </span><span class="kw" style="color: #003B4F;
@@ -2408,7 +2501,7 @@ font-style: inherit;">-</span><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;"> </span><span class="st" style="color: #20794D;
 background-color: null;
-font-style: inherit;">"src/acme/flags.py"</span></span>
+font-style: inherit;">"migrations/**"</span></span>
 <span id="cb11-21"><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;">  </span><span class="kw" style="color: #003B4F;
@@ -2418,7 +2511,7 @@ font-style: inherit;">-</span><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;"> </span><span class="st" style="color: #20794D;
 background-color: null;
-font-style: inherit;">"AGENTS.md"</span></span>
+font-style: inherit;">"src/acme/flags.py"</span></span>
 <span id="cb11-22"><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;">  </span><span class="kw" style="color: #003B4F;
@@ -2428,7 +2521,7 @@ font-style: inherit;">-</span><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;"> </span><span class="st" style="color: #20794D;
 background-color: null;
-font-style: inherit;">"CLAUDE.md"</span></span>
+font-style: inherit;">"AGENTS.md"</span></span>
 <span id="cb11-23"><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;">  </span><span class="kw" style="color: #003B4F;
@@ -2438,7 +2531,7 @@ font-style: inherit;">-</span><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;"> </span><span class="st" style="color: #20794D;
 background-color: null;
-font-style: inherit;">"REVIEW.md"</span></span>
+font-style: inherit;">"CLAUDE.md"</span></span>
 <span id="cb11-24"><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;">  </span><span class="kw" style="color: #003B4F;
@@ -2448,17 +2541,8 @@ font-style: inherit;">-</span><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;"> </span><span class="st" style="color: #20794D;
 background-color: null;
-font-style: inherit;">"*/REVIEW.md"</span></span>
-<span id="cb11-25"></span>
-<span id="cb11-26"><span class="fu" style="color: #4758AB;
-background-color: null;
-font-style: inherit;">two_person</span><span class="kw" style="color: #003B4F;
-background-color: null;
-font-weight: bold;
-font-style: inherit;">:</span><span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">             # always two approvals</span></span>
-<span id="cb11-27"><span class="at" style="color: #657422;
+font-style: inherit;">"REVIEW.md"</span></span>
+<span id="cb11-25"><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;">  </span><span class="kw" style="color: #003B4F;
 background-color: null;
@@ -2467,7 +2551,16 @@ font-style: inherit;">-</span><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;"> </span><span class="st" style="color: #20794D;
 background-color: null;
-font-style: inherit;">"src/acme/billing/**"</span></span>
+font-style: inherit;">"*/REVIEW.md"</span></span>
+<span id="cb11-26"></span>
+<span id="cb11-27"><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">two_person</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">:</span><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">             # always two approvals</span></span>
 <span id="cb11-28"><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;">  </span><span class="kw" style="color: #003B4F;
@@ -2477,7 +2570,7 @@ font-style: inherit;">-</span><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;"> </span><span class="st" style="color: #20794D;
 background-color: null;
-font-style: inherit;">"src/acme/auth/**"</span></span>
+font-style: inherit;">"src/acme/billing/**"</span></span>
 <span id="cb11-29"><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;">  </span><span class="kw" style="color: #003B4F;
@@ -2487,8 +2580,18 @@ font-style: inherit;">-</span><span class="at" style="color: #657422;
 background-color: null;
 font-style: inherit;"> </span><span class="st" style="color: #20794D;
 background-color: null;
+font-style: inherit;">"src/acme/auth/**"</span></span>
+<span id="cb11-30"><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;">  </span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">-</span><span class="at" style="color: #657422;
+background-color: null;
+font-style: inherit;"> </span><span class="st" style="color: #20794D;
+background-color: null;
 font-style: inherit;">"deploy/**"</span></span></code></pre></div>
-<p>The files that set the bar — the tiers, the gate, the reviewer’s instructions, the workflows — are themselves always-human paths, so an agent cannot lower its own bar.</p>
+<p>The files that set the bar — the tiers, the gate, the reviewer’s instructions, the hook, the workflows — are themselves always-human paths, so an agent cannot lower its own bar.</p>
 <p>The classifier’s instructions live in <code>.github/prompts/risk-tier.md</code>:</p>
 <div class="sourceCode" id="cb12" style="background: #f1f3f5;"><pre class="sourceCode markdown code-with-copy"><code class="sourceCode markdown"><span id="cb12-1">Classify the pull request diff on standard input into a risk tier.</span>
 <span id="cb12-2"></span>
@@ -3140,7 +3243,7 @@ font-style: inherit;"> uv run --no-project --with pyyaml python scripts/risk_gat
 <li><strong>Both jobs check out the base branch.</strong> A <code>pull_request</code> workflow otherwise runs on the PR’s own copy of the repository, which would let a PR edit the tiers, the prompt or the gate script that judge it. The workflow file itself still comes from the PR, which is why <code>.github/</code> needs a code owner’s approval.</li>
 <li><strong>Labels are cleared first.</strong> If the classifier fails, the PR is left with no tier, and the gate treats no tier as high.</li>
 <li><strong><code>--bare</code> with a schema.</strong> <code>--bare</code> skips the repository’s hooks, skills and instruction files, and the JSON schema limits the reply to a tier, a yes or no, and a reason. A diff that tries to talk the classifier down still cannot lower the path rules, which the gate applies without asking a model.</li>
-<li><strong>The gate waits for the AI review.</strong> Otherwise a low-tier PR could pass CI in five minutes and merge before a review that averages twenty minutes has posted. The managed service’s check run cannot simply be made a required check: the service reviews pull requests, so it never reports on the merge queue’s temporary branches, and GitHub fails a queued merge whose required check is not reported.</li>
+<li><strong>The gate waits for the AI review.</strong> Otherwise a low-tier PR could pass CI in five minutes and merge before a review that averages twenty minutes has posted. The managed service’s check run cannot simply be made a required check: the service reviews pull requests, so it never reports on the merge queue’s temporary branches. The queue waits for an unreported required check until its status-check timeout, then removes the PR.</li>
 </ul>
 <p>Because the gate wants a review of the head commit, it fits a repository whose <strong>Review runs</strong> setting is <strong>After every push</strong>, the costly setting from Section&nbsp;7. The gate waits up to 50 minutes for that review, then fails. Nothing re-runs it when a late review lands: the events that fire then, <code>check_run</code> and <code>issue_comment</code>, run workflows against the default branch, so their checks would not attach to the PR’s head commit. Re-run the failed gate job by hand once the review is in (<code>gh run rerun &lt;run-id&gt; --failed</code>). On <strong>Once after PR creation</strong>, a comment of <code>@claude review</code> after the last push starts the review, and the same re-run picks it up.</p>
 <p><code>scripts/risk_gate.py</code> does the counting. It is the version that passed the test cases:</p>
@@ -3303,12 +3406,7 @@ font-style: inherit;">""</span>).partition(<span class="st" style="color: #20794
 background-color: null;
 font-style: inherit;">"## Directed by"</span>)[<span class="dv" style="color: #AD0000;
 background-color: null;
-font-style: inherit;">2</span>]</span>
-<span id="cb15-38">    match <span class="op" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;">=</span> re.search(<span class="vs" style="color: #20794D;
-background-color: null;
-font-style: inherit;">r"@([A-Za-z0-9-]+)"</span>, section.split(<span class="st" style="color: #20794D;
+font-style: inherit;">2</span>].split(<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"</span><span class="ch" style="color: #20794D;
 background-color: null;
@@ -3316,8 +3414,24 @@ font-style: inherit;">\n</span><span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">## "</span>)[<span class="dv" style="color: #AD0000;
 background-color: null;
-font-style: inherit;">0</span>])</span>
-<span id="cb15-39">    <span class="cf" style="color: #003B4F;
+font-style: inherit;">0</span>]</span>
+<span id="cb15-38">    section <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> re.sub(<span class="vs" style="color: #20794D;
+background-color: null;
+font-style: inherit;">r"&lt;!--.*?--&gt;"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">""</span>, section, flags<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>re.S)  <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># the placeholder</span></span>
+<span id="cb15-39">    match <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> re.search(<span class="vs" style="color: #20794D;
+background-color: null;
+font-style: inherit;">r"@([A-Za-z0-9-]+)"</span>, section)</span>
+<span id="cb15-40">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">return</span> match.group(<span class="dv" style="color: #AD0000;
@@ -3331,18 +3445,18 @@ font-weight: bold;
 font-style: inherit;">else</span> <span class="va" style="color: #111111;
 background-color: null;
 font-style: inherit;">None</span></span>
-<span id="cb15-40"></span>
 <span id="cb15-41"></span>
-<span id="cb15-42"><span class="kw" style="color: #003B4F;
+<span id="cb15-42"></span>
+<span id="cb15-43"><span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">def</span> required_approvals(cfg, tier, author, files, needs_human):</span>
-<span id="cb15-43">    need <span class="op" style="color: #5E5E5E;
+<span id="cb15-44">    need <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> cfg[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"approvals"</span>][tier]</span>
-<span id="cb15-44">    <span class="cf" style="color: #003B4F;
+<span id="cb15-45">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">if</span> author <span class="kw" style="color: #003B4F;
@@ -3354,14 +3468,14 @@ font-weight: bold;
 font-style: inherit;">in</span> cfg[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"trusted_authors"</span>]:</span>
-<span id="cb15-45">        need <span class="op" style="color: #5E5E5E;
+<span id="cb15-46">        need <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> <span class="bu" style="color: null;
 background-color: null;
 font-style: inherit;">max</span>(need, cfg[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"untrusted_minimum"</span>])</span>
-<span id="cb15-46">    <span class="cf" style="color: #003B4F;
+<span id="cb15-47">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">if</span> needs_human <span class="kw" style="color: #003B4F;
@@ -3370,40 +3484,40 @@ font-weight: bold;
 font-style: inherit;">or</span> touches(files, cfg[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"always_human"</span>]):</span>
-<span id="cb15-47">        need <span class="op" style="color: #5E5E5E;
+<span id="cb15-48">        need <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> <span class="bu" style="color: null;
 background-color: null;
 font-style: inherit;">max</span>(need, <span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">1</span>)</span>
-<span id="cb15-48">    <span class="cf" style="color: #003B4F;
+<span id="cb15-49">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">if</span> touches(files, cfg[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"two_person"</span>]):</span>
-<span id="cb15-49">        need <span class="op" style="color: #5E5E5E;
+<span id="cb15-50">        need <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> <span class="bu" style="color: null;
 background-color: null;
 font-style: inherit;">max</span>(need, <span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">2</span>)</span>
-<span id="cb15-50">    <span class="cf" style="color: #003B4F;
+<span id="cb15-51">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">return</span> need</span>
-<span id="cb15-51"></span>
 <span id="cb15-52"></span>
-<span id="cb15-53"><span class="kw" style="color: #003B4F;
+<span id="cb15-53"></span>
+<span id="cb15-54"><span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">def</span> human_approvals(reviews, skip, head_sha):</span>
-<span id="cb15-54">    latest <span class="op" style="color: #5E5E5E;
+<span id="cb15-55">    latest <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> {}</span>
-<span id="cb15-55">    <span class="cf" style="color: #003B4F;
+<span id="cb15-56">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">for</span> r <span class="kw" style="color: #003B4F;
@@ -3412,7 +3526,7 @@ font-weight: bold;
 font-style: inherit;">in</span> reviews:  <span class="co" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;"># the API lists reviews oldest first</span></span>
-<span id="cb15-56">        <span class="cf" style="color: #003B4F;
+<span id="cb15-57">        <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">if</span> r[<span class="st" style="color: #20794D;
@@ -3430,11 +3544,11 @@ font-style: inherit;">"user"</span>] <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">in</span> skip:</span>
-<span id="cb15-57">            <span class="cf" style="color: #003B4F;
+<span id="cb15-58">            <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">continue</span></span>
-<span id="cb15-58">        <span class="cf" style="color: #003B4F;
+<span id="cb15-59">        <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">if</span> r[<span class="st" style="color: #20794D;
@@ -3449,24 +3563,24 @@ background-color: null;
 font-style: inherit;">"CHANGES_REQUESTED"</span>, <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"DISMISSED"</span>):</span>
-<span id="cb15-59">            latest[r[<span class="st" style="color: #20794D;
+<span id="cb15-60">            latest[r[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"user"</span>]] <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> r</span>
-<span id="cb15-60">    <span class="cf" style="color: #003B4F;
+<span id="cb15-61">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">return</span> {</span>
-<span id="cb15-61">        user</span>
-<span id="cb15-62">        <span class="cf" style="color: #003B4F;
+<span id="cb15-62">        user</span>
+<span id="cb15-63">        <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">for</span> user, r <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">in</span> latest.items()</span>
-<span id="cb15-63">        <span class="cf" style="color: #003B4F;
+<span id="cb15-64">        <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">if</span> r[<span class="st" style="color: #20794D;
@@ -3483,14 +3597,14 @@ background-color: null;
 font-style: inherit;">"commit"</span>] <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">==</span> head_sha</span>
-<span id="cb15-64">    }</span>
-<span id="cb15-65"></span>
+<span id="cb15-65">    }</span>
 <span id="cb15-66"></span>
-<span id="cb15-67"><span class="kw" style="color: #003B4F;
+<span id="cb15-67"></span>
+<span id="cb15-68"><span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">def</span> ai_review_state(checks, name):</span>
-<span id="cb15-68">    runs <span class="op" style="color: #5E5E5E;
+<span id="cb15-69">    runs <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> [c <span class="cf" style="color: #003B4F;
 background-color: null;
@@ -3506,22 +3620,30 @@ background-color: null;
 font-style: inherit;">"name"</span>] <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">==</span> name]</span>
-<span id="cb15-69">    runs.sort(key<span class="op" style="color: #5E5E5E;
+<span id="cb15-70">    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># Newest last. A queued run has no start time yet, and is the newest.</span></span>
+<span id="cb15-71">    runs.sort(key<span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span><span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
-font-style: inherit;">lambda</span> c: c[<span class="st" style="color: #20794D;
+font-style: inherit;">lambda</span> c: (c[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"started"</span>] <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">is</span> <span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">None</span>, c[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"started"</span>] <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">or</span> <span class="st" style="color: #20794D;
 background-color: null;
-font-style: inherit;">""</span>)  <span class="co" style="color: #5E5E5E;
-background-color: null;
-font-style: inherit;"># a queued run has no start</span></span>
-<span id="cb15-70">    <span class="cf" style="color: #003B4F;
+font-style: inherit;">""</span>))</span>
+<span id="cb15-72">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">if</span> <span class="kw" style="color: #003B4F;
@@ -3541,20 +3663,20 @@ background-color: null;
 font-style: inherit;">!=</span> <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"completed"</span>:</span>
-<span id="cb15-71">        <span class="cf" style="color: #003B4F;
+<span id="cb15-73">        <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">return</span> <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"pending"</span></span>
-<span id="cb15-72">    last <span class="op" style="color: #5E5E5E;
+<span id="cb15-74">    last <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> runs[<span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">-</span><span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">1</span>]</span>
-<span id="cb15-73">    title <span class="op" style="color: #5E5E5E;
+<span id="cb15-75">    title <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> (last[<span class="st" style="color: #20794D;
 background-color: null;
@@ -3564,7 +3686,7 @@ font-weight: bold;
 font-style: inherit;">or</span> <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">""</span>).lower()</span>
-<span id="cb15-74">    <span class="cf" style="color: #003B4F;
+<span id="cb15-76">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">if</span> last[<span class="st" style="color: #20794D;
@@ -3576,7 +3698,7 @@ font-style: inherit;">not</span> <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">in</span> GOOD_CONCLUSIONS:</span>
-<span id="cb15-75">        <span class="cf" style="color: #003B4F;
+<span id="cb15-77">        <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">return</span> <span class="st" style="color: #20794D;
@@ -3584,7 +3706,7 @@ background-color: null;
 font-style: inherit;">"failed"</span>  <span class="co" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;"># an Actions job that failed or was cancelled</span></span>
-<span id="cb15-76">    <span class="cf" style="color: #003B4F;
+<span id="cb15-78">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">return</span> <span class="st" style="color: #20794D;
@@ -3609,25 +3731,25 @@ font-weight: bold;
 font-style: inherit;">else</span> <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"done"</span></span>
-<span id="cb15-77"></span>
-<span id="cb15-78"></span>
-<span id="cb15-79"><span class="kw" style="color: #003B4F;
+<span id="cb15-79"></span>
+<span id="cb15-80"></span>
+<span id="cb15-81"><span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">def</span> main():</span>
-<span id="cb15-80">    repo, pr <span class="op" style="color: #5E5E5E;
+<span id="cb15-82">    repo, pr <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> os.environ[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"GITHUB_REPOSITORY"</span>], os.environ[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"PR"</span>]</span>
-<span id="cb15-81">    cfg <span class="op" style="color: #5E5E5E;
+<span id="cb15-83">    cfg <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> yaml.safe_load(Path(<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">".github/risk-tiers.yml"</span>).read_text())</span>
-<span id="cb15-82">    info <span class="op" style="color: #5E5E5E;
+<span id="cb15-84">    info <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> json.loads(gh(<span class="st" style="color: #20794D;
 background-color: null;
@@ -3637,8 +3759,8 @@ font-style: inherit;">"view"</span>, pr, <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"--json"</span>, <span class="st" style="color: #20794D;
 background-color: null;
-font-style: inherit;">"author,body,headRefOid,labels"</span>))</span>
-<span id="cb15-83">    head, author <span class="op" style="color: #5E5E5E;
+font-style: inherit;">"author,body,headRefOid"</span>))</span>
+<span id="cb15-85">    head, author <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> info[<span class="st" style="color: #20794D;
 background-color: null;
@@ -3647,12 +3769,12 @@ background-color: null;
 font-style: inherit;">"author"</span>][<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"login"</span>]</span>
-<span id="cb15-84">    director <span class="op" style="color: #5E5E5E;
+<span id="cb15-86">    director <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> directed_by(info[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"body"</span>])</span>
-<span id="cb15-85">    <span class="cf" style="color: #003B4F;
+<span id="cb15-87">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">if</span> info[<span class="st" style="color: #20794D;
@@ -3666,16 +3788,16 @@ font-style: inherit;">and</span> <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">not</span> director:</span>
-<span id="cb15-86">        sys.exit(<span class="st" style="color: #20794D;
+<span id="cb15-88">        sys.exit(<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"An agent's PR must name a person under 'Directed by'."</span>)</span>
-<span id="cb15-87"></span>
-<span id="cb15-88">    name <span class="op" style="color: #5E5E5E;
+<span id="cb15-89"></span>
+<span id="cb15-90">    name <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> cfg[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"ai_review_check"</span>]</span>
-<span id="cb15-89">    <span class="cf" style="color: #003B4F;
+<span id="cb15-91">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">for</span> _ <span class="kw" style="color: #003B4F;
@@ -3688,17 +3810,17 @@ background-color: null;
 font-style: inherit;">100</span>):  <span class="co" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;"># Code Review averages about 20 minutes</span></span>
-<span id="cb15-90">        checks <span class="op" style="color: #5E5E5E;
+<span id="cb15-92">        checks <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> jsonl(</span>
-<span id="cb15-91">            gh(</span>
-<span id="cb15-92">                <span class="st" style="color: #20794D;
+<span id="cb15-93">            gh(</span>
+<span id="cb15-94">                <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"api"</span>,</span>
-<span id="cb15-93">                <span class="st" style="color: #20794D;
+<span id="cb15-95">                <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"--paginate"</span>,</span>
-<span id="cb15-94">                <span class="ss" style="color: #20794D;
+<span id="cb15-96">                <span class="ss" style="color: #20794D;
 background-color: null;
 font-style: inherit;">f"repos/</span><span class="sc" style="color: #5E5E5E;
 background-color: null;
@@ -3719,21 +3841,21 @@ background-color: null;
 font-style: inherit;">}</span><span class="ss" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"</span>,</span>
-<span id="cb15-95">                <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">"--jq"</span>,</span>
-<span id="cb15-96">                <span class="st" style="color: #20794D;
-background-color: null;
-font-style: inherit;">".check_runs[] | {name, status, conclusion,"</span></span>
 <span id="cb15-97">                <span class="st" style="color: #20794D;
 background-color: null;
+font-style: inherit;">"--jq"</span>,</span>
+<span id="cb15-98">                <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">".check_runs[] | {name, status, conclusion,"</span></span>
+<span id="cb15-99">                <span class="st" style="color: #20794D;
+background-color: null;
 font-style: inherit;">" started: .started_at, title: .output.title}"</span>,</span>
-<span id="cb15-98">            )</span>
-<span id="cb15-99">        )</span>
-<span id="cb15-100">        state <span class="op" style="color: #5E5E5E;
+<span id="cb15-100">            )</span>
+<span id="cb15-101">        )</span>
+<span id="cb15-102">        state <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> ai_review_state(checks, name)</span>
-<span id="cb15-101">        <span class="cf" style="color: #003B4F;
+<span id="cb15-103">        <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">if</span> state <span class="op" style="color: #5E5E5E;
@@ -3741,14 +3863,14 @@ background-color: null;
 font-style: inherit;">!=</span> <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"pending"</span>:</span>
-<span id="cb15-102">            <span class="cf" style="color: #003B4F;
+<span id="cb15-104">            <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">break</span></span>
-<span id="cb15-103">        time.sleep(<span class="dv" style="color: #AD0000;
+<span id="cb15-105">        time.sleep(<span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">30</span>)</span>
-<span id="cb15-104">    <span class="cf" style="color: #003B4F;
+<span id="cb15-106">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">if</span> state <span class="op" style="color: #5E5E5E;
@@ -3756,7 +3878,7 @@ background-color: null;
 font-style: inherit;">!=</span> <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"done"</span>:</span>
-<span id="cb15-105">        sys.exit(<span class="ss" style="color: #20794D;
+<span id="cb15-107">        sys.exit(<span class="ss" style="color: #20794D;
 background-color: null;
 font-style: inherit;">f"No finished AI review on </span><span class="sc" style="color: #5E5E5E;
 background-color: null;
@@ -3773,11 +3895,11 @@ background-color: null;
 font-style: inherit;">}</span><span class="ss" style="color: #20794D;
 background-color: null;
 font-style: inherit;">)."</span>)</span>
-<span id="cb15-106"></span>
-<span id="cb15-107">    files <span class="op" style="color: #5E5E5E;
+<span id="cb15-108"></span>
+<span id="cb15-109">    files <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> gh(</span>
-<span id="cb15-108">        <span class="st" style="color: #20794D;
+<span id="cb15-110">        <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"api"</span>, <span class="st" style="color: #20794D;
 background-color: null;
@@ -3800,18 +3922,18 @@ background-color: null;
 font-style: inherit;">"--jq"</span>, <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">".[].filename"</span></span>
-<span id="cb15-109">    ).splitlines()</span>
-<span id="cb15-110">    reviews <span class="op" style="color: #5E5E5E;
+<span id="cb15-111">    ).splitlines()</span>
+<span id="cb15-112">    reviews <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> jsonl(</span>
-<span id="cb15-111">        gh(</span>
-<span id="cb15-112">            <span class="st" style="color: #20794D;
+<span id="cb15-113">        gh(</span>
+<span id="cb15-114">            <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"api"</span>,</span>
-<span id="cb15-113">            <span class="st" style="color: #20794D;
+<span id="cb15-115">            <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"--paginate"</span>,</span>
-<span id="cb15-114">            <span class="ss" style="color: #20794D;
+<span id="cb15-116">            <span class="ss" style="color: #20794D;
 background-color: null;
 font-style: inherit;">f"repos/</span><span class="sc" style="color: #5E5E5E;
 background-color: null;
@@ -3826,16 +3948,55 @@ background-color: null;
 font-style: inherit;">}</span><span class="ss" style="color: #20794D;
 background-color: null;
 font-style: inherit;">/reviews"</span>,</span>
-<span id="cb15-115">            <span class="st" style="color: #20794D;
+<span id="cb15-117">            <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"--jq"</span>,</span>
-<span id="cb15-116">            <span class="st" style="color: #20794D;
+<span id="cb15-118">            <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">".[] | {user: .user.login, type: .user.type, state, commit: .commit_id}"</span>,</span>
-<span id="cb15-117">        )</span>
-<span id="cb15-118">    )</span>
-<span id="cb15-119"></span>
-<span id="cb15-120">    labels <span class="op" style="color: #5E5E5E;
+<span id="cb15-119">        )</span>
+<span id="cb15-120">    )</span>
+<span id="cb15-121"></span>
+<span id="cb15-122">    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># Labels are re-read after the wait: a gate started by a review can begin</span></span>
+<span id="cb15-123">    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># while a push's classifier is still labelling. A push during the wait</span></span>
+<span id="cb15-124">    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># starts its own gate, so this one stands down.</span></span>
+<span id="cb15-125">    now <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> json.loads(gh(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"pr"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"view"</span>, pr, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"--json"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"headRefOid,labels"</span>))</span>
+<span id="cb15-126">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">if</span> now[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"headRefOid"</span>] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">!=</span> head:</span>
+<span id="cb15-127">        sys.exit(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"Head moved from </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>head[:<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">7</span>]<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;"> during the wait."</span>)</span>
+<span id="cb15-128">    labels <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> {label[<span class="st" style="color: #20794D;
 background-color: null;
@@ -3845,10 +4006,10 @@ font-weight: bold;
 font-style: inherit;">for</span> label <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
-font-style: inherit;">in</span> info[<span class="st" style="color: #20794D;
+font-style: inherit;">in</span> now[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"labels"</span>]}</span>
-<span id="cb15-121">    tiers <span class="op" style="color: #5E5E5E;
+<span id="cb15-129">    tiers <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> [t <span class="cf" style="color: #003B4F;
 background-color: null;
@@ -3877,7 +4038,7 @@ font-style: inherit;">"</span> <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">in</span> labels]</span>
-<span id="cb15-122">    tier <span class="op" style="color: #5E5E5E;
+<span id="cb15-130">    tier <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> tiers[<span class="dv" style="color: #AD0000;
 background-color: null;
@@ -3892,7 +4053,7 @@ background-color: null;
 font-style: inherit;">"high"</span>  <span class="co" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;"># no label: fail closed</span></span>
-<span id="cb15-123">    need <span class="op" style="color: #5E5E5E;
+<span id="cb15-131">    need <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> required_approvals(cfg, tier, author, files, <span class="st" style="color: #20794D;
 background-color: null;
@@ -3900,14 +4061,14 @@ font-style: inherit;">"needs-human"</span> <span class="kw" style="color: #003B4
 background-color: null;
 font-weight: bold;
 font-style: inherit;">in</span> labels)</span>
-<span id="cb15-124">    have <span class="op" style="color: #5E5E5E;
+<span id="cb15-132">    have <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> human_approvals(reviews, {author, director} <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">-</span> {<span class="va" style="color: #111111;
 background-color: null;
 font-style: inherit;">None</span>}, head)</span>
-<span id="cb15-125">    <span class="bu" style="color: null;
+<span id="cb15-133">    <span class="bu" style="color: null;
 background-color: null;
 font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
 background-color: null;
@@ -3940,7 +4101,7 @@ background-color: null;
 font-style: inherit;">}</span><span class="ss" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"</span>)</span>
-<span id="cb15-126">    sys.exit(<span class="dv" style="color: #AD0000;
+<span id="cb15-134">    sys.exit(<span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">0</span> <span class="cf" style="color: #003B4F;
 background-color: null;
@@ -3955,9 +4116,9 @@ font-weight: bold;
 font-style: inherit;">else</span> <span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">1</span>)</span>
-<span id="cb15-127"></span>
-<span id="cb15-128"></span>
-<span id="cb15-129"><span class="cf" style="color: #003B4F;
+<span id="cb15-135"></span>
+<span id="cb15-136"></span>
+<span id="cb15-137"><span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">if</span> <span class="va" style="color: #111111;
@@ -3967,7 +4128,7 @@ background-color: null;
 font-style: inherit;">==</span> <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"__main__"</span>:</span>
-<span id="cb15-130">    main()</span></code></pre></div>
+<span id="cb15-138">    main()</span></code></pre></div>
 <p>Each approval rule from the risk-tier layer maps to a line of the example:</p>
 <div id="tbl-rules" class="quarto-float quarto-figure quarto-figure-center anchored">
 <figure class="quarto-float quarto-float-tbl figure">
@@ -4024,7 +4185,7 @@ Table&nbsp;12: Where each approval rule from the source lands in the worked exam
 </section>
 <section id="ci-and-security-workflows" class="level3" data-number="9.6">
 <h3 data-number="9.6" class="anchored" data-anchor-id="ci-and-security-workflows"><span class="header-section-number">9.6</span> CI and security workflows</h3>
-<p><code>.github/workflows/ci.yml</code> runs on pull requests and on merge-queue commits. A required check that never reports on <code>merge_group</code> stalls the queue.</p>
+<p><code>.github/workflows/ci.yml</code> runs on pull requests and on merge-queue commits. A required check that never reports on <code>merge_group</code> holds each queued PR until the queue’s status-check timeout, which then removes it.</p>
 <div class="sourceCode" id="cb16" style="background: #f1f3f5;"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb16-1"><span class="fu" style="color: #4758AB;
 background-color: null;
 font-style: inherit;">name</span><span class="kw" style="color: #003B4F;
@@ -4786,8 +4947,8 @@ font-style: inherit;"> </span><span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">'--allowedTools "mcp__github_inline_comment__create_inline_comment"'</span></span></code></pre></div>
 </section>
-<section id="branch-protection" class="level3" data-number="9.7">
-<h3 data-number="9.7" class="anchored" data-anchor-id="branch-protection"><span class="header-section-number">9.7</span> Branch protection</h3>
+<section id="sec-protection" class="level3" data-number="9.7">
+<h3 data-number="9.7" class="anchored" data-anchor-id="sec-protection"><span class="header-section-number">9.7</span> Branch protection</h3>
 <p>A classic branch protection rule on <code>main</code>, which also lets the Code Review service honour <code>REVIEW.md</code>:</p>
 <ul>
 <li><strong>Require a pull request before merging</strong>, with no fixed approval count; the risk gate does the counting.</li>
@@ -4982,6 +5143,18 @@ font-style: inherit;">"late fee charged on the invoice total, not the remaining 
 background-color: null;
 font-style: inherit;">,</span> <span class="dt" style="color: #AD0000;
 background-color: null;
+font-style: inherit;">"keywords"</span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">:</span> <span class="ot" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">[</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"balance"</span><span class="ot" style="color: #003B4F;
+background-color: null;
+font-style: inherit;">]</span><span class="fu" style="color: #4758AB;
+background-color: null;
+font-style: inherit;">,</span> <span class="dt" style="color: #AD0000;
+background-color: null;
 font-style: inherit;">"confirmed_by"</span><span class="fu" style="color: #4758AB;
 background-color: null;
 font-style: inherit;">:</span> <span class="st" style="color: #20794D;
@@ -4989,7 +5162,7 @@ background-color: null;
 font-style: inherit;">"dee-acme"</span><span class="fu" style="color: #4758AB;
 background-color: null;
 font-style: inherit;">}</span></span></code></pre></div>
-<p><code>evals/score_reviewer.py</code> re-runs the reviewer on each case and counts a case as caught when a finding cites the right file within five lines of the confirmed bug:</p>
+<p><code>evals/score_reviewer.py</code> re-runs the reviewer on each case, in a separate worktree so the eval repository stays where it is. A case counts as caught when one finding both cites the right file within five lines of the confirmed bug and uses one of the case’s keywords. A finding runs from a <code>file:line</code> citation to the next citation or blank line, the shape of the review output in the walkthrough. Location alone is not enough: the walkthrough’s double-charge finding sits three lines from <code>INC-0142</code> and is about a different bug.</p>
 <div class="sourceCode" id="cb21" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><span class="co" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">"""Score the reviewer against past incidents.</span></span>
@@ -5012,55 +5185,112 @@ background-color: null;
 font-style: inherit;">import</span> subprocess</span>
 <span id="cb21-9"><span class="im" style="color: #00769E;
 background-color: null;
+font-style: inherit;">import</span> sys</span>
+<span id="cb21-10"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> tempfile</span>
+<span id="cb21-11"><span class="im" style="color: #00769E;
+background-color: null;
 font-style: inherit;">from</span> pathlib <span class="im" style="color: #00769E;
 background-color: null;
 font-style: inherit;">import</span> Path</span>
-<span id="cb21-10"></span>
-<span id="cb21-11">CITE <span class="op" style="color: #5E5E5E;
+<span id="cb21-12"></span>
+<span id="cb21-13">CITE <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> re.<span class="bu" style="color: null;
 background-color: null;
 font-style: inherit;">compile</span>(<span class="vs" style="color: #20794D;
 background-color: null;
-font-style: inherit;">r"([\w./-]+\.\w+):(\d+)"</span>)</span>
-<span id="cb21-12">WINDOW <span class="op" style="color: #5E5E5E;
+font-style: inherit;">r"(?&lt;![\w./-])([\w./-]+\.\w+):(\d+)"</span>)</span>
+<span id="cb21-14">WINDOW <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> <span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">5</span>  <span class="co" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;"># a finding within five lines of the confirmed bug counts</span></span>
-<span id="cb21-13"></span>
-<span id="cb21-14"></span>
-<span id="cb21-15"><span class="kw" style="color: #003B4F;
+<span id="cb21-15"></span>
+<span id="cb21-16"></span>
+<span id="cb21-17"><span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
-font-style: inherit;">def</span> cited(text):</span>
-<span id="cb21-16">    <span class="cf" style="color: #003B4F;
+font-style: inherit;">def</span> findings(text):</span>
+<span id="cb21-18">    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">"""One finding per file:line citation, up to the next citation or blank line."""</span></span>
+<span id="cb21-19">    starts <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> [m.start() <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
-font-style: inherit;">return</span> {(path, <span class="bu" style="color: null;
-background-color: null;
-font-style: inherit;">int</span>(line)) <span class="cf" style="color: #003B4F;
+font-style: inherit;">for</span> m <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
-font-style: inherit;">for</span> path, line <span class="kw" style="color: #003B4F;
+font-style: inherit;">in</span> CITE.finditer(text)]</span>
+<span id="cb21-20">    chunks <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> [text[a:b] <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
-font-style: inherit;">in</span> CITE.findall(text)}</span>
-<span id="cb21-17"></span>
-<span id="cb21-18"></span>
-<span id="cb21-19"><span class="kw" style="color: #003B4F;
+font-style: inherit;">for</span> a, b <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">zip</span>(starts, [<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">*</span>starts[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>:], <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">len</span>(text)])]</span>
+<span id="cb21-21">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">return</span> [re.split(<span class="vs" style="color: #20794D;
+background-color: null;
+font-style: inherit;">r"\n\s*\n"</span>, chunk)[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>] <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> chunk <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> chunks]</span>
+<span id="cb21-22"></span>
+<span id="cb21-23"></span>
+<span id="cb21-24"><span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">def</span> caught(case, text):</span>
-<span id="cb21-20">    <span class="cf" style="color: #003B4F;
+<span id="cb21-25">    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">"""True when one finding cites the bug's location and names the bug."""</span></span>
+<span id="cb21-26">    words <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> [w.lower() <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
-font-style: inherit;">return</span> <span class="bu" style="color: null;
+font-style: inherit;">for</span> w <span class="kw" style="color: #003B4F;
 background-color: null;
-font-style: inherit;">any</span>(</span>
-<span id="cb21-21">        path <span class="op" style="color: #5E5E5E;
+font-weight: bold;
+font-style: inherit;">in</span> case[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"keywords"</span>]]</span>
+<span id="cb21-27">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> finding <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> findings(text):</span>
+<span id="cb21-28">        path, line <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> CITE.match(finding).groups()</span>
+<span id="cb21-29">        near <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> path <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">==</span> case[<span class="st" style="color: #20794D;
 background-color: null;
@@ -5069,41 +5299,93 @@ background-color: null;
 font-weight: bold;
 font-style: inherit;">and</span> <span class="bu" style="color: null;
 background-color: null;
-font-style: inherit;">abs</span>(line <span class="op" style="color: #5E5E5E;
+font-style: inherit;">abs</span>(<span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">int</span>(line) <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">-</span> case[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"line"</span>]) <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">&lt;=</span> WINDOW</span>
-<span id="cb21-22">        <span class="cf" style="color: #003B4F;
+<span id="cb21-30">        <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
-font-style: inherit;">for</span> path, line <span class="kw" style="color: #003B4F;
+font-style: inherit;">if</span> near <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
-font-style: inherit;">in</span> cited(text)</span>
-<span id="cb21-23">    )</span>
-<span id="cb21-24"></span>
-<span id="cb21-25"></span>
-<span id="cb21-26"><span class="kw" style="color: #003B4F;
+font-style: inherit;">and</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">any</span>(w <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> finding.lower() <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> w <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> words):</span>
+<span id="cb21-31">            <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">return</span> <span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">True</span></span>
+<span id="cb21-32">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">return</span> <span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">False</span></span>
+<span id="cb21-33"></span>
+<span id="cb21-34"></span>
+<span id="cb21-35"><span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">def</span> review(case):</span>
-<span id="cb21-27">    subprocess.run([<span class="st" style="color: #20794D;
+<span id="cb21-36">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">with</span> tempfile.TemporaryDirectory() <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">as</span> tmp:</span>
+<span id="cb21-37">        tree <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> Path(tmp) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">/</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"tree"</span>  <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># a separate checkout leaves this one alone</span></span>
+<span id="cb21-38">        git <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> [<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"git"</span>, <span class="st" style="color: #20794D;
 background-color: null;
-font-style: inherit;">"checkout"</span>, <span class="st" style="color: #20794D;
+font-style: inherit;">"worktree"</span>]</span>
+<span id="cb21-39">        subprocess.run([<span class="op" style="color: #5E5E5E;
 background-color: null;
-font-style: inherit;">"-q"</span>, case[<span class="st" style="color: #20794D;
+font-style: inherit;">*</span>git, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"add"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"-q"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"--detach"</span>, tree, case[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"head"</span>]], check<span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span><span class="va" style="color: #111111;
 background-color: null;
 font-style: inherit;">True</span>)</span>
-<span id="cb21-28">    prompt <span class="op" style="color: #5E5E5E;
+<span id="cb21-40">        <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">try</span>:</span>
+<span id="cb21-41">            prompt <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> <span class="ss" style="color: #20794D;
 background-color: null;
@@ -5124,10 +5406,10 @@ background-color: null;
 font-style: inherit;">}</span><span class="ss" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"</span></span>
-<span id="cb21-29">    run <span class="op" style="color: #5E5E5E;
+<span id="cb21-42">            run <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> subprocess.run(</span>
-<span id="cb21-30">        [<span class="st" style="color: #20794D;
+<span id="cb21-43">                [<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"claude"</span>, <span class="st" style="color: #20794D;
 background-color: null;
@@ -5136,40 +5418,57 @@ background-color: null;
 font-style: inherit;">"--output-format"</span>, <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"json"</span>],</span>
-<span id="cb21-31">        capture_output<span class="op" style="color: #5E5E5E;
+<span id="cb21-44">                capture_output<span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span><span class="va" style="color: #111111;
 background-color: null;
 font-style: inherit;">True</span>,</span>
-<span id="cb21-32">        text<span class="op" style="color: #5E5E5E;
+<span id="cb21-45">                text<span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span><span class="va" style="color: #111111;
 background-color: null;
 font-style: inherit;">True</span>,</span>
-<span id="cb21-33">        check<span class="op" style="color: #5E5E5E;
+<span id="cb21-46">                check<span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span><span class="va" style="color: #111111;
 background-color: null;
 font-style: inherit;">True</span>,</span>
-<span id="cb21-34">    )</span>
-<span id="cb21-35">    <span class="cf" style="color: #003B4F;
+<span id="cb21-47">                cwd<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>tree,</span>
+<span id="cb21-48">            )</span>
+<span id="cb21-49">        <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">finally</span>:</span>
+<span id="cb21-50">            <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># No check: a failed cleanup must not hide the review's own error.</span></span>
+<span id="cb21-51">            subprocess.run([<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">*</span>git, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"remove"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"--force"</span>, tree])</span>
+<span id="cb21-52">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">return</span> json.loads(run.stdout)[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"result"</span>]</span>
-<span id="cb21-36"></span>
-<span id="cb21-37"></span>
-<span id="cb21-38"><span class="kw" style="color: #003B4F;
+<span id="cb21-53"></span>
+<span id="cb21-54"></span>
+<span id="cb21-55"><span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">def</span> main():</span>
-<span id="cb21-39">    lines <span class="op" style="color: #5E5E5E;
+<span id="cb21-56">    lines <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> Path(<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"evals/incidents.jsonl"</span>).read_text().splitlines()</span>
-<span id="cb21-40">    cases <span class="op" style="color: #5E5E5E;
+<span id="cb21-57">    cases <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> [json.loads(line) <span class="cf" style="color: #003B4F;
 background-color: null;
@@ -5178,7 +5477,51 @@ font-style: inherit;">for</span> line <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">in</span> lines]</span>
-<span id="cb21-41">    missed <span class="op" style="color: #5E5E5E;
+<span id="cb21-58">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">if</span> bad <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">:=</span> [c[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"id"</span>] <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> c <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> cases <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">if</span> <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">not</span> c.get(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"keywords"</span>)]:</span>
+<span id="cb21-59">        sys.exit(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"Cases without keywords can never be caught: </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>bad<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"</span>)</span>
+<span id="cb21-60">    subprocess.run([<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"git"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"worktree"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"prune"</span>], check<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">True</span>)  <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># after a kill</span></span>
+<span id="cb21-61">    missed <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> [c[<span class="st" style="color: #20794D;
 background-color: null;
@@ -5195,7 +5538,7 @@ font-style: inherit;">if</span> <span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">not</span> caught(c, review(c))]</span>
-<span id="cb21-42">    <span class="bu" style="color: null;
+<span id="cb21-62">    <span class="bu" style="color: null;
 background-color: null;
 font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
 background-color: null;
@@ -5226,9 +5569,9 @@ background-color: null;
 font-style: inherit;">}</span><span class="ss" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"</span>)</span>
-<span id="cb21-43"></span>
-<span id="cb21-44"></span>
-<span id="cb21-45"><span class="cf" style="color: #003B4F;
+<span id="cb21-63"></span>
+<span id="cb21-64"></span>
+<span id="cb21-65"><span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">if</span> <span class="va" style="color: #111111;
@@ -5238,7 +5581,7 @@ background-color: null;
 font-style: inherit;">==</span> <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"__main__"</span>:</span>
-<span id="cb21-46">    main()</span></code></pre></div>
+<span id="cb21-66">    main()</span></code></pre></div>
 <p>The script measures recall only. Noise needs the second half of the source’s method: the reviewer run on PRs known to be clean, and a person judging whether each finding would have led to a harmful change.</p>
 </section>
 </section>

@@ -103,8 +103,12 @@ def exact(rates, k):
 
 
 def pct(x):
-    # A rounded "100%" would claim no false positives in any simulated set.
-    return ">99%" if 0.995 <= x < 1 else f"{100 * x:.0f}%"
+    # A rounded "100%" or "0%" would claim the same outcome in every set.
+    if 0.995 <= x < 1:
+        return ">99%"
+    if 0 < x < 0.005:
+        return "<1%"
+    return f"{100 * x:.0f}%"
 
 
 def main():
