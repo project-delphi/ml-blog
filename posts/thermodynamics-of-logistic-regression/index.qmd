@@ -6,6 +6,9 @@ date: "2026-10-27"
 categories: [Machine Learning, Mathematics, Statistics]
 tags: [logistic regression, probit, energy-based models, cross-entropy]
 image: "./cover.png"
+resources:
+  - model.js
+  - widgets.js
 format:
   html:
     toc: true
@@ -60,146 +63,20 @@ The two states are the possible **labels at one fixed input**, not two positions
 
 The display uses ten **synthetic** feature pairs, chosen to put both labels on either side of a linear boundary. They stand in for two standardized measurements in a binary classification task; no observed population or sampling claim is attached. A wrong classification would assign high probability to the opposite state, and the two-state model is a useful controlled example because its energy gap is visible directly.
 
-The colored plane is $E(1,x_1,x_2)=-(w_1x_1+w_2x_2+b)$; the faint horizontal plane is $E(0,x_1,x_2)=0$. Teal points have observed label 1 and sit on the colored plane. Amber points have observed label 0 and sit on the zero-energy plane. Thin stems connect each observed state to its alternative. Lower energy means higher Boltzmann probability. A linear plane has lower-energy **regions**, not local wells or peaks.
+The colored plane is $E(1,x_1,x_2)=-(w_1x_1+w_2x_2+b)$; the faint horizontal plane is $E(0,x_1,x_2)=0$. Class-1 points sit on the colored plane and class-0 points sit on the zero-energy plane. Stems show the gap between the two possible label energies at a fixed input. Lower energy means higher Boltzmann probability. A linear plane has lower-energy **regions**, not local wells or peaks.
 
 1. Increase $w_1$: the colored plane tilts down as $x_1$ increases, lowering the class-1 energy there.
-2. Increase $b$: the entire class-1 plane drops while the class-0 plane stays at zero; $P(1\mid x)$ rises at every point.
-3. Drag to orbit. The intersection of the two planes is the $P(1\mid x)=0.5$ boundary.
+2. Increase $b$: the entire class-1 plane drops while the class-0 plane stays at zero; for $\beta>0$, $P(1\mid x)$ rises at every point.
+3. Change inverse temperature $\beta$: the energy planes stay in place while the probability at the highlighted input becomes sharper or flatter. At $\beta=0$, both labels have probability $0.5$ everywhere, so the drawn zero-gap line is no longer the only equal-probability location.
+4. Drag to orbit. For $\beta>0$, the intersection of the two planes is the $P(1\mid x)=0.5$ boundary.
+
+::: {#thermo-energy}
+:::
 
 ```{=html}
-<style>
-  #thermo-scene { --panel:#101923; --ink:#e7eff4; --muted:#a8b9c5; --teal:#54d4c5; --amber:#ffbf69; --rule:#334655; color:var(--ink); background:var(--panel); border:1px solid var(--rule); border-radius:12px; padding:1rem; margin:1.3rem 0; }
-  #thermo-scene .thermo-layout { display:grid; grid-template-columns:minmax(0, 1fr) 12rem; gap:1rem; }
-  #thermo-scene .thermo-canvas { height:420px; min-width:0; border-radius:8px; overflow:hidden; background:#101923; touch-action:none; }
-  #thermo-scene .thermo-controls { display:grid; align-content:start; gap:1rem; }
-  #thermo-scene label { display:grid; gap:.3rem; font-size:.9rem; }
-  #thermo-scene label span { display:flex; justify-content:space-between; }
-  #thermo-scene input { width:100%; accent-color:var(--teal); }
-  #thermo-scene .thermo-key { color:var(--muted); font-size:.83rem; line-height:1.5; }
-  #thermo-scene .thermo-key i { display:inline-block; width:.7rem; height:.7rem; border-radius:50%; margin-right:.4rem; }
-  #thermo-scene .thermo-output { color:var(--muted); font-variant-numeric:tabular-nums; font-size:.85rem; margin-top:.6rem; }
-  @media (max-width:700px) { #thermo-scene .thermo-layout { grid-template-columns:1fr; } #thermo-scene .thermo-canvas { height:340px; } #thermo-scene .thermo-controls { grid-template-columns:repeat(3,minmax(0,1fr)); gap:.6rem; } #thermo-scene .thermo-key { grid-column:1/-1; } }
-</style>
-<div id="thermo-scene" role="group" aria-label="Interactive three-dimensional binary energy surface">
-  <div class="thermo-layout">
-    <div class="thermo-canvas" aria-label="Orbitable energy surface; use sliders to change weights and bias"></div>
-    <div class="thermo-controls">
-      <label><span><span>w₁</span><output id="thermo-w1-value">0.80</output></span><input id="thermo-w1" type="range" min="-1.5" max="1.5" step="0.05" value="0.8"></label>
-      <label><span><span>w₂</span><output id="thermo-w2-value">-0.65</output></span><input id="thermo-w2" type="range" min="-1.5" max="1.5" step="0.05" value="-0.65"></label>
-      <label><span><span>b</span><output id="thermo-b-value">0.20</output></span><input id="thermo-b" type="range" min="-1.5" max="1.5" step="0.05" value="0.2"></label>
-      <div class="thermo-key"><div><i style="background:#54d4c5"></i>Observed y = 1, on E₁</div><div><i style="background:#ffbf69"></i>Observed y = 0, on E₀</div><div>Gray plane: E₀ = 0</div></div>
-    </div>
-  </div>
-  <div class="thermo-output" id="thermo-readout" aria-live="polite"></div>
-</div>
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js"}}</script>
-<script type="module">
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js';
-import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/controls/OrbitControls.js';
-
-const root = document.getElementById('thermo-scene');
-const mount = root.querySelector('.thermo-canvas');
-const ids = ['w1', 'w2', 'b'];
-const sliders = Object.fromEntries(ids.map(k => [k, root.querySelector('#thermo-' + k)]));
-const values = Object.fromEntries(ids.map(k => [k, root.querySelector('#thermo-' + k + '-value')]));
-const readout = root.querySelector('#thermo-readout');
-const samples = [
-  [-1.55,-1.15,0],[-1.2,.6,0],[-.75,1.35,0],[-.35,-.6,0],[.15,1.55,0],
-  [.55,-1.25,1],[1.15,-.6,1],[1.65,.15,1],[.95,1.35,1],[-.55,-1.65,1]
-];
-const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-mount.appendChild(renderer.domElement);
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(42, 1, .1, 100);
-camera.position.set(6.7, 5.5, 7.2);
-const orbit = new OrbitControls(camera, renderer.domElement);
-orbit.enableDamping = true;
-orbit.target.set(0, 0, 0);
-orbit.minDistance = 5;
-orbit.maxDistance = 20;
-const axes = new THREE.AxesHelper(2.6);
-axes.material.transparent = true;
-axes.material.opacity = .55;
-scene.add(axes);
-const ground = new THREE.GridHelper(4.8, 12, 0x526171, 0x344656);
-ground.position.y = 0;
-scene.add(ground);
-const zero = new THREE.Mesh(new THREE.PlaneGeometry(4.8, 4.8), new THREE.MeshBasicMaterial({color:0x93a6b5, transparent:true, opacity:.12, side:THREE.DoubleSide, depthWrite:false}));
-zero.rotation.x = -Math.PI/2;
-scene.add(zero);
-const planeGeometry = new THREE.PlaneGeometry(4.8, 4.8, 16, 16);
-planeGeometry.rotateX(-Math.PI/2);
-const surface = new THREE.Mesh(planeGeometry, new THREE.MeshBasicMaterial({color:0x54d4c5, transparent:true, opacity:.25, side:THREE.DoubleSide, depthWrite:false}));
-scene.add(surface);
-const gridLines = new THREE.Group();
-scene.add(gridLines);
-const gridObjects=[];
-for (let k=-2.4;k<=2.401;k+=.6) {
-  for (const alongX of [true,false]) {
-    const coords=[];
-    for (let j=-2.4;j<=2.401;j+=.3) coords.push([alongX ? j:k,alongX ? k:j]);
-    const points=coords.map(([x,z]) => new THREE.Vector3(x,0,z));
-    const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineBasicMaterial({color:0x69e5d4,transparent:true,opacity:.58}));
-    gridLines.add(line);
-    gridObjects.push({line,coords});
-  }
-}
-const pointGeometry = new THREE.SphereGeometry(.085, 12, 10);
-const pointObjects = samples.map(([x1,x2,y]) => {
-  const marker = new THREE.Mesh(pointGeometry, new THREE.MeshBasicMaterial({color:y ? 0x54d4c5 : 0xffbf69}));
-  const stemGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
-  const stem = new THREE.Line(stemGeometry, new THREE.LineBasicMaterial({color:y ? 0x54d4c5 : 0xffbf69, transparent:true, opacity:.55}));
-  scene.add(marker, stem);
-  return {x1,x2,y,marker,stem};
-});
-let current = {w1:.8,w2:-.65,b:.2};
-let target = {...current};
-const energy = (x1,x2,p) => -(p.w1*x1 + p.w2*x2 + p.b);
-function redraw(p) {
-  const pos = planeGeometry.attributes.position;
-  for (let i=0; i<pos.count; i++) pos.setY(i, energy(pos.getX(i),pos.getZ(i),p));
-  pos.needsUpdate = true;
-  for (const {line,coords} of gridObjects) {
-    const vertices=line.geometry.attributes.position;
-    coords.forEach(([x,z],i) => vertices.setY(i,energy(x,z,p)));
-    vertices.needsUpdate=true;
-  }
-  for (const o of pointObjects) {
-    const e=energy(o.x1,o.x2,p);
-    o.marker.position.set(o.x1,o.y ? e : 0,o.x2);
-    const stem=o.stem.geometry.attributes.position;
-    stem.setXYZ(0,o.x1,0,o.x2);
-    stem.setXYZ(1,o.x1,e,o.x2);
-    stem.needsUpdate=true;
-  }
-}
-function updateTargets() {
-  for (const k of ids) { target[k]=Number(sliders[k].value); values[k].value=target[k].toFixed(2); }
-  const eta=target.b, probability=1/(1+Math.exp(-eta));
-  readout.textContent=`At x₁ = x₂ = 0: ΔE = ${eta.toFixed(2)}, P(y = 1 | x) = ${probability.toFixed(3)}.`;
-}
-ids.forEach(k => sliders[k].addEventListener('input',updateTargets));
-updateTargets();
-function resize() {
-  const width=mount.clientWidth, height=mount.clientHeight;
-  if (width===0 || height===0) return;
-  renderer.setSize(width,height);
-  camera.aspect=width/height;
-  camera.updateProjectionMatrix();
-}
-const observer=new ResizeObserver(resize);
-observer.observe(mount);
-resize();
-function animate() {
-  requestAnimationFrame(animate);
-  for (const k of ids) current[k]+=(target[k]-current[k])*.12;
-  redraw(current);
-  orbit.update();
-  renderer.render(scene,camera);
-}
-animate();
-</script>
+<script src="../../widget-kit/stage.js"></script>
+<script src="model.js"></script>
+<script src="widgets.js"></script>
 ```
 
 ## Information: likelihood, surprise, and cross-entropy
@@ -234,6 +111,13 @@ $$
 If an input $x$ has repeated observations and an empirical class frequency $q(1\mid x)$, then $H(q,P)=H(q)+\operatorname{KL}(q\|P)$. Its entropy $H(q)$ does not depend on $w,b$, so minimizing cross-entropy and KL still gives the same fit. This is a statement about the observed conditional frequencies; it does not say that an arbitrary finite sample recovers the population distribution.
 
 Training adjusts the gap $\Delta E(x)$ so observed labels occupy lower-energy states more often. The resulting change in $F(x)=-\log Z(x)$ follows from the normalization.
+
+### A loss surface to adjust
+
+The second view plots mean BCE for the same ten synthetic observations over $(w_1,w_2)$ while holding $b$ fixed and using $\beta=1$. Its height is an average surprisal in nats, not a physical energy. The marked point is the current pair of coefficients. Change either weight to move the point on the surface; change $b$ to change the entire surface. These ten labels are linearly separable, so increasing the coefficient magnitudes along a separating direction keeps lowering BCE. Flip the highlighted observation's label to introduce a conflict and bend the loss surface toward a finite minimum. The loss readout also works when the 3D scene cannot load.
+
+::: {#thermo-loss}
+:::
 
 ### Joint distribution of inputs and labels
 
