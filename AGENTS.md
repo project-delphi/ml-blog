@@ -92,7 +92,8 @@ they cannot be re-rendered at all. See [Why `_freeze/` is committed](#why-_freez
 
 ## Rendering
 
-**One post** — `quarto render posts/<slug>/index.qmd`. Narrow blast radius, but it
+**One post** — `make render-post SLUG=<slug>`, which is `quarto render
+posts/<slug>/index.qmd` through the pinned Quarto (below). Narrow blast radius, but it
 **always executes that post's code** (`freeze` is honoured only on a project render), so
 it needs the post's real venv.
 
@@ -103,22 +104,25 @@ source md5 changed.
 - `QUARTO_PYTHON` is not optional. A bare `quarto render .` resolves a Python that
   cannot see `--user`-registered kernelspecs and dies on the first post pinning a named
   kernel — *after* deleting `docs/`. Recover with `git checkout -- docs`.
-- **`make render` is that command** with the guards around it: it refuses on any
-  Quarto but 1.6.40, runs `make check-posts` first (a stale freeze fails there with a
+- **`make render` is that command** with the guards around it: it runs the pinned
+  Quarto and refuses any other version, runs `make check-posts` first (a stale freeze fails there with a
   message, not after `docs/` is gone), sends the log to `render.log`, echoes the tail
   and any error lines, and ends with the deletion check. `make render-post SLUG=<slug>`
   is the single-document render. `make serve` is the static server for `docs/`.
 - Kernelspecs resolve while Quarto *indexes* the project, before it consults `_freeze/`.
   A missing kernel fails the whole render, frozen output or not. On a fresh clone run
   `make kernels-stub` first.
-- **Check `quarto --version` first.** Nothing pins it; this machine has 1.6.40. A newer
-  Quarto rewrites the shared `docs/site_libs/` runtime, which broke older posts'
-  JavaScript once already (`452f1fe` restored it by hand). Churn under `site_libs/` in
-  your diff is a stop sign, not noise.
+- **Don't render with the `quarto` on PATH.** A newer Quarto rewrites the shared
+  `docs/site_libs/` runtime, which broke older posts' JavaScript once already (`452f1fe`
+  restored it by hand), and this machine's system Quarto is now 1.10.20. `make quarto`
+  installs 1.6.40 under `~/.local/share/quarto/1.6.40/`, beside it, and every Makefile
+  target then runs that copy; without it they refuse. For the rare command that must call
+  Quarto directly, `"$(make -s which-quarto)"` names the pinned binary. Churn under
+  `site_libs/` in your diff is a stop sign, not noise.
 - **After any full render**, run `make docs-deleted` and restore what it lists — see
   the third `.gitignore` trap below. `make render` runs it for you.
 
-**Preview** — `quarto preview posts/<slug>/index.qmd`, or serve the built output with
+**Preview** — `make preview SLUG=<slug>`, or serve the built output with
 `.venv/bin/python -m http.server 8000 --directory docs`. Hand back the preview URL as a
 clickable link at the very end of the reply, on its own line, after the summary and
 caveats. One link per reply.
@@ -343,7 +347,7 @@ obvious:
 
 `check_posts.py`, `render-post`, `freeze_realign.py` and `docs_query.py post` all look
 only at `index.qmd`, so they don't check a deck. Render it with
-`quarto render posts/<slug>/slides.qmd` while iterating, and step every slide in a
+`"$(make -s which-quarto)" render posts/<slug>/slides.qmd` while iterating, and step every slide in a
 browser before shipping. A scene drawn from outside data reads a committed snapshot
 written by a fetch script under `src/` (`graph-data.js`, from
 `src/fetch_citation_graph.js`), and the slide quotes the snapshot's date. Re-fetching

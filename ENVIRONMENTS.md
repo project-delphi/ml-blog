@@ -34,11 +34,14 @@ which is why none of them have a `_freeze/` record.
 uv venv .venv-<slug>
 uv pip install --python .venv-<slug>/bin/python <post deps> ipykernel jupyter nbclient nbformat pyyaml
 .venv-<slug>/bin/python -m ipykernel install --user --name <kernel-name>
-QUARTO_PYTHON="$(pwd)/.venv-<slug>/bin/python" quarto render posts/<slug>/index.qmd
+QUARTO_PYTHON="$(pwd)/.venv-<slug>/bin/python" "$(make -s which-quarto)" render posts/<slug>/index.qmd
 uv pip freeze --python .venv-<slug>/bin/python > posts/<slug>/requirements.txt
 ```
 
 Every line fixes a real failure:
+
+- `"$(make -s which-quarto)"` is the pinned Quarto 1.6.40 that `make quarto` installs. The
+  `quarto` on PATH may be newer, and a newer one rewrites `docs/site_libs/`.
 
 - `ipykernel` alone is not enough. Without Quarto's execution stack (`jupyter
   nbclient nbformat pyyaml`) a render dies with `ModuleNotFoundError: No module named

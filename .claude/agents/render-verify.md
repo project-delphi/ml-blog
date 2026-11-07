@@ -14,12 +14,13 @@ earlier step looked fine.
 
 ## 1. Version gate
 
-    quarto --version
+    make check-quarto
 
-It must be `1.6.40`. Nothing in the repo pins it, and a newer Quarto rewrites the shared
-`docs/site_libs/` runtime, which has broken older posts' JavaScript before (commit
-`452f1fe` repaired it by hand). If the version differs, **stop and report that** — do
-not render.
+It must pass. A newer Quarto rewrites the shared `docs/site_libs/` runtime, which has
+broken older posts' JavaScript before (commit `452f1fe` repaired it by hand), and the
+`quarto` on this machine's PATH is newer than 1.6.40. The Makefile runs the pinned copy
+that `make quarto` installs under `~/.local/share/quarto/1.6.40/`. If the check fails,
+**stop and report that** (the fix is `make quarto`) — do not render.
 
 ## 2. Render
 
@@ -27,7 +28,7 @@ Send the log somewhere unique to this run, so two renders cannot read each other
 outcome:
 
     log=$(mktemp -t render-verify)
-    QUARTO_PYTHON="$(pwd)/.venv/bin/python" quarto render . > "$log" 2>&1
+    QUARTO_PYTHON="$(pwd)/.venv/bin/python" "$(make -s which-quarto)" render . > "$log" 2>&1
 
 Prefer the session scratchpad when the caller names one. Report the log path so the
 caller can look further without you pasting it.
