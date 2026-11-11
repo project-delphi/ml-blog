@@ -163,8 +163,10 @@ console.log("checks pass");
     return M.ksd(P, T);
   });
   assert.ok(Math.max(...ks) < Math.min(...exact));
+  const sorted = [...spread].sort((a, b) => a - b), median = (sorted[9] + sorted[10]) / 2;
+  assert.equal(median.toFixed(2), "0.43"); // item 5's "median of 0.43"
   console.log(`20 seeds, mixture sep 8, start x0 = 4: share right ${range(right)}, KSD ${range(ks)}; ` +
-    `KSD of 100 exact draws ${range(exact)}; start x0 = 0: share right (the lighter mode) ${range(spread)}`);
+    `KSD of 100 exact draws ${range(exact)}; start x0 = 0: share right (the lighter mode) ${range(spread)}, median ${median.toFixed(3)}`);
 }
 
 // 12. Item 2's SVGD claim: finite at eps = 0.2 from the default start on 20 seeds; started at x0 = 5

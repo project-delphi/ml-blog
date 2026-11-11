@@ -10,6 +10,8 @@ const FNS = ["sin", "tanh", "cube"];
 const OPS = ["gauss", "langevin"];
 const NUS = [2.5, 3, 4.5, 5, 9, 10, 30];
 const SEEDS = [1, 2, 3, 4, 5, 6, 7, 8];
+/** M.exact, but a null (no value computed) fails the check instead of passing as Math.abs(null) = 0. */
+const val = (...a) => { const v = M.exact(...a); assert.ok(typeof v === "number" && Number.isFinite(v), `no exact value for ${a.join(" ")}`); return v; };
 
 // 1. Quadrature agrees with every closed form.
 for (const d of DISTS) {
@@ -37,7 +39,8 @@ for (const fn of FNS) {
   assert.ok(Math.abs(b) > 0.5, `uniform boundary term for ${fn} is ${b}`);
 }
 
-// 3. Monte Carlo lands within 4 SE of the exact value wherever the variance is finite.
+// 3. Monte Carlo lands within 4.5 SE of the exact value wherever the variance is finite (z = 4.5 has
+//    two-sided probability 7e-6, so 8 seeds over every case should never trip it by chance).
 let runs = 0, inside2 = 0;
 const finals = {};
 for (const op of OPS) {
@@ -89,11 +92,11 @@ for (const [k, v] of Object.entries(finals)) console.log(`  ${k.padEnd(24)} exac
 // 6. Claims made in the post's "Things to try" list.
 for (const d of DISTS) {
   // f(x) = x: E[1 - X^2] = 0 for every standardised law, under the Gaussian operator
-  const e = M.exact("gauss", d, 10, "custom", "x");
+  const e = val("gauss", d, 10, "custom", "x");
   assert.ok(Math.abs(e) < 2e-4, `custom x under ${d}: ${e}`);
 }
 // (3 - x^2) x^3 vanishes at ±√3, so the uniform's boundary term is 0
-assert.ok(Math.abs(M.exact("langevin", "unif", 10, "custom", "(3-x^2)*x^3")) < 1e-6);
+assert.ok(Math.abs(val("langevin", "unif", 10, "custom", "(3-x^2)*x^3")) < 1e-6);
 // below nu = 4 the Gaussian-operator mean of x^3 does not exist: the running mean drifts down
 const drift = SEEDS.map((seed) => M.run({ dist: "t", nu: 3, fn: "cube", op: "gauss", seed, N: 100000 }));
 const at = (r, n) => r.path.find((p) => p.n >= n).mean;
@@ -105,7 +108,7 @@ console.log("post claims pass");
 
 // 7. Student-t quadrature near nu = 2.5 (heavy tails): custom f must still give the exact zeros.
 for (const nu of [2.5, 2.75, 3]) {
-  const a = M.exact("gauss", "t", nu, "custom", "x"), b = M.exact("langevin", "t", nu, "custom", "x^3");
+  const a = val("gauss", "t", nu, "custom", "x"), b = val("langevin", "t", nu, "custom", "x^3");
   assert.ok(Math.abs(a) < 1e-5 && Math.abs(b) < 1e-5, `t quadrature at nu=${nu}: ${a}, ${b}`);
 }
 console.log("heavy-tail quadrature checks pass");
@@ -132,7 +135,7 @@ for (const d of DISTS) {
 // the review's case: custom x^3, Gaussian operator, Student-t, nu <= 4 has no mean
 for (const nu of [2.5, 3, 3.5, 4]) assert.equal(M.exact("gauss", "t", nu, "custom", "x^3"), null, `custom x^3 nu=${nu}`);
 for (const nu of [4.5, 6, 10]) {
-  const e = M.exact("gauss", "t", nu, "custom", "x^3"), want = 3 - (3 + 6 / (nu - 4));
+  const e = val("gauss", "t", nu, "custom", "x^3"), want = 3 - (3 + 6 / (nu - 4));
   assert.ok(Math.abs(e - want) < 1e-3 * Math.abs(want), `custom x^3 nu=${nu}: ${e} vs ${want}`);
 }
 // outside the domain of f: not defined, under every law
@@ -141,17 +144,39 @@ for (const d of DISTS) for (const g of ["sqrt(x)", "log(x)", "1/x"]) {
   assert.ok(!c.domain && !c.mean && M.exact("gauss", d, 10, "custom", g) === null, `${g} under ${d}`);
 }
 // growth against tails: exp x is fine under the Gaussian and Laplace, has no mean under any t
-assert.ok(Math.abs(M.exact("gauss", "gauss", 10, "custom", "exp(x)")) < 1e-6);
+assert.ok(Math.abs(val("gauss", "gauss", 10, "custom", "exp(x)")) < 1e-6);
 // Laplace(b = 1/√2) has E e^{tX} = 1/(1 - t²/2), so E[e^X - X e^X] = M(1) - M'(1) = 2 - 4 = -2
-assert.ok(Math.abs(M.exact("gauss", "laplace", 10, "custom", "exp(x)") + 2) < 1e-4);
+assert.ok(Math.abs(val("gauss", "laplace", 10, "custom", "exp(x)") + 2) < 1e-6); // window widens to L = 100
 assert.equal(M.exact("gauss", "t", 30, "custom", "exp(x)"), null);
 assert.equal(M.exact("gauss", "laplace", 10, "custom", "exp(2*x)"), null);
 // exp(x^2/4) under the Gaussian: mean exists (and is 0), variance does not
 const ex = M.conditions("gauss", "gauss", 10, "custom", "exp(x^2/4)");
-assert.ok(ex.mean && !ex.variance && Math.abs(M.exact("gauss", "gauss", 10, "custom", "exp(x^2/4)")) < 1e-6);
+assert.ok(ex.mean && !ex.variance && Math.abs(val("gauss", "gauss", 10, "custom", "exp(x^2/4)")) < 1e-6);
 // the uniform's boundary note: present for x^3 (term 3), absent for (3 - x^2) x^3
 assert.ok(Math.abs(M.conditions("langevin", "unif", 10, "custom", "x^3").boundary - 3) < 1e-9);
 assert.equal(M.conditions("langevin", "unif", 10, "custom", "(3-x^2)*x^3").note, "");
 console.log("\nCustom f at nu = 3, Gaussian operator, x^3: " + M.conditions("gauss", "t", 3, "custom", "x^3").note);
 console.log("Custom f under the Gaussian law, sqrt(x): " + M.conditions("gauss", "gauss", 10, "custom", "sqrt(x)").note);
 console.log("custom-f integrability checks pass");
+
+// 9. Poles and tails a fixed window cannot reach (third review): no exact value, and a reason to show.
+{
+  const cases = [
+    ["gauss", "gauss", "tan(x)", "blows up"], ["gauss", "unif", "tan(x)", "blows up"], ["gauss", "laplace", "tan(x)", "blows up"],
+    ["gauss", "t", "tan(x)", "blows up"], ["langevin", "gauss", "tan(x)", "blows up"],
+    ["gauss", "gauss", "1/(x-1)", "blows up"], ["gauss", "laplace", "1/(x-1)", "blows up"], ["gauss", "unif", "1/(x-0.5)^2", "blows up"],
+    ["gauss", "gauss", "exp(0.48*x^2)*(1+tanh(x))", "decays too slowly"],
+  ];
+  for (const [op, d, g, why] of cases) {
+    const info = M.exactInfo(op, d, 10, "custom", g);
+    assert.ok(info.value === null && info.reason.includes(why), `${g} under ${d} (${op}): ${info.value} / ${info.reason}`);
+  }
+  // and nothing smooth is refused: every built-in f typed as a custom f gets a value wherever the built-in does
+  const asCustom = { sin: "sin(x)", tanh: "tanh(x)", cube: "x^3" };
+  for (const d of DISTS) for (const nu of d === "t" ? [2.5, 3, 4.5, 9, 30] : [10]) for (const op of OPS) for (const fn of FNS) {
+    const b = M.exact(op, d, nu, fn), c = M.exact(op, d, nu, "custom", asCustom[fn]);
+    assert.equal(c === null, b === null, `${fn} ${op} ${d} nu=${nu}: built-in ${b}, custom ${c}`);
+    if (b !== null) assert.ok(Math.abs(b - c) < 1e-4 * (1 + Math.abs(b)), `${fn} ${op} ${d} nu=${nu}: ${b} vs ${c}`);
+  }
+  console.log("pole and window checks pass: " + M.exactInfo("gauss", "gauss", 10, "custom", "tan(x)").reason);
+}

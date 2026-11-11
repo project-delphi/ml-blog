@@ -21,7 +21,8 @@ for (const k of ["exponential", "uniform", "mixture"]) {
 assert.ok(worst > 1);
 console.log(`bound / d_W >= ${worst.toFixed(2)} everywhere (tightest: ${where})`);
 
-// 2. d_W decreases in n for every law (the chart's curve has no bumps).
+// 2. d_W decreases in n for the three continuous laws (the chart's curve has no bumps). The Bernoulli is
+//    left out: its lattice makes d_W oscillate in n, and the post makes no monotonicity claim about it.
 for (const k of ["exponential", "uniform", "mixture"]) {
   const dw = M.law(k).dw;
   for (let n = 1; n < dw.length; n++) assert.ok(dw[n] < dw[n - 1], `${k} not decreasing at n=${n + 1}`);
@@ -70,3 +71,22 @@ for (const p of [0.05, 0.5]) {
   console.log(`bernoulli ${p}: d_W < 0.05 from n = ${first(0.05)}, < 0.1 from n = ${first(0.1)}`);
 }
 console.log("checks pass");
+
+// 7. The prose's slopes: least-squares log-log slope of the exact d_W over n = 50..200 (as make_data.py fits it)
+//    is -0.50 to -0.51 for the exponential, the mixture and every Bernoulli p on the slider, and -1.00 for the uniform.
+{
+  const fit = (dw) => {
+    const xs = [], ys = [];
+    for (let n = 50; n <= 200; n++) { xs.push(Math.log(n)); ys.push(Math.log(dw[n - 1])); }
+    const mx = xs.reduce((a, b) => a + b) / xs.length, my = ys.reduce((a, b) => a + b) / ys.length;
+    let sxy = 0, sxx = 0;
+    for (let i = 0; i < xs.length; i++) { sxy += (xs[i] - mx) * (ys[i] - my); sxx += (xs[i] - mx) ** 2; }
+    return sxy / sxx;
+  };
+  const slopes = [fit(M.law("exponential").dw), fit(M.law("mixture").dw), ...data.laws.bernoulli.map((e) => fit(e.dw))];
+  for (const sl of slopes) assert.ok(sl.toFixed(2) === "-0.50" || sl.toFixed(2) === "-0.51", `slope ${sl}`);
+  const su = fit(M.law("uniform").dw);
+  assert.equal(su.toFixed(2), "-1.00");
+  console.log(`log-log slopes over n = 50..200: ${Math.min(...slopes).toFixed(3)} to ${Math.max(...slopes).toFixed(3)} ` +
+    `(exponential, mixture, ${data.laws.bernoulli.length} Bernoulli p); uniform ${su.toFixed(3)}`);
+}

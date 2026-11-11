@@ -90,19 +90,16 @@
     }
     function exactAndConditions() {
       var key = [st.op, st.dist, st.dist === "t" ? st.nu : "", st.fn, st.fn === "custom" ? st.custom : ""].join("|");
-      if (!(key in cache)) cache[key] = { exact: M.exact(st.op, st.dist, st.nu, st.fn, st.custom),
-        cond: M.conditions(st.op, st.dist, st.nu, st.fn, st.custom) };
+      if (!(key in cache)) cache[key] = M.exactInfo(st.op, st.dist, st.nu, st.fn, st.custom);
       return cache[key];
     }
 
     function update() {
-      var result, exact, cond;
+      var result, info;
       customErr.textContent = "";
       try {
-        if (st.fn === "custom") M.parse(st.custom);
+        info = exactAndConditions(); // parses a custom f, and throws on a bad one
         result = M.run({ dist: st.dist, nu: st.nu, fn: st.fn, op: st.op, seed: st.seed, N: N, custom: st.custom });
-        var ec = exactAndConditions();
-        exact = ec.exact; cond = ec.cond;
       } catch (err) {
         customErr.textContent = "Cannot read this f: " + err.message + ".";
         WK.clear(svg);
@@ -110,10 +107,10 @@
         condNote.textContent = "";
         return;
       }
-      draw(result, exact, cond);
+      draw(result, info.value, info.cond, info.reason);
     }
 
-    function draw(result, exact, cond) {
+    function draw(result, exact, cond, reason) {
       WK.clear(svg);
       if (!cond.domain || result.nonFinite) {
         // f is undefined at some draws: a running mean over the rest would look like an answer
@@ -172,7 +169,7 @@
       sEst.set(WK.fmt.num(Math.abs(fin.mean) < 5e-4 ? 0 : fin.mean, 3));
       sSe.set(cond.variance ? "± " + WK.fmt.num(2 * fin.se, 3) : "not valid");
       sExact.set(exact === null ? "undefined" : WK.fmt.num(Math.abs(exact) < 5e-4 ? 0 : exact, 3));
-      var msg = cond.note;
+      var msg = reason;
       if (!msg && exact !== null) msg = Math.abs(exact) < 5e-4
         ? "The identity holds for this law and operator: the expectation is 0."
         : "The identity fails for this law and operator: the expectation is " + WK.fmt.num(exact, 3) + ", not 0.";

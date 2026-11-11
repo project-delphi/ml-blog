@@ -92,18 +92,18 @@ console.log("checks pass");
 // 6. The first draw (the page's default, seed 1) across the sigma slider: lambda gap and loss ratio.
 {
   const mu = M.signal(256, 25, 1), rows = [];
-  let worstGapUpTo175 = 0;
+  let worstRatioUpTo175 = 0;
   for (let k = 0; k <= 35; k++) {
     const sigma = Math.round((0.25 + 0.05 * k) * 100) / 100;
     const c = M.curves("soft", mu, M.observe(mu, sigma, 101), sigma);
-    const gap = Math.abs(c.lamSure - c.lamOracle) / sigma, ratio = c.lossAtSure / c.lossAtOracle;
-    if (sigma <= 1.75) worstGapUpTo175 = Math.max(worstGapUpTo175, ratio);
+    const ratio = c.lossAtSure / c.lossAtOracle;
+    if (sigma <= 1.75) worstRatioUpTo175 = Math.max(worstRatioUpTo175, ratio);
     if ([0.5, 1, 1.5, 1.75, 1.8, 1.9, 2].includes(sigma)) rows.push(`s=${sigma}: lam ${f(c.lamSure, 2)}/${f(c.lamOracle, 2)} ratio ${f(ratio)}`);
   }
-  console.log(`first draw across sigma: ${rows.join("; ")}; worst loss ratio for sigma <= 1.75: ${f(worstGapUpTo175)}`);
+  console.log(`first draw across sigma: ${rows.join("; ")}; worst loss ratio for sigma <= 1.75: ${f(worstRatioUpTo175)}`);
 }
 
-// 7. First draw, sigma <= 1.75: the largest gap between the two lambda values (item 4 says "up to 0.32").
+// 7. First draw, sigma <= 1.75: the largest gap between the two lambda values (item 4 says "about 0.3").
 {
   const mu = M.signal(256, 25, 1);
   let gap = 0, at = 0;

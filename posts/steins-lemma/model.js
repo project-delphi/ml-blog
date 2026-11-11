@@ -69,6 +69,7 @@ var SteinLemmaModel = (function () {
       score: function (x) { return x > 0 ? -1 / LAPLACE_B : (x < 0 ? 1 / LAPLACE_B : 0); },
       sample: function (r) {
         var u = r() - 0.5;
+        while (u === -0.5) u = r() - 0.5; // r() can return exactly 0, and log(0) is -Infinity
         return -LAPLACE_B * (u < 0 ? -1 : 1) * Math.log(1 - 2 * Math.abs(u));
       }
     };
@@ -197,12 +198,16 @@ var SteinLemmaModel = (function () {
    *  which maps the heavy tails onto a finite interval, then grades the mesh toward
    *  theta = ±pi/2 with theta = sign(v) (pi/2) (1 - (1 - |v|)^4), Jacobian 2 pi (1 - |v|)^3,
    *  because for nu < 3 an integrand growing like x^2 is singular there (midpoint rule in v). */
-  function quadrature(op, D, F) {
-    var g = function (x) { return opValue(op, D, F, x) * D.pdf(x); };
-    if (D.key === "gauss") return simpson(g, -12, 12, 8000);
-    if (D.key === "laplace") return simpson(g, -50, 0, 40000) + simpson(g, 0, 50, 40000);
-    if (D.key === "unif") return simpson(function (x) { return opValue(op, D, F, x) / (2 * SQ3); }, -SQ3, SQ3, 8000);
-    var nu = D.nu, s = D.scale, N = 200000, hv = 2 / N, sum = 0, w0 = Math.exp(D.logc) * Math.sqrt(nu);
+  /*  L (Gaussian and Laplace only) is the half-width of the window, default 12 and 50, with the
+   *  grid spacing kept fixed as it widens; refine > 1 uses a proportionally finer, differently
+   *  placed grid, which exactInfo compares against the default to detect poles. */
+  function quadrature(op, D, F, L, refine) {
+    var g = function (x) { return opValue(op, D, F, x) * D.pdf(x); }, r = refine || 1;
+    var even = function (n) { n = Math.round(n); return n % 2 ? n + 1 : n; };
+    if (D.key === "gauss") { L = L || 12; return simpson(g, -L, L, even(8000 * r * L / 12)); }
+    if (D.key === "laplace") { L = L || 50; var nl = even(40000 * r * L / 50); return simpson(g, -L, 0, nl) + simpson(g, 0, L, nl); }
+    if (D.key === "unif") return simpson(function (x) { return opValue(op, D, F, x) / (2 * SQ3); }, -SQ3, SQ3, even(8000 * r));
+    var nu = D.nu, s = D.scale, N = Math.round(200000 * r), hv = 2 / N, sum = 0, w0 = Math.exp(D.logc) * Math.sqrt(nu);
     for (var k = 0; k < N; k++) {
       var v = -1 + (k + 0.5) * hv, a = 1 - Math.abs(v);
       var th = (v < 0 ? -1 : 1) * (Math.PI / 2) * (1 - a * a * a * a);
@@ -232,9 +237,11 @@ var SteinLemmaModel = (function () {
    *  envelope of |g| at 10³ and 10⁴ scale units. Gaussian and Laplace: |g|·p and
    *  g²·p must fall by more than a factor e between L/2 and the quadrature limit L.
    *  A NaN on the central stretch of the support (sqrt or log of a negative x)
-   *  is reported as "domain": the expectation is not defined at all. */
+   *  is reported as "domain": the expectation is not defined at all.
+   *  For the Gaussian and Laplace it also picks the quadrature window L: the first
+   *  candidate at whose edge |g|·p is below e^-30 on both sides, or null if none is. */
   function tailCheck(op, D, F) {
-    var out = { mean: true, variance: true, domain: true, alpha: null };
+    var out = { mean: true, variance: true, domain: true, alpha: null, L: undefined };
     var logG = function (x) { return Math.log(Math.abs(opValue(op, D, F, x))); };
     var lo = D.key === "unif" ? -SQ3 : -6 * (D.scale || 1), hi = -lo;
     for (var k = 0; k <= 2000; k++) {
@@ -263,6 +270,13 @@ var SteinLemmaModel = (function () {
     if (D.key === "t") {
       out.mean = out.alpha < D.nu - 0.01;
       out.variance = 2 * out.alpha < D.nu - 0.01;
+    } else {
+      var lpw = function (x) { return logG(x) + Math.log(D.pdf(x)); };
+      var Ls = D.key === "gauss" ? [12, 24, 40, 60] : [50, 100, 200];
+      out.L = null;
+      for (var i = 0; i < Ls.length && out.L === null; i++) {
+        if (logEnvelope(lpw, -Ls[i]) < -30 && logEnvelope(lpw, Ls[i]) < -30) out.L = Ls[i];
+      }
     }
     return out;
   }
@@ -271,11 +285,11 @@ var SteinLemmaModel = (function () {
    *  of (op f)(X) exist, and the boundary term for the uniform. Built-in f use
    *  the closed-form conditions; a custom f goes through tailCheck. */
   function conditions(op, distKey, nu, fnKey, custom) {
-    var c = { mean: true, variance: true, domain: true, boundary: 0, note: "" };
+    var c = { mean: true, variance: true, domain: true, boundary: 0, note: "", L: undefined };
     var F = testFn(fnKey, custom), tc = null;
     if (fnKey === "custom") {
       tc = tailCheck(op, dist(distKey, nu), F);
-      c.mean = tc.mean; c.variance = tc.variance; c.domain = tc.domain;
+      c.mean = tc.mean; c.variance = tc.variance; c.domain = tc.domain; c.L = tc.L;
     } else if (distKey === "t" && fnKey === "cube") {
       if (op === "gauss") { c.mean = nu > 4; c.variance = nu > 8; }
       else c.variance = nu > 4;
@@ -292,11 +306,33 @@ var SteinLemmaModel = (function () {
     return c;
   }
 
-  /** The exact expectation the run converges to: closed form where one exists,
-   *  quadrature otherwise; null when the expectation does not exist. */
-  function exact(op, distKey, nu, fnKey, custom) {
-    var c = conditions(op, distKey, nu, fnKey, custom);
-    if (!c.mean) return null;
+  /** The exact expectation the run converges to, with the conditions and, when there is
+   *  no value, the reason. Closed form where one exists, quadrature otherwise. A custom f
+   *  gets a value only if its tails fit a quadrature window and two different grids agree
+   *  (a pole inside the support, as in tan x, makes them disagree wildly). */
+  function exactInfo(op, distKey, nu, fnKey, custom) {
+    var c = conditions(op, distKey, nu, fnKey, custom), out = { value: null, cond: c, reason: c.note };
+    if (!c.mean) return out;
+    if (fnKey === "custom") {
+      var D = dist(distKey, nu), F = testFn(fnKey, custom);
+      if (c.L === null) {
+        out.reason = "The operator applied to f, times the density, decays too slowly for the quadrature to reach the end of its tails, so no exact value is shown.";
+        return out;
+      }
+      var q1 = quadrature(op, D, F, c.L, 1), q2 = quadrature(op, D, F, c.L, 1.137);
+      if (!isFinite(q1) || !isFinite(q2) || Math.abs(q1 - q2) > 1e-4 * (1 + Math.abs(q1))) {
+        out.reason = "f or its derivative blows up inside the support (as tan x or 1/(x − 1) do), so no exact value can be computed, and the expectation may not exist.";
+        return out;
+      }
+      out.value = q1;
+      return out;
+    }
+    out.value = exactBuiltIn(op, distKey, nu, fnKey, c);
+    if (out.value === null && !out.reason) out.reason = "No exact value could be computed for this f.";
+    return out;
+  }
+  function exact(op, distKey, nu, fnKey, custom) { return exactInfo(op, distKey, nu, fnKey, custom).value; }
+  function exactBuiltIn(op, distKey, nu, fnKey, c) {
     if (fnKey === "cube") {
       if (op === "gauss") {
         // E[3X^2 - X^4] = 3 - E X^4, with E X^4 the fourth moment of the standardised law
@@ -308,7 +344,7 @@ var SteinLemmaModel = (function () {
     if (op === "langevin" && distKey !== "unif" && fnKey !== "custom") return 0;
     if (op === "langevin" && distKey === "unif" && fnKey !== "custom") return c.boundary;
     if (op === "gauss" && distKey === "gauss" && fnKey !== "custom") return 0;
-    var q = quadrature(op, dist(distKey, nu), testFn(fnKey, custom));
+    var q = quadrature(op, dist(distKey, nu), testFn(fnKey));
     return isFinite(q) ? q : null;
   }
 
@@ -339,7 +375,7 @@ var SteinLemmaModel = (function () {
 
   return { rng: rng, normalGen: normalGen, lgamma: lgamma, dist: dist, parse: parse,
     testFn: testFn, opValue: opValue, quadrature: quadrature, tailCheck: tailCheck, conditions: conditions,
-    exact: exact, checkpoints: checkpoints, run: run, SQ3: SQ3 };
+    exact: exact, exactInfo: exactInfo, checkpoints: checkpoints, run: run, SQ3: SQ3 };
 })();
 
 if (typeof module !== "undefined") module.exports = SteinLemmaModel;
