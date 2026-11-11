@@ -63,9 +63,9 @@
       xs.forEach(function (v) { svgD.appendChild(WK.h("line", { x1: x(v), x2: x(v), y1: H - m.b, y2: H - m.b - 8, stroke: "c3", "stroke-width": 1.4 })); });
       // right: the score, on a fixed axis
       WK.clear(svgS);
-      var ys = WK.lin([-5, 5], [H - m.b, m.t]);
+      var ys = WK.lin([-5, 5], [H - m.b, m.t]), scoreC = M.scoreOf(c);
       axes(svgS, W, H, m, { f: x, ticks: [-4, -2, 0, 2, 4] }, { f: ys, ticks: [-4, -2, 0, 2, 4] }, "x", "score  d/dx log(c p̃)");
-      svgS.appendChild(poly(grid.map(function (g) { return x(g) + "," + ys(Math.max(-5, Math.min(5, M.score(g)))); }), "c2", 2.4));
+      svgS.appendChild(poly(grid.map(function (g) { return x(g) + "," + ys(Math.max(-5, Math.min(5, scoreC(g)))); }), "c2", 2.4));
       var st = M.constantStats(c, xs);
       tMass.set(st.mass < 0.01 || st.mass >= 1000 ? st.mass.toExponential(3) : st.mass.toFixed(3));
       tLL.set(st.loglik.toFixed(2));
@@ -125,11 +125,16 @@
       var lam = lamOf(st.lamFrac), est = M.estimate(st.kind, y, lam);
       // left: the first 64 coordinates, so individual spikes stay readable
       WK.clear(svgSig);
-      var N = 64, x = WK.lin([0, N - 1], [m.l, W - m.r]), ylo = -9, yhi = 9, yy = WK.lin([ylo, yhi], [H - m.b, m.t]);
-      axes(svgSig, W, H, m, { f: x, ticks: [0, 16, 32, 48, 63] }, { f: yy, ticks: [-8, -4, 0, 4, 8] }, "coordinate (first 64 of 256)", "value");
+      // the axis is ±9 unless the noise throws an observation further out; the estimate never
+      // exceeds |y|, so dots, spikes and line all stay inside it
+      var N = 64, amax = 9;
+      for (var a = 0; a < N; a++) amax = Math.max(amax, Math.abs(y[a]) + 0.5, Math.abs(mu[a]) + 0.5);
+      var ylo = -amax, yhi = amax, x = WK.lin([0, N - 1], [m.l, W - m.r]), yy = WK.lin([ylo, yhi], [H - m.b, m.t]);
+      var yticks = []; for (var t4 = -4 * Math.floor(amax / 4); t4 <= amax; t4 += 4) yticks.push(t4);
+      axes(svgSig, W, H, m, { f: x, ticks: [0, 16, 32, 48, 63] }, { f: yy, ticks: yticks }, "coordinate (first 64 of 256)", "value");
       for (var i = 0; i < N; i++) {
         if (mu[i] !== 0) svgSig.appendChild(WK.h("line", { x1: x(i), x2: x(i), y1: yy(0), y2: yy(mu[i]), stroke: "muted", "stroke-width": 3, "stroke-opacity": 0.55 }));
-        svgSig.appendChild(WK.h("circle", { cx: x(i), cy: yy(Math.max(ylo, Math.min(yhi, y[i]))), r: 2.4, fill: "c3" }));
+        svgSig.appendChild(WK.h("circle", { cx: x(i), cy: yy(y[i]), r: 2.4, fill: "c3" }));
       }
       var pts = [];
       for (i = 0; i < N; i++) pts.push(x(i) + "," + yy(est[i]));

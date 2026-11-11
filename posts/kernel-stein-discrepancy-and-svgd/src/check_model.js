@@ -166,3 +166,14 @@ console.log("checks pass");
   console.log(`20 seeds, mixture sep 8, start x0 = 4: share right ${range(right)}, KSD ${range(ks)}; ` +
     `KSD of 100 exact draws ${range(exact)}; start x0 = 0: share right (the lighter mode) ${range(spread)}`);
 }
+
+// 12. Item 2's SVGD claim: finite at eps = 0.2 from the default start on 20 seeds; started at x0 = 5
+//     it can diverge, which the widget reports as "diverged".
+{
+  const finite = Array.from({ length: 20 }, (_, i) => M.race({ ...base, eps: 0.2, seed: i + 1 }).trace[1].svgd).filter(Number.isFinite).length;
+  assert.equal(finite, 20);
+  const far = Array.from({ length: 10 }, (_, i) => M.race({ ...base, eps: 0.2, centre: [5, 0], seed: i + 1 }).svgd)
+    .filter((A) => A.some((v) => !Number.isFinite(v) || Math.abs(v) > 1e6)).length;
+  assert.ok(far > 0);
+  console.log(`SVGD at eps = 0.2: finite on ${finite}/20 seeds from the default start; diverges on ${far}/10 from x0 = 5`);
+}

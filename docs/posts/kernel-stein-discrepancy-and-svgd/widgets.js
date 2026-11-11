@@ -95,22 +95,27 @@
       var T = M.target(st.target, { sep: st.sep });
       var A = M.init(st.n, st.spread, st.seed, [st.cx, 0]);
       sim = { T: T, A: A, B: Float64Array.from(A), nrm: M.normalGen(M.rng(st.seed + 7919)), t: 0,
-              ulaDead: false, trace: [], ell: 1, bg: null };
+              ulaDead: false, svgdDead: false, trace: [], ell: st.median ? M.medianEll(A) : st.ell, bg: null };
       record();
       buildBackground();
       sM.root.style.display = st.target === "mixture" ? "" : "none";
       render();
     }
     function record() {
-      var a = M.ksd(sim.A, sim.T), b = sim.ulaDead ? NaN : M.ksd(sim.B, sim.T);
+      var a = sim.svgdDead ? NaN : M.ksd(sim.A, sim.T), b = sim.ulaDead ? NaN : M.ksd(sim.B, sim.T);
+      if (!isFinite(a)) sim.svgdDead = true;
       if (!isFinite(b)) sim.ulaDead = true;
       sim.trace.push({ t: sim.t, a: a, b: b });
     }
     function advance(k) {
       var eps = EPS[st.epsIdx];
       for (var s = 0; s < k && sim.t < MAX_STEPS; s++) {
-        sim.ell = st.median ? M.medianEll(sim.A) : st.ell;
-        M.svgdStep(sim.A, sim.T, eps, sim.ell);
+        // A large step can throw particles past the score's steep walls: stop that sampler and say so.
+        if (!sim.svgdDead) {
+          sim.ell = st.median ? M.medianEll(sim.A) : st.ell;
+          M.svgdStep(sim.A, sim.T, eps, sim.ell);
+          for (var j = 0; j < sim.A.length; j++) if (!isFinite(sim.A[j]) || Math.abs(sim.A[j]) > 1e6) { sim.svgdDead = true; break; }
+        }
         if (!sim.ulaDead) {
           M.ulaStep(sim.B, sim.T, eps, sim.nrm);
           for (var i = 0; i < sim.B.length; i++) if (!isFinite(sim.B[i]) || Math.abs(sim.B[i]) > 1e6) { sim.ulaDead = true; break; }
@@ -118,7 +123,7 @@
         sim.t++;
       }
       record();
-      if (sim.t >= MAX_STEPS) pause();
+      if (sim.t >= MAX_STEPS || (sim.svgdDead && sim.ulaDead)) pause();
     }
     function loop() {
       if (!playing) return;
@@ -205,7 +210,7 @@
         for (i = 0; i < n; i++) { g.beginPath(); g.arc(px(sim.B[2 * i]), py(sim.B[2 * i + 1]), 3.2, 0, 2 * Math.PI); g.stroke(); }
       }
       g.fillStyle = pal.c1;
-      for (i = 0; i < n; i++) { g.beginPath(); g.arc(px(sim.A[2 * i]), py(sim.A[2 * i + 1]), 3.4, 0, 2 * Math.PI); g.fill(); }
+      if (!sim.svgdDead) for (i = 0; i < n; i++) { g.beginPath(); g.arc(px(sim.A[2 * i]), py(sim.A[2 * i + 1]), 3.4, 0, 2 * Math.PI); g.fill(); }
       g.fillStyle = pal.ink; g.font = "13px system-ui, sans-serif";
       g.fillText("t = " + sim.t, 10, 20);
     }
@@ -230,7 +235,7 @@
       }
       line("b", "c3", "5 3");
       line("a", "c1");
-      text(W - mr - 2, mt + 12, "SVGD", "end", "c1");
+      text(W - mr - 2, mt + 12, sim.svgdDead ? "SVGD (diverged)" : "SVGD", "end", "c1");
       text(W - mr - 2, mt + 28, sim.ulaDead ? "Langevin (diverged)" : "Langevin (dashed)", "end", "c3");
     }
     function render() {
@@ -238,10 +243,10 @@
       drawChart();
       var last = sim.trace[sim.trace.length - 1];
       sT.set(sim.t + " (" + (sim.t * st.n).toLocaleString() + ")");
-      sA.set(WK.fmt.num(last.a, 3));
+      sA.set(sim.svgdDead ? "diverged" : WK.fmt.num(last.a, 3));
       sB.set(sim.ulaDead ? "diverged" : WK.fmt.num(last.b, 3));
-      sL.set(WK.fmt.num(st.median ? M.medianEll(sim.A) : st.ell, 2));
-      if (st.target === "mixture") sM.set(WK.fmt.num(M.rightFraction(sim.A), 2) + " (" + WK.fmt.num(M.mixtureRightMass(st.sep), 2) + ")");
+      sL.set(sim.svgdDead ? "—" : WK.fmt.num(sim.ell, 2));
+      if (st.target === "mixture") sM.set(sim.svgdDead ? "—" : WK.fmt.num(M.rightFraction(sim.A), 2) + " (" + WK.fmt.num(M.mixtureRightMass(st.sep), 2) + ")");
     }
 
     // Repaint after a theme change, and again once the new stylesheet has applied;

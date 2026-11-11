@@ -16,11 +16,14 @@ for (let x = -5; x <= 5; x += 0.37) {
 // 2. Multiplying p~ by c moves the mass and the log-likelihood, and nothing score-based.
 {
   const xs = M.sample(60, 4), base = M.constantStats(1, xs);
-  for (const lc of [-3, -1.5, 0.7, 3]) {
+  for (let k = 0; k <= 120; k++) { // every stop of the slider: log10 c from -3 to 3 in steps of 0.05
+    const lc = -3 + 0.05 * k;
     const c = 10 ** lc, s = M.constantStats(c, xs);
-    assert.equal(s.ksd, base.ksd);
-    assert.equal(s.scoreMatching, base.scoreMatching);
-    assert.ok(Math.abs(s.loglik - base.loglik - 60 * Math.log(c)) < 1e-9);
+    // c enters the score as (c p~)'/(c p~): equal to rounding, and identical in every printed digit
+    assert.ok(Math.abs(s.ksd - base.ksd) < 1e-12 && Math.abs(s.scoreMatching - base.scoreMatching) < 1e-9);
+    assert.equal(s.ksd.toFixed(6), base.ksd.toFixed(6));
+    assert.equal(s.scoreMatching.toFixed(6), base.scoreMatching.toFixed(6));
+    assert.ok(Math.abs(s.loglik - base.loglik - 60 * Math.log(c)) < 1e-9 * Math.max(1, Math.abs(s.loglik)));
     assert.ok(Math.abs(s.mass - c * M.Z) < 1e-9 * c * M.Z);
   }
   const lo = M.constantStats(1e-3, xs), hi = M.constantStats(1e3, xs);

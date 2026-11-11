@@ -32,13 +32,19 @@ var SteinModelsModel = (function () {
   function ptilde(x) {
     return A1 * Math.exp(-0.5 * (x - M1) * (x - M1) / (S1 * S1)) + A2 * Math.exp(-0.5 * (x - M2) * (x - M2) / (S2 * S2));
   }
-  /** d/dx log p~ = p~'/p~; the same for c p~ and every c > 0. */
-  function score(x) {
-    var e1 = A1 * Math.exp(-0.5 * (x - M1) * (x - M1) / (S1 * S1)), e2 = A2 * Math.exp(-0.5 * (x - M2) * (x - M2) / (S2 * S2));
-    return (e1 * (-(x - M1) / (S1 * S1)) + e2 * (-(x - M2) / (S2 * S2))) / (e1 + e2);
+  /** The score of c p~, computed from c p~ itself as (c p~)'/(c p~). The factor c
+   *  multiplies numerator and denominator and cancels, so every c > 0 gives the
+   *  same function up to rounding in the last binary digit. */
+  function scoreOf(cMul) {
+    return function (x) {
+      var e1 = cMul * A1 * Math.exp(-0.5 * (x - M1) * (x - M1) / (S1 * S1)),
+        e2 = cMul * A2 * Math.exp(-0.5 * (x - M2) * (x - M2) / (S2 * S2));
+      return (e1 * (-(x - M1) / (S1 * S1)) + e2 * (-(x - M2) / (S2 * S2))) / (e1 + e2);
+    };
   }
-  /** d/dx score, for the score-matching objective. */
-  function dscore(x) { var h = 1e-5; return (score(x + h) - score(x - h)) / (2 * h); }
+  /** d/dx of a score, by central difference, for the score-matching objective. */
+  function derivative(sc) { return function (x) { var h = 1e-5; return (sc(x + h) - sc(x - h)) / (2 * h); }; }
+  var score = scoreOf(1), dscore = derivative(score);
   /** The normalising constant of p~, for display only: the methods never use it. */
   var Z = Math.sqrt(2 * Math.PI) * (A1 * S1 + A2 * S2);
 
@@ -64,13 +70,13 @@ var SteinModelsModel = (function () {
 
   /** Everything the first chart reports for a multiplier c. */
   function constantStats(cMul, xs) {
-    var ll = 0, sm = 0;
+    var ll = 0, sm = 0, sc = scoreOf(cMul), dsc = derivative(sc);
     xs.forEach(function (x) {
       ll += Math.log(cMul * ptilde(x));
-      var s = score(x);
-      sm += 0.5 * s * s + dscore(x);
+      var s = sc(x);
+      sm += 0.5 * s * s + dsc(x);
     });
-    return { mass: cMul * Z, loglik: ll, ksd: ksd1(xs, score), scoreMatching: sm / xs.length };
+    return { mass: cMul * Z, loglik: ll, ksd: ksd1(xs, sc), scoreMatching: sm / xs.length };
   }
 
   // ------------------------------------------------- 2. SURE
@@ -128,7 +134,7 @@ var SteinModelsModel = (function () {
     return { lam: g, sure: S, loss: L, lamSure: g[bs], lamOracle: g[bl], lossAtSure: L[bs], lossAtOracle: L[bl], lossAtZero: L[0] };
   }
 
-  return { rng: rng, normalGen: normalGen, ptilde: ptilde, score: score, dscore: dscore, Z: Z, sample: sample,
+  return { rng: rng, normalGen: normalGen, ptilde: ptilde, score: score, scoreOf: scoreOf, dscore: dscore, Z: Z, sample: sample,
     ksd1: ksd1, constantStats: constantStats, signal: signal, observe: observe, soft: soft, estimate: estimate,
     sure: sure, loss: loss, lamGrid: lamGrid, curves: curves };
 })();
