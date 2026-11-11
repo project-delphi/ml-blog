@@ -109,3 +109,49 @@ for (const nu of [2.5, 2.75, 3]) {
   assert.ok(Math.abs(a) < 1e-5 && Math.abs(b) < 1e-5, `t quadrature at nu=${nu}: ${a}, ${b}`);
 }
 console.log("heavy-tail quadrature checks pass");
+
+// 8. A custom f is judged by tailCheck: it must agree with the closed-form conditions for every
+//    built-in f, law, operator and slider value of nu, and must refuse divergent or undefined cases.
+const NU_GRID = Array.from({ length: 56 }, (_, i) => 2.5 + 0.5 * i);
+for (const d of DISTS) {
+  for (const nu of d === "t" ? NU_GRID : [10]) {
+    const D = M.dist(d, nu);
+    for (const fn of FNS) {
+      for (const op of OPS) {
+        const c = M.conditions(op, d, nu, fn), t = M.tailCheck(op, D, M.testFn(fn));
+        assert.ok(t.domain && t.mean === c.mean && t.variance === c.variance,
+          `tailCheck vs closed form: ${op} ${d} nu=${nu} ${fn}: ${JSON.stringify(t)} vs ${JSON.stringify(c)}`);
+      }
+    }
+    for (const op of OPS) {
+      const a = M.conditions(op, d, nu, "cube"), b = M.conditions(op, d, nu, "custom", "x^3");
+      assert.ok(a.mean === b.mean && a.variance === b.variance, `custom x^3 vs built-in: ${op} ${d} nu=${nu}`);
+    }
+  }
+}
+// the review's case: custom x^3, Gaussian operator, Student-t, nu <= 4 has no mean
+for (const nu of [2.5, 3, 3.5, 4]) assert.equal(M.exact("gauss", "t", nu, "custom", "x^3"), null, `custom x^3 nu=${nu}`);
+for (const nu of [4.5, 6, 10]) {
+  const e = M.exact("gauss", "t", nu, "custom", "x^3"), want = 3 - (3 + 6 / (nu - 4));
+  assert.ok(Math.abs(e - want) < 1e-3 * Math.abs(want), `custom x^3 nu=${nu}: ${e} vs ${want}`);
+}
+// outside the domain of f: not defined, under every law
+for (const d of DISTS) for (const g of ["sqrt(x)", "log(x)", "1/x"]) {
+  const c = M.conditions("gauss", d, 10, "custom", g);
+  assert.ok(!c.domain && !c.mean && M.exact("gauss", d, 10, "custom", g) === null, `${g} under ${d}`);
+}
+// growth against tails: exp x is fine under the Gaussian and Laplace, has no mean under any t
+assert.ok(Math.abs(M.exact("gauss", "gauss", 10, "custom", "exp(x)")) < 1e-6);
+// Laplace(b = 1/√2) has E e^{tX} = 1/(1 - t²/2), so E[e^X - X e^X] = M(1) - M'(1) = 2 - 4 = -2
+assert.ok(Math.abs(M.exact("gauss", "laplace", 10, "custom", "exp(x)") + 2) < 1e-4);
+assert.equal(M.exact("gauss", "t", 30, "custom", "exp(x)"), null);
+assert.equal(M.exact("gauss", "laplace", 10, "custom", "exp(2*x)"), null);
+// exp(x^2/4) under the Gaussian: mean exists (and is 0), variance does not
+const ex = M.conditions("gauss", "gauss", 10, "custom", "exp(x^2/4)");
+assert.ok(ex.mean && !ex.variance && Math.abs(M.exact("gauss", "gauss", 10, "custom", "exp(x^2/4)")) < 1e-6);
+// the uniform's boundary note: present for x^3 (term 3), absent for (3 - x^2) x^3
+assert.ok(Math.abs(M.conditions("langevin", "unif", 10, "custom", "x^3").boundary - 3) < 1e-9);
+assert.equal(M.conditions("langevin", "unif", 10, "custom", "(3-x^2)*x^3").note, "");
+console.log("\nCustom f at nu = 3, Gaussian operator, x^3: " + M.conditions("gauss", "t", 3, "custom", "x^3").note);
+console.log("Custom f under the Gaussian law, sqrt(x): " + M.conditions("gauss", "gauss", 10, "custom", "sqrt(x)").note);
+console.log("custom-f integrability checks pass");

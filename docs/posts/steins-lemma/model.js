@@ -212,29 +212,90 @@ var SteinLemmaModel = (function () {
     return sum * hv;
   }
 
-  /** What the theory says about a built-in (op, law, f): whether the mean and
-   *  the variance of (op f)(X) exist, and the boundary term for the uniform. */
-  function conditions(op, distKey, nu, fnKey) {
-    var c = { mean: true, variance: true, boundary: 0, checked: fnKey !== "custom", note: "" };
-    if (distKey === "t" && fnKey === "cube") {
+  /** Largest value of logh over [x, 1.5x] (65 points): an oscillating f such as
+   *  sin x is judged by its peaks, not by one sample that may sit near a zero.
+   *  Far out in a tail a NaN is an overflow (exp x − x exp x is ∞ − ∞), so it
+   *  counts as unbounded growth. */
+  function logEnvelope(logh, x) {
+    var m = -Infinity;
+    for (var k = 0; k <= 64; k++) {
+      var v = logh(x * (1 + 0.5 * k / 64));
+      if (v !== v) return Infinity;
+      if (v > m) m = v;
+    }
+    return m;
+  }
+
+  /** For a custom f, decide numerically whether (op f)(X) has a mean and a
+   *  variance. Student-t: the density falls like |x|^-(ν+1), so E|g| is finite
+   *  iff |g| grows slower than |x|^ν; the growth exponent is read off the
+   *  envelope of |g| at 10³ and 10⁴ scale units. Gaussian and Laplace: |g|·p and
+   *  g²·p must fall by more than a factor e between L/2 and the quadrature limit L.
+   *  A NaN on the central stretch of the support (sqrt or log of a negative x)
+   *  is reported as "domain": the expectation is not defined at all. */
+  function tailCheck(op, D, F) {
+    var out = { mean: true, variance: true, domain: true, alpha: null };
+    var logG = function (x) { return Math.log(Math.abs(opValue(op, D, F, x))); };
+    var lo = D.key === "unif" ? -SQ3 : -6 * (D.scale || 1), hi = -lo;
+    for (var k = 0; k <= 2000; k++) {
+      var v = opValue(op, D, F, lo + (hi - lo) * k / 2000);
+      if (v !== v) { out.domain = false; break; }
+    }
+    if (D.key === "unif" || !out.domain) {
+      if (!out.domain) { out.mean = false; out.variance = false; }
+      return out;
+    }
+    [-1, 1].forEach(function (side) {
+      if (D.key === "t") {
+        var e1 = logEnvelope(logG, side * 1e3 * D.scale), e2 = logEnvelope(logG, side * 1e4 * D.scale);
+        var a = (e2 === Infinity) ? Infinity : (e2 === -Infinity ? -Infinity : (e2 - Math.max(e1, -700)) / Math.LN10);
+        if (out.alpha === null || a > out.alpha) out.alpha = a;
+      } else {
+        var L = D.key === "gauss" ? 12 : 50, lp = function (x) { return Math.log(D.pdf(x)); };
+        var m1 = logEnvelope(function (x) { return logG(x) + lp(x); }, side * L / 2);
+        var m2 = logEnvelope(function (x) { return logG(x) + lp(x); }, side * L);
+        var v1 = logEnvelope(function (x) { return 2 * logG(x) + lp(x); }, side * L / 2);
+        var v2 = logEnvelope(function (x) { return 2 * logG(x) + lp(x); }, side * L);
+        if (!(m2 === -Infinity || m2 < m1 - 1)) out.mean = false;
+        if (!(v2 === -Infinity || v2 < v1 - 1)) out.variance = false;
+      }
+    });
+    if (D.key === "t") {
+      out.mean = out.alpha < D.nu - 0.01;
+      out.variance = 2 * out.alpha < D.nu - 0.01;
+    }
+    return out;
+  }
+
+  /** What the theory says about (op, law, f): whether the mean and the variance
+   *  of (op f)(X) exist, and the boundary term for the uniform. Built-in f use
+   *  the closed-form conditions; a custom f goes through tailCheck. */
+  function conditions(op, distKey, nu, fnKey, custom) {
+    var c = { mean: true, variance: true, domain: true, boundary: 0, note: "" };
+    var F = testFn(fnKey, custom), tc = null;
+    if (fnKey === "custom") {
+      tc = tailCheck(op, dist(distKey, nu), F);
+      c.mean = tc.mean; c.variance = tc.variance; c.domain = tc.domain;
+    } else if (distKey === "t" && fnKey === "cube") {
       if (op === "gauss") { c.mean = nu > 4; c.variance = nu > 8; }
       else c.variance = nu > 4;
     }
-    if (distKey === "unif" && op === "langevin" && fnKey !== "custom") {
-      var F = testFn(fnKey);
-      c.boundary = (F.f(SQ3) - F.f(-SQ3)) / (2 * SQ3);
-    }
-    if (!c.checked) c.note = "Integrability of a custom f is not checked.";
-    else if (!c.mean) c.note = "E[X⁴] is infinite for ν ≤ 4, so this expectation does not exist and the running mean drifts.";
-    else if (!c.variance) c.note = "The variance is infinite here (ν ≤ " + (op === "gauss" ? 8 : 4) + "), so the ±2 SE band is not a valid interval.";
-    else if (distKey === "unif" && op === "langevin") c.note = "Boundary term f(√3)p(√3) − f(−√3)p(−√3) = " + c.boundary.toFixed(4) + ", not 0.";
+    if (distKey === "unif" && op === "langevin" && c.domain) c.boundary = (F.f(SQ3) - F.f(-SQ3)) / (2 * SQ3);
+    var grow = tc && tc.alpha !== null && isFinite(tc.alpha) ? " grows like |x|^" + tc.alpha.toFixed(1) + " in the tails" : "";
+    if (!c.domain) c.note = "f or its derivative is not finite somewhere in the support of this law (sqrt or log of a negative x, say), so the expectation is not defined.";
+    else if (!c.mean && fnKey !== "custom") c.note = "E[X⁴] is infinite for ν ≤ 4, so this expectation does not exist and the running mean drifts.";
+    else if (!c.mean && distKey === "t") c.note = "The operator applied to f" + (grow || " grows too fast in the tails") + ", which a Student-t with ν = " + nu + " cannot integrate, so this expectation does not exist and the running mean drifts.";
+    else if (!c.mean) c.note = "The operator applied to f, times the density, does not decay in the tails, so this expectation does not exist and the running mean drifts.";
+    else if (!c.variance && fnKey !== "custom") c.note = "The variance is infinite here (ν ≤ " + (op === "gauss" ? 8 : 4) + "), so the ±2 SE band is not a valid interval.";
+    else if (!c.variance) c.note = "The operator applied to f" + (grow ? grow + ", so its variance is infinite for ν = " + nu : " has infinite variance under this law") + ", and the ±2 SE band is not a valid interval.";
+    else if (distKey === "unif" && op === "langevin" && Math.abs(c.boundary) >= 5e-4) c.note = "Boundary term f(√3)p(√3) − f(−√3)p(−√3) = " + c.boundary.toFixed(4) + ", not 0.";
     return c;
   }
 
   /** The exact expectation the run converges to: closed form where one exists,
    *  quadrature otherwise; null when the expectation does not exist. */
   function exact(op, distKey, nu, fnKey, custom) {
-    var c = conditions(op, distKey, nu, fnKey);
+    var c = conditions(op, distKey, nu, fnKey, custom);
     if (!c.mean) return null;
     if (fnKey === "cube") {
       if (op === "gauss") {
@@ -247,7 +308,8 @@ var SteinLemmaModel = (function () {
     if (op === "langevin" && distKey !== "unif" && fnKey !== "custom") return 0;
     if (op === "langevin" && distKey === "unif" && fnKey !== "custom") return c.boundary;
     if (op === "gauss" && distKey === "gauss" && fnKey !== "custom") return 0;
-    return quadrature(op, dist(distKey, nu), testFn(fnKey, custom));
+    var q = quadrature(op, dist(distKey, nu), testFn(fnKey, custom));
+    return isFinite(q) ? q : null;
   }
 
   /** Log-spaced sample sizes from 10 to N at which the running mean is recorded. */
@@ -276,7 +338,7 @@ var SteinLemmaModel = (function () {
   }
 
   return { rng: rng, normalGen: normalGen, lgamma: lgamma, dist: dist, parse: parse,
-    testFn: testFn, opValue: opValue, quadrature: quadrature, conditions: conditions,
+    testFn: testFn, opValue: opValue, quadrature: quadrature, tailCheck: tailCheck, conditions: conditions,
     exact: exact, checkpoints: checkpoints, run: run, SQ3: SQ3 };
 })();
 

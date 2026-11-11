@@ -144,3 +144,25 @@ console.log("checks pass");
   const med = seeds20.map((seed) => M.race({ ...base, seed }).trace[1].svgd);
   console.log(`median heuristic, 20 seeds: KSD after 500 its ${range(med)}`);
 }
+
+// 11. Items 4 and 5 over 20 seeds: by then a reader has pressed Reset several times, and each Reset
+//     moves to the next seed, so five seeds would not cover what they see.
+{
+  const seeds20 = Array.from({ length: 20 }, (_, i) => i + 1);
+  const right = [], ks = [], spread = [];
+  for (const seed of seeds20) {
+    const r = M.race({ ...base, target: "mixture", sep: 8, centre: [4, 0], steps: 1000, every: 1000, seed });
+    right.push(M.rightFraction(r.svgd)); ks.push(r.trace[1].svgd);
+    const r2 = M.race({ ...base, target: "mixture", sep: 8, steps: 1000, every: 1000, seed });
+    spread.push(M.rightFraction(r2.svgd));
+  }
+  assert.ok(Math.min(...right) === 1);
+  const T = M.target("mixture", { sep: 8 }), exact = seeds20.map((s) => {
+    const r = M.rng(s), nrm = M.normalGen(r), P = new Float64Array(200);
+    for (let i = 0; i < 100; i++) { P[2 * i] = (r() < M.MIX_W ? -4 : 4) + nrm(); P[2 * i + 1] = nrm(); }
+    return M.ksd(P, T);
+  });
+  assert.ok(Math.max(...ks) < Math.min(...exact));
+  console.log(`20 seeds, mixture sep 8, start x0 = 4: share right ${range(right)}, KSD ${range(ks)}; ` +
+    `KSD of 100 exact draws ${range(exact)}; start x0 = 0: share right (the lighter mode) ${range(spread)}`);
+}

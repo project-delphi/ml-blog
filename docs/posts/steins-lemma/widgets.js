@@ -14,22 +14,22 @@
       badge: "interactive · synthetic draws",
       note: "Each run draws 100,000 pseudo-random values from the chosen law, standardised to mean 0 and variance 1. " +
         "The line is the running mean of the operator applied to f, the band is ±2 standard errors, and the dashed line is the exact expectation. " +
-        "A custom f accepts x, numbers, + − * / ^, pi, e and sin cos tan exp log sqrt abs tanh sinh cosh atan; its derivative is a central difference."
+        "A custom f accepts x, numbers, + − * / ^, pi, e and sin cos tan exp log sqrt abs tanh sinh cosh atan; its derivative is a central difference, and whether its expectation exists is judged from its growth in the tails."
     });
 
     var distT = WK.toggle({ label: "Law of X (mean 0, variance 1)", value: st.dist,
       options: [{ value: "gauss", label: "Gaussian" }, { value: "laplace", label: "Laplace" },
                 { value: "t", label: "Student-t" }, { value: "unif", label: "Uniform" }],
-      onchange: function (v) { st.dist = v; syncNu(); update(); } });
+      onchange: function (v) { st.dist = v; syncNu(); schedule(); } });
     var nuS = WK.slider({ label: "Student-t degrees of freedom ν", min: 2.5, max: 30, step: 0.5, value: st.nu,
-      fmt: function (v) { return Number(v).toFixed(1); }, oninput: function (v) { st.nu = v; update(); } });
+      fmt: function (v) { return Number(v).toFixed(1); }, oninput: function (v) { st.nu = v; schedule(); } });
     var fnT = WK.toggle({ label: "Test function f", value: st.fn,
       options: [{ value: "sin", label: "sin x" }, { value: "tanh", label: "tanh x" },
                 { value: "cube", label: "x³" }, { value: "custom", label: "custom" }],
-      onchange: function (v) { st.fn = v; syncCustom(); update(); } });
+      onchange: function (v) { st.fn = v; syncCustom(); schedule(); } });
     var opT = WK.toggle({ label: "Operator", value: st.op,
       options: [{ value: "gauss", label: "Gaussian  f′ − x f" }, { value: "langevin", label: "Langevin  f′ + sₚ f" }],
-      onchange: function (v) { st.op = v; update(); } });
+      onchange: function (v) { st.op = v; schedule(); } });
     var customIn = WK.el("input", { type: "text", value: st.custom, "aria-label": "Custom test function f of x",
       spellcheck: "false", autocomplete: "off",
       style: { width: "100%", font: "inherit", fontSize: "0.9rem", padding: "0.3rem 0.5rem",
@@ -45,7 +45,7 @@
     });
     var resample = WK.el("button", { type: "button", class: "widget-toggle-btn", text: "Resample",
       style: { border: "1px solid var(--w-rule)", borderRadius: "999px" },
-      onclick: function () { st.seed += 1; update(); } });
+      onclick: function () { st.seed += 1; schedule(); } });
     var resampleBox = WK.el("div", { class: "widget-control", style: { flex: "0 0 auto", alignSelf: "flex-end" } }, resample);
 
     [distT, fnT, opT].forEach(function (t) { // let a toggle wrap inside a narrow (phone-width) frame
@@ -80,14 +80,29 @@
         "font-size": FS }, text);
     }
 
+    // One redraw per animation frame however fast the slider fires; the exact value and the
+    // conditions do not depend on the seed, so Resample reuses them.
+    var pending = false, cache = {};
+    function schedule() {
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(function () { pending = false; update(); });
+    }
+    function exactAndConditions() {
+      var key = [st.op, st.dist, st.dist === "t" ? st.nu : "", st.fn, st.fn === "custom" ? st.custom : ""].join("|");
+      if (!(key in cache)) cache[key] = { exact: M.exact(st.op, st.dist, st.nu, st.fn, st.custom),
+        cond: M.conditions(st.op, st.dist, st.nu, st.fn, st.custom) };
+      return cache[key];
+    }
+
     function update() {
       var result, exact, cond;
       customErr.textContent = "";
       try {
         if (st.fn === "custom") M.parse(st.custom);
         result = M.run({ dist: st.dist, nu: st.nu, fn: st.fn, op: st.op, seed: st.seed, N: N, custom: st.custom });
-        exact = M.exact(st.op, st.dist, st.nu, st.fn, st.custom);
-        cond = M.conditions(st.op, st.dist, st.nu, st.fn);
+        var ec = exactAndConditions();
+        exact = ec.exact; cond = ec.cond;
       } catch (err) {
         customErr.textContent = "Cannot read this f: " + err.message + ".";
         WK.clear(svg);
@@ -100,6 +115,15 @@
 
     function draw(result, exact, cond) {
       WK.clear(svg);
+      if (!cond.domain || result.nonFinite) {
+        // f is undefined at some draws: a running mean over the rest would look like an answer
+        [sEst, sSe].forEach(function (s) { s.set("—"); });
+        sExact.set("undefined");
+        condNote.textContent = cond.domain
+          ? "f or its derivative is not finite at " + result.nonFinite.toLocaleString("en") + " of the " + N.toLocaleString("en") + " draws, so the expectation is not defined."
+          : cond.note;
+        return;
+      }
       var path = result.path, fin = result.final;
       var lo = Infinity, hi = -Infinity;
       path.forEach(function (p) {
@@ -152,7 +176,6 @@
       if (!msg && exact !== null) msg = Math.abs(exact) < 5e-4
         ? "The identity holds for this law and operator: the expectation is 0."
         : "The identity fails for this law and operator: the expectation is " + WK.fmt.num(exact, 3) + ", not 0.";
-      if (result.nonFinite) msg += " " + result.nonFinite + " draws gave a non-finite value and were counted as 0.";
       condNote.textContent = msg;
     }
 
