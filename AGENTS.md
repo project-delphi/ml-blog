@@ -55,7 +55,7 @@ allow/block matrix; run the matching one after touching a hook.
 3. **Edit prose only.** Leave executable cell bodies, widgets, and freeze figures alone
    unless the change is about them.
 4. **If you touched `widgets.js` or `widget-data/*.json`, force a re-render.** See
-   [Widget sidecars are outside the freeze hash](#widget-sidecars-are-outside-the-freeze-hash).
+   [Widget sidecars are outside the freeze hash](#widgets-the-kit-and-the-older-sidecars-outside-the-freeze-hash).
 5. **Re-render with the project render.** Editing the source changes its md5, so
    `freeze: auto` re-executes that one post and nothing else, and the same pass
    refreshes `search.json`, which any prose edit leaves stale. That re-execution needs
@@ -90,6 +90,18 @@ they cannot be re-rendered at all. See [Why `_freeze/` is committed](#why-_freez
    the home page and in search. `make check-posts` fails when a post is missing from
    `docs/listings.json`.
 
+**Drafts.** `_quarto.yml` sets `draft-mode: unlinked`, so a post with `draft: true`
+still renders in full to `docs/posts/<slug>/`. Once merged, anyone with the URL can
+read it. A project render keeps it out of the listing, `search.json`, the sitemap and
+the feed. Whether a link *to* a draft survives depends on how it is written. Quarto
+resolves a link against the project's inputs, and a draft input becomes plain text.
+So `[Part 2](../<slug>/index.qmd)` is unwrapped everywhere except `quarto preview`.
+A directory link, `[Part 2](../<slug>/)`, matches no input, so it stays live from any
+page. The Stein's method series links between its parts that way. `scripts/check_posts.py`
+recognises a draft only when the line reads exactly `draft: true`; a trailing comment
+hides it from the checker, which then reports the post as missing from the listing.
+Un-drafting needs a project render, which rebuilds the listing, search and feed.
+
 ## Rendering
 
 **One post** — `quarto render posts/<slug>/index.qmd`. Narrow blast radius, but it
@@ -111,10 +123,16 @@ source md5 changed.
 - Kernelspecs resolve while Quarto *indexes* the project, before it consults `_freeze/`.
   A missing kernel fails the whole render, frozen output or not. On a fresh clone run
   `make kernels-stub` first.
-- **Check `quarto --version` first.** Nothing pins it; this machine has 1.6.40. A newer
-  Quarto rewrites the shared `docs/site_libs/` runtime, which broke older posts'
-  JavaScript once already (`452f1fe` restored it by hand). Churn under `site_libs/` in
-  your diff is a stop sign, not noise.
+- **Render with Quarto 1.6.40, which is not the `quarto` on PATH.** The version is
+  pinned in three places: `QUARTO_VERSION` in the `Makefile`, the `check-quarto` guard on
+  `make render` and `make render-post`, and `QUARTO_VERSION` in CI. The PATH copy on
+  this machine has been upgraded (1.10.20 as of 2026-11-11), so both make targets refuse
+  to run. A 1.6.40 install lives at `~/.local/share/quarto/1.6.40/bin`; put it first on
+  PATH for the render command only:
+  `PATH="$HOME/.local/share/quarto/1.6.40/bin:$PATH" make render-post SLUG=<slug>`.
+  A newer Quarto rewrites the shared `docs/site_libs/` runtime, which broke older posts'
+  JavaScript once already (`452f1fe` restored it by hand), and CI fails a PR that
+  changes `site_libs/`. Churn under `site_libs/` in your diff is a stop sign, not noise.
 - **After any full render**, run `make docs-deleted` and restore what it lists — see
   the third `.gitignore` trap below. `make render` runs it for you.
 
@@ -212,7 +230,7 @@ of that is machine-written, and none of it needs to be read to be checked.
   Prefer it to a bare `grep`, which the permission layer often refuses on a file that
   size. Ask `docs-inspect` when a question needs more than one call.
 - **Send render output to a log**, then read `tail -40` and
-  `grep -inE 'error|not found|traceback'` of it. A 113-post project render emits thousands
+  `grep -inE 'error|not found|traceback'` of it. A 139-post project render emits thousands
   of lines and the useful part is the last screenful. `render-verify` does this and returns
   a verdict.
 - **Slice posts for targeted edits.** `grep -n` for the phrase, then read from that offset.
@@ -234,7 +252,7 @@ and hand back a verdict, because a subagent's tool output never enters the calli
 |---|---|
 | `render-verify` | the whole project render, the `docs/` deletion check, `make check-posts` |
 | `docs-inspect` | any yes/no question about rendered output under `docs/` |
-| `post-locate` | finding where something is said or configured across the 113 posts |
+| `post-locate` | finding where something is said or configured across the 139 posts |
 
 **Do not delegate the prose.** A fresh agent re-reads this file, `STYLE.md`, and the post
 before it can write a sentence, then hands back a diff that has to be read and re-verified
@@ -271,7 +289,7 @@ A second exemption, `STALE_FREEZE_OK`, covers posts whose frozen output is knowi
 stale but inert because they have no code cells; the checker cancels the exemption
 automatically if code cells appear.
 
-### Widgets: the kit, and the seven sidecars still inside the freeze hash
+### Widgets: the kit, and the older sidecars outside the freeze hash
 
 New widgets are built on `widget-kit/kit.js` (one global, `WK`; contract and a worked
 example in `widget-kit/README.md`). Every post loads the kit through
