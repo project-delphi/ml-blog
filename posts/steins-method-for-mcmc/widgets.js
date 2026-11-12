@@ -34,7 +34,7 @@
   /** A log-axis label: 1, 2, 5, 1e1, 2e−2 and so on. */
   function logTick(t) {
     var e = Math.floor(Math.log10(t) + 1e-9), m = Math.round(t / Math.pow(10, e));
-    return e === 0 ? String(m) : (m === 1 ? "" : String(m)) + "e" + String(e).replace("-", "−");
+    return e === 0 ? String(m) : String(m) + "e" + String(e).replace("-", "−");
   }
   function fmtTick(v) {
     if (v >= 1000) return v.toExponential(0).replace("e+", "e");
