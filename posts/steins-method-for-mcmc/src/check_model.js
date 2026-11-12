@@ -50,7 +50,7 @@ for (const k of KEYS) {
   });
 }
 
-// 5. Asymptotic variance: grid value against the diffusion's 2 E f_h^2 / eps - Var h.
+// 5. Asymptotic variance: grid value against the leading order 2 E f_h^2 / eps.
 console.log("\nasymptotic variance at eps = 0.01: grid ULA / leading order 2E[f_h^2]/eps / grid MALA");
 for (const k of KEYS) {
   const G = M.setup(k), a = M.analyse(k, "ula", 0.01), b = M.analyse(k, "mala", 0.01);

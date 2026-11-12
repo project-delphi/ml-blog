@@ -31,6 +31,11 @@
     f.ticks = t;
     return f;
   }
+  /** A log-axis label: 1, 2, 5, 1e1, 2e−2 and so on. */
+  function logTick(t) {
+    var e = Math.floor(Math.log10(t) + 1e-9), m = Math.round(t / Math.pow(10, e));
+    return e === 0 ? String(m) : (m === 1 ? "" : String(m)) + "e" + String(e).replace("-", "−");
+  }
   function fmtTick(v) {
     if (v >= 1000) return v.toExponential(0).replace("e+", "e");
     if (v >= 1) return String(+v.toPrecision(2));
@@ -125,7 +130,7 @@
       var lx = logScale(M.EPS_MIN, M.EPS_MAX, m.l, W - m.r), ly = logScale(lo, hi, H - m.b, m.t);
       ly.ticks.forEach(function (t) {
         svg.appendChild(WK.h("line", { x1: m.l, x2: W - m.r, y1: ly(t), y2: ly(t), stroke: "rule" }));
-        text(svg, m.l - 6, ly(t) + 4, t.toExponential(0).replace("e+0", "").replace("e-", "e−").replace(/^1e/, "1e"), "end");
+        text(svg, m.l - 6, ly(t) + 4, logTick(t), "end");
       });
       [0.01, 0.02, 0.05, 0.1, 0.2, 0.4].forEach(function (t) { text(svg, lx(t), H - m.b + 16, String(t)); });
       svg.appendChild(WK.h("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, stroke: "muted" }));
@@ -155,7 +160,9 @@
       sBias.set(hasBias ? sig(ula.bias[st.h]) : "0 (symmetry)");
       sPred.set(hasBias ? sig(c * eps) + "  (c = " + sig(c) + ")" : "0");
       sErr.set(sig(M.rmse(ula.bias[st.h], ula.avar[st.h], N)) + " / " + sig(M.rmse(mala.bias[st.h], mala.avar[st.h], N)));
-      sBest.set(cu.best.eps.toFixed(3) + " / " + (cm.best.eps >= M.EPS_MAX * 0.999 ? "≥ " : "") + cm.best.eps.toFixed(3));
+      // a best step at the end of the range means the error is still falling there
+      var edge = function (b) { return (b.eps >= M.EPS_MAX * 0.999 ? "≥ " : "") + b.eps.toFixed(3); };
+      sBest.set(edge(cu.best) + " / " + edge(cm.best));
       sBestR.set(sig(cu.best.rmse) + " / " + sig(cm.best.rmse));
       sAcc.set(mala.acc.toFixed(3));
     }
@@ -208,11 +215,16 @@
       }
     });
     var m = { l: 54, r: 22, t: 22, b: 34 };
-    var chain = null, rep = null;
+    var chain = null, rep = null, chains = null, cacheKey = "";
     function recompute() {
-      var n = N_LIST[st.ni];
-      chain = M.mala(n, EPS, 7000 + st.seed);
-      rep = M.replicate(st.h, n, EPS, R, 100 * st.seed);
+      // the chains do not depend on the estimate, so a change of estimate only rescores them
+      var n = N_LIST[st.ni], key = n + "|" + st.seed;
+      if (key !== cacheKey) {
+        chain = M.mala(n, EPS, 7000 + st.seed);
+        chains = M.replicateChains(n, EPS, R, 100 * st.seed);
+        cacheKey = key;
+      }
+      rep = M.mseOver(chains, st.h);
       draw();
     }
     function draw() {

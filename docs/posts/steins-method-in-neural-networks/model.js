@@ -28,8 +28,8 @@ var SteinNetsModel = (function () {
       return rad * Math.cos(ang);
     };
   }
-  /** Standard normal CDF via erfc (W. J. Cody's rational approximation is overkill here;
-   *  this continued-fraction-free form is accurate to about 1e-7). */
+  /** Standard normal CDF by the Abramowitz & Stegun 26.2.17 (Zelen–Severo) polynomial,
+   *  absolute error below 7.5e-8. */
   function normCdf(z) {
     var t = 1 / (1 + 0.2316419 * Math.abs(z));
     var d = 0.3989422804014327 * Math.exp(-z * z / 2);
@@ -65,6 +65,8 @@ var SteinNetsModel = (function () {
     var c3 = gauss(function (z) { return Math.pow(Math.abs(f(z)), 3); });
     var c4 = gauss(function (z) { var v = f(z); return v * v * v * v; });
     var kappa = c4 / (c2 * c2) - 1;
+    // sign has kappa = 0 exactly; quadrature leaves ~1e-14, which would plot as a curve on the axis
+    if (Math.abs(kappa) < 1e-12) kappa = 0;
     // the summand X = v sigma(g) / sqrt(c2) with v ~ N(0, 1): E|v|^3 = 2 sqrt(2/pi), E v^4 = 3
     var EX3 = 2 * SQ2PI * c3 / Math.pow(c2, 1.5), EX4 = 3 * c4 / (c2 * c2);
     var out = {

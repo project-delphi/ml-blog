@@ -77,13 +77,16 @@ var SteinMCMCModel = (function () {
       cell: function (x, dx) { return Math.min(1, Math.max(0, (x + dx / 2 - 2) / dx)); } }
   ];
   var NGRID = 241;
-  /** Step sizes for the error-against-step-size curves. */
-  var EPS_GRID = (function () { var o = []; for (var i = 0; i < 17; i++) o.push(0.01 * Math.pow(40, i / 16)); return o; })();
+  /** The step-size range of the chart's slider and curves. */
   var EPS_MIN = 0.01, EPS_MAX = 0.4;
+  /** Step sizes for the error-against-step-size curves: 17 log-spaced points spanning [EPS_MIN, EPS_MAX]. */
+  var EPS_GRID = (function () { var o = []; for (var i = 0; i < 17; i++) o.push(EPS_MIN * Math.pow(EPS_MAX / EPS_MIN, i / 16)); return o; })();
 
   var gridCache = {}, curveCache = {};
   /** Change the grid size (for checking convergence under node); clears every cache. */
-  function setGridSize(n) { NGRID = n; gridCache = {}; curveCache = {}; }
+  function setGridSize(n) { NGRID = n; gridCache = {}; curveCache = {}; analyseCache = {}; analyseKeys = []; }
+  /** The current grid size (a function, so it follows setGridSize). */
+  function gridSize() { return NGRID; }
   /** The grid, the target's normalised weights on it, and Stein's first-order coefficients. */
   function setup(key) {
     if (gridCache[key]) return gridCache[key];
@@ -195,7 +198,18 @@ var SteinMCMCModel = (function () {
   /** Stationary law, bias and asymptotic variance of one sampler at one step size.
    *  With M = I - P + 1 r^T (r uniform), pi M = r^T gives the stationary law, and
    *  M u = hbar gives a solution of the discrete Poisson equation (I - P) u = hbar. */
+  var analyseCache = {}, analyseKeys = [];
+  /** analyse(), memoised on (target, sampler, step) for the most recent 64 calls, so a redraw that
+   *  leaves the step unchanged (a budget-slider move) does not refactorise. */
   function analyse(key, sampler, eps) {
+    var ck = key + "|" + sampler + "|" + eps;
+    if (analyseCache[ck]) return analyseCache[ck];
+    var out = analyseUncached(key, sampler, eps);
+    analyseCache[ck] = out; analyseKeys.push(ck);
+    if (analyseKeys.length > 64) delete analyseCache[analyseKeys.shift()];
+    return out;
+  }
+  function analyseUncached(key, sampler, eps) {
     var G = setup(key), N = G.N, P = kernel(key, sampler, eps), i, j, k;
     var M = new Float64Array(N * N);
     for (i = 0; i < N; i++) for (j = 0; j < N; j++) M[i * N + j] = (i === j ? 1 : 0) - P[i * N + j] + 1 / N;
@@ -393,25 +407,33 @@ var SteinMCMCModel = (function () {
     });
     return out;
   }
-  /** Mean squared error over R independent chains, for each estimator. */
-  function replicate(hIdx, n, eps, R, seed0) {
-    var ref = lrReference()[hIdx], se = { plain: 0, deg1: 0, deg2: 0 }, acc = 0;
-    for (var rr = 0; rr < R; rr++) {
-      var ch = mala(n, eps, seed0 + 1000 * rr + 17), e = zv(ch, hIdx);
+  /** R independent chains of length n; they do not depend on the test function. */
+  function replicateChains(n, eps, R, seed0) {
+    var out = [];
+    for (var rr = 0; rr < R; rr++) out.push(mala(n, eps, seed0 + 1000 * rr + 17));
+    return out;
+  }
+  /** Mean squared error of each estimator of test function hIdx over a set of chains. */
+  function mseOver(chains, hIdx) {
+    var ref = lrReference()[hIdx], se = { plain: 0, deg1: 0, deg2: 0 }, acc = 0, R = chains.length;
+    chains.forEach(function (ch) {
+      var e = zv(ch, hIdx);
       acc += ch.acc;
       for (var key in se) se[key] += (e[key] - ref) * (e[key] - ref);
-    }
+    });
     for (var k2 in se) se[k2] /= R;
     return { mse: se, acc: acc / R, vr1: se.plain / se.deg1, vr2: se.plain / se.deg2 };
   }
+  /** Mean squared error over R independent chains, for each estimator. */
+  function replicate(hIdx, n, eps, R, seed0) { return mseOver(replicateChains(n, eps, R, seed0), hIdx); }
 
   return {
     rng: rng, normalGen: normalGen,
-    TARGETS: TARGETS, HS: HS, EPS_GRID: EPS_GRID, EPS_MIN: EPS_MIN, EPS_MAX: EPS_MAX, NGRID: NGRID,
+    TARGETS: TARGETS, HS: HS, EPS_GRID: EPS_GRID, EPS_MIN: EPS_MIN, EPS_MAX: EPS_MAX, gridSize: gridSize,
     setGridSize: setGridSize, setup: setup, kernel: kernel, analyse: analyse, curves: curves, rmse: rmse, bestEps: bestEps, rmseCurve: rmseCurve,
     predictedDensity: predictedDensity,
     LR: LR, LR_H: LR_H, LR_VIEW: LR_VIEW, lrLogp: lrLogp, lrScore: lrScore, lrReference: lrReference,
-    lrDensityGrid: lrDensityGrid, mala: mala, zv: zv, replicate: replicate
+    lrDensityGrid: lrDensityGrid, mala: mala, zv: zv, replicate: replicate, replicateChains: replicateChains, mseOver: mseOver
   };
 })();
 
