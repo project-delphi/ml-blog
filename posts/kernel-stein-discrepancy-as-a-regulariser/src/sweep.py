@@ -1,10 +1,23 @@
 """Run a grid of vae.py or jepa.py jobs, skipping any whose result JSON exists.
 
-    uv run --no-project --with torch==2.15.0 --with numpy==2.5.4 \
-        python posts/kernel-stein-discrepancy-as-a-regulariser/src/sweep.py vae --workers 2
+The defaults reproduce the post. From the repo root, with CIFAR-10's python batches
+under ~/.keras/datasets and results/classifier.pt from classifier.py:
 
-Grids are defined in GRIDS; ``--pilot`` runs the short lambda-calibration grid instead
-and writes to results/<exp>-pilot/.
+    RUN="uv run --no-project --with torch==2.15.0 --with numpy==2.5.4"
+    $RUN python posts/kernel-stein-discrepancy-as-a-regulariser/src/sweep.py vae --pilot
+    $RUN python posts/kernel-stein-discrepancy-as-a-regulariser/src/sweep.py vae
+    $RUN python posts/kernel-stein-discrepancy-as-a-regulariser/src/sweep.py jepa --pilot
+    $RUN python posts/kernel-stein-discrepancy-as-a-regulariser/src/sweep.py jepa
+
+- ``vae --pilot``: 3 epochs, seed 0, two strengths per regulariser (results/vae-pilot/).
+- ``vae``: GRIDS["vae"], 15 epochs, seeds 0 and 1 (results/vae/).
+- ``jepa --pilot``: 4 epochs, seed 0, lambda in {0.01, 0.1, 1, 10}, scored on 5,000
+  held-out training images (``--val``; results/jepa-pilot/, tagged ``_val``).
+- ``jepa``: GRIDS["jepa"], 12 epochs, seeds 10-12; the unregularised run uses seed 10
+  only (results/jepa/).
+
+``--workers 2`` runs two jobs at once, which on an Apple M1 Pro was about 1.7 times the
+throughput of one. ``--seeds`` and ``--epochs`` override the defaults.
 """
 
 import argparse
@@ -23,7 +36,7 @@ PILOT_LAMS_JEPA = (0.01, 0.1, 1.0, 10.0)
 GRIDS = {
     # VAE: four strengths per regulariser, chosen from the 3-epoch pilot so that each
     # line runs from barely regularised to saturated (Adam makes very large lambda act
-    # alike). JEPA: filled in from its pilot.
+    # alike).
     "vae": {
         "none": (0.0,),
         "kl": (0.03, 0.1, 0.3, 1.0),
@@ -33,8 +46,7 @@ GRIDS = {
         "ksd_imq": (10.0, 100.0, 1000.0, 10000.0),
         "ksd_mix": (10.0, 100.0, 1000.0, 10000.0),
     },
-    # JEPA: each arm at the strength with the best validation probe in the 4-epoch
-    # pilot over lambda in {0.01, 0.1, 1, 10} (seed 0; final seeds are 10-12).
+    # JEPA: each arm at the strength with the best validation probe in the pilot.
     "jepa": {
         "ksd_imq": (0.1,),
         "ksd_mix": (0.01,),
@@ -42,11 +54,18 @@ GRIDS = {
         "moments": (0.01,),
         "sigreg": (0.01,),
         "vicreg": (1.0,),
+        "none": (0.0,),
     },
 }
 PILOT_REGS = {
     "vae": ("kl", "moments", "mmd", "sigreg", "ksd_imq", "ksd_mix"),
     "jepa": ("vicreg", "moments", "mmd", "sigreg", "ksd_imq", "ksd_mix"),
+}
+DEFAULTS = {  # (exp, pilot) -> seeds, epochs
+    ("vae", True): ([0], 3),
+    ("vae", False): ([0, 1], 15),
+    ("jepa", True): ([0], 4),
+    ("jepa", False): ([10, 11, 12], 12),
 }
 
 
@@ -58,9 +77,12 @@ def jobs(exp, pilot, seeds, epochs):
     else:
         out = RES / exp
         grid = GRIDS[exp]
+    val = pilot and exp == "jepa"
     for (reg, lams), seed in itertools.product(grid.items(), seeds):
+        if exp == "jepa" and reg == "none" and seed != seeds[0]:
+            continue  # collapse needs no second seed
         for lam in lams:
-            tag = f"{reg}_lam{lam:g}_s{seed}"
+            tag = f"{reg}_lam{lam:g}_s{seed}" + ("_val" if val else "")
             if (out / f"{tag}.json").exists():
                 continue
             cmd = [
@@ -71,10 +93,8 @@ def jobs(exp, pilot, seeds, epochs):
                 "--lam",
                 str(lam),
             ]
-            cmd += ["--seed", str(seed), "--out", str(out)]
-            if epochs:
-                cmd += ["--epochs", str(epochs)]
-            if pilot and exp == "jepa":
+            cmd += ["--seed", str(seed), "--out", str(out), "--epochs", str(epochs)]
+            if val:
                 cmd += ["--val"]
             yield tag, cmd, out
 
@@ -83,11 +103,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("exp", choices=("vae", "jepa"))
     ap.add_argument("--pilot", action="store_true")
-    ap.add_argument("--workers", type=int, default=1)
-    ap.add_argument("--seeds", type=int, nargs="+", default=[0])
-    ap.add_argument("--epochs", type=int, default=0)
+    ap.add_argument("--workers", type=int, default=2)
+    ap.add_argument("--seeds", type=int, nargs="+")
+    ap.add_argument("--epochs", type=int)
     a = ap.parse_args()
-    queue = list(jobs(a.exp, a.pilot, a.seeds, a.epochs))
+    seeds, epochs = DEFAULTS[(a.exp, a.pilot)]
+    queue = list(jobs(a.exp, a.pilot, a.seeds or seeds, a.epochs or epochs))
     print(f"{len(queue)} jobs", flush=True)
     running = []
     t0 = time.time()

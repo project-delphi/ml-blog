@@ -17,7 +17,7 @@ prior samples and 16 reconstructions for the figures.
 Run from the repo root (CIFAR-10 python batches under ~/.keras/datasets):
 
     uv run --no-project --with torch==2.15.0 --with numpy==2.5.4 \
-        python posts/kernel-stein-discrepancy-as-a-regulariser/src/vae.py --reg ksd --lam 1000
+        python posts/kernel-stein-discrepancy-as-a-regulariser/src/vae.py --reg ksd_mix --lam 100
 """
 
 import argparse
@@ -71,10 +71,10 @@ class Decoder(nn.Module):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--reg", required=True)
+    ap.add_argument("--reg", required=True, choices=common.NAMES + ("kl",))
     ap.add_argument("--lam", type=float, default=0.0)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--epochs", type=int, default=25)
+    ap.add_argument("--epochs", type=int, default=15)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--out", default=str(HERE / "results" / "vae"))

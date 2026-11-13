@@ -149,7 +149,9 @@ def vae_frontier(rows):
     )
     ax.set_ylabel("Fréchet distance of decoded N(0, I) draws\nto the test images (lower is better)",
                   color=INK, fontsize=9.5)  # fmt: skip
-    ax.set_title("Each line is one regulariser at four strengths λ; bars span two seeds",
+    seeds = min(r["seeds"] for r in rows if r["reg"] != "none")
+    words = {1: "one", 2: "two", 3: "three"}
+    ax.set_title(f"Each line is one regulariser at four strengths λ; bars span {words.get(seeds, seeds)} seeds",
                  color=MUTED, fontsize=9, loc="left")  # fmt: skip
     leg = ax.legend(
         loc="upper right",
@@ -267,6 +269,18 @@ def main():
             "sample grid picks:",
             [(p["reg"], p["lam"], round(p["test_mse"] * 1e3, 2)) for p in picks],
         )
+    if (RES / "jepa-pilot").exists():
+        print("\nJEPA pilot (validation linear probe, 4 epochs, seed 0)")
+        pilot = defaultdict(dict)
+        for p in sorted((RES / "jepa-pilot").glob("*_val.json")):
+            r = json.loads(p.read_text())
+            pilot[r["reg"]][r["lam"]] = r["probe_backbone"]
+        for reg, by_lam in sorted(pilot.items()):
+            best = max(by_lam, key=by_lam.get)
+            cells = "  ".join(
+                f"{lam:g}: {v * 100:.1f}" for lam, v in sorted(by_lam.items())
+            )
+            print(f"{reg:8s} {cells}   -> {best:g}")
     if (RES / "jepa").exists():
         print("\nJEPA (means over seeds; ranges in brackets)")
         for r in jepa_rows():

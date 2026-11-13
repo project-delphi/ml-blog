@@ -15,7 +15,7 @@ neighbour classifier on the 256-d backbone features (standard practice), and the
 Gaussian diagnostics and effective rank of the test embeddings.
 
     uv run --no-project --with torch==2.15.0 --with numpy==2.5.4 \
-        python posts/kernel-stein-discrepancy-as-a-regulariser/src/jepa.py --reg ksd --lam 1
+        python posts/kernel-stein-discrepancy-as-a-regulariser/src/jepa.py --reg ksd_imq --lam 0.1 --seed 10
 """
 
 import argparse
@@ -124,10 +124,10 @@ def effective_rank(z):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--reg", required=True)
+    ap.add_argument("--reg", required=True, choices=common.NAMES)
     ap.add_argument("--lam", type=float, default=1.0)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--epochs", type=int, default=30)
+    ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--lr", type=float, default=2e-3)
     ap.add_argument("--out", default=str(HERE / "results" / "jepa"))
@@ -205,7 +205,7 @@ def main():
     }  # fmt: skip
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    tag = f"{a.reg}_lam{a.lam:g}_s{a.seed}"
+    tag = f"{a.reg}_lam{a.lam:g}_s{a.seed}" + ("_val" if a.val else "")
     torch.save(
         {"z_test": zte[:2000].cpu().half(), "y_test": yte[:2000]}, out / f"{tag}.pt"
     )

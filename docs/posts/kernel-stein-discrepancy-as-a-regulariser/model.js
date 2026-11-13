@@ -6,7 +6,6 @@
 
 var KsdRegModel = (function () {
   var D = 2;
-  var MIX_W = 10; // weight of the Gaussian part in the mixed kernel IMQ + 10 Gaussian
 
   // ------------------------------------------------------------------ random numbers
   function rng(seed) {
@@ -227,7 +226,7 @@ var KsdRegModel = (function () {
 
   var REGS = ["moments", "ksd_imq", "ksd_rbf", "mmd", "sigreg"];
   var LABELS = { moments: "Moments", ksd_imq: "KSD\u00a0IMQ", ksd_rbf: "KSD\u00a0Gaussian",
-                 ksd_mix: "KSD\u00a0mixed", mmd: "MMD", sigreg: "SIGReg" };
+                 mmd: "MMD", sigreg: "SIGReg" };
 
   // One evaluation. MMD draws a fresh N(0, I) sample of the batch's size from `nrm`.
   function evaluate(reg, X, opts) {
@@ -235,11 +234,6 @@ var KsdRegModel = (function () {
     if (reg === "moments") return moments(X, opts);
     if (reg === "ksd_imq") return ksd(X, "imq", opts);
     if (reg === "ksd_rbf") return ksd(X, "rbf", opts);
-    if (reg === "ksd_mix") {
-      var a = ksd(X, "imq", opts), b = ksd(X, "rbf", opts), gm = new Float64Array(a.g.length);
-      for (var q = 0; q < gm.length; q++) gm[q] = a.g[q] + MIX_W * b.g[q];
-      return { v: a.v + MIX_W * b.v, g: gm };
-    }
     if (reg === "sigreg") return sigreg(X, opts.M);
     if (reg === "mmd") {
       var n = X.length / 2, nrm = opts.nrm || normalGen(rng(opts.seed || 99)), Y = new Float64Array(2 * n);

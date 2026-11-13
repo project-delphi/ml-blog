@@ -83,7 +83,6 @@ def augment(x, gen):
     b = 1 + (rand(n) * 0.8 - 0.4).view(n, 1, 1, 1)
     c = 1 + (rand(n) * 0.8 - 0.4).view(n, 1, 1, 1)
     s = 1 + (rand(n) * 0.8 - 0.4).view(n, 1, 1, 1)
-    gray = (0.299 * x[:, :1] + 0.587 * x[:, 1:2] + 0.114 * x[:, 2:]).expand_as(x)
     y = x * b
     m = y.mean(dim=(1, 2, 3), keepdim=True)
     y = (y - m) * c + m
@@ -115,7 +114,7 @@ def stein_kernel_imq(x, y, c2, beta=-0.5):
 
     k_p = x^T y k + 2 beta u b^{beta-1} - 2 beta d b^{beta-1} - 4 beta (beta-1) u b^{beta-2},
     with u = |x - y|^2 and b = c2 + u. (Derived in the post; checked against autograd in
-    .claude/notes/verify/part7/stein_kernel.py.)
+    src/check_stein_kernel.py.)
     """
     d = x.shape[1]
     u = _sqdist(x, y)
@@ -157,7 +156,7 @@ def stein_kernel_rbf(x, y, l2):
 
 def ksd_rbf(z, l2=None, ustat=True):
     n, d = z.shape
-    kp = stein_kernel_rbf(z, z, l2 or rbf_l2(n, d))
+    kp = stein_kernel_rbf(z, z, l2 if l2 is not None else rbf_l2(n, d))
     if ustat:
         return (kp.sum() - kp.diagonal().sum()) / (n * (n - 1))
     return kp.mean()
@@ -257,7 +256,9 @@ def sigreg(z, n_slices=256, gen=None):
 
 def vicreg(z, gamma=1.0, eps=1e-4):
     """VICReg's variance hinge plus its off-diagonal covariance term, in the paper's
-    25 : 1 weighting (so lam * vicreg(z) with lam = 25 is VICReg's default).
+    25 : 1 weighting, scaled so that lam * vicreg(z) with lam = 1 matches VICReg's variance
+    and covariance weights relative to its invariance term for one view. jepa.py averages
+    the two views' terms, so there lam = 2 matches VICReg.
     """
     n, d = z.shape
     std = torch.sqrt(z.var(0) + eps)
@@ -273,6 +274,8 @@ def kl_gauss(mu, logvar):
 
 
 REGS = ("ksd_imq", "ksd_mix", "ksd_rbf", "moments", "mmd", "sigreg", "vicreg")
+# every name batch_reg accepts
+NAMES = REGS + ("ksd_imq_v", "ksd_rbf_wide", "moments_v", "none")
 
 
 def batch_reg(name, z, gen=None):
