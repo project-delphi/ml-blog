@@ -106,10 +106,37 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   }
 }</script>
 <style>html{ scroll-behavior: smooth; }</style>
+<script>
+// MathJax 4 configuration for every page (included from _quarto.yml, which also pins
+// the MathJax version). Quarto 1.6 writes no MathJax configuration of its own.
+//
+// - The font is a separate package. Pin it to the same release, or MathJax 4.0.0
+//   fetches the unversioned latest font and warns.
+// - A display wider than the column (a phone, mostly) is scaled down to fit, so an
+//   aligned derivation keeps its alignment and its equation number.
+//
+// Not "linebreak", which looks like the better choice for long one-line displays:
+// in MathJax 4.0.0 (and 4.1.3), once one display on a page has been broken, every
+// aligned/cases/matrix table typeset after it lays out with its columns overlapping
+// (k_p(x,x') printed on top of the next cell). The posts lean on aligned blocks, so
+// one broken display would garble the rest of the page on a phone.
+//
+// Size is set on Quarto's span.math wrappers (theme/math.css), never with an
+// !important font-size on mjx-container: MathJax scales a display through that
+// element's inline font-size, and an !important rule silently cancels it. With
+// matchFontHeight off, MathJax does not rescale the maths to the body face's tall
+// x-height either, so those percentages are the sizes the reader sees.
+window.MathJax = {
+  loader: {
+    paths: { "mathjax-newcm": "https://cdn.jsdelivr.net/npm/@mathjax/mathjax-newcm-font@4.0.0" },
+  },
+  output: { displayOverflow: "scale", matchFontHeight: false },
+};
+</script>
 <script src="../../widget-kit/kit.js"></script>
 
   <script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
-  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@4.0.0/tex-chtml.js" type="text/javascript"></script>
 
 <script type="text/javascript">
 const typesetMath = (el) => {
@@ -138,6 +165,7 @@ window.Quarto = {
 };
 </script>
 
+<link rel="stylesheet" href="../../theme/math.css">
 <link rel="stylesheet" href="post.css">
 <meta property="og:title" content="The Poor Person’s Bayesian – Synthetic Musings">
 <meta property="og:description" content="Rubin’s Dirichlet weights, Efron’s multinomial counts, fifteen law schools, and the exact point at which resampling stops being inference on the cheap.">
@@ -338,12 +366,12 @@ Figure&nbsp;1: Theodor Hosemann (1807–1875), <em>Münchhausen pulls himself ou
 <p>In 1981 Donald Rubin published a short paper with a deadpan title, “The Bayesian Bootstrap,” whose stated purpose was less to propose a method than to make a point about one. Efron’s bootstrap draws <span class="math inline">\(n\)</span> observations with replacement, which is the same thing as reweighting the data with multinomial counts: observation <span class="math inline">\(i\)</span> gets weight <span class="math inline">\(w_i = n_i/n\)</span> where <span class="math inline">\((n_1,\dots,n_n) \sim \text{Multinomial}(n; \tfrac1n,\dots,\tfrac1n)\)</span>. Rubin’s version replaces the multinomial with a flat Dirichlet: <span class="math inline">\((w_1,\dots,w_n) \sim \text{Dirichlet}(1,\dots,1)\)</span> — equivalently, normalised standard exponentials. Everything else is identical: compute your statistic under the weights, repeat <span class="math inline">\(B\)</span> times, look at the distribution.</p>
 <p>The two weighting schemes are first-order the same. Both have <span class="math inline">\(E[w_i] = 1/n\)</span>, and the variances differ by exactly one factor:</p>
 <p><span id="eq-weightvar"><span class="math display">\[
-\operatorname{Var}_{\text{Efron}}(w_i) = \frac{n-1}{n^3},
-\qquad
-\operatorname{Var}_{\text{BB}}(w_i) = \frac{n-1}{n^2(n+1)},
-\qquad
-\frac{\operatorname{Var}_{\text{Efron}}}{\operatorname{Var}_{\text{BB}}} = \frac{n+1}{n}.
-\tag{1}\]</span></span></p>
+\begin{aligned}
+\operatorname{Var}_{\text{Efron}}(w_i) &amp;= \frac{n-1}{n^3},\\[6pt]
+\operatorname{Var}_{\text{BB}}(w_i) &amp;= \frac{n-1}{n^2(n+1)},\\[6pt]
+\frac{\operatorname{Var}_{\text{Efron}}}{\operatorname{Var}_{\text{BB}}} &amp;= \frac{n+1}{n}.
+\end{aligned}
+\qquad(1)\]</span></span></p>
 <p>But the Dirichlet version is not merely a smoothed imitation: it is a <strong>genuine posterior</strong>. Put a Dirichlet-process prior on <span class="math inline">\(F\)</span> and let the concentration go to zero with no base measure, and the posterior for <span class="math inline">\(F\)</span> given the data is exactly “Dirichlet<span class="math inline">\((1,\dots,1)\)</span> weights on the observed points.” The Bayesian bootstrap is the <span class="math inline">\(\alpha \to 0\)</span> limit of orthodox nonparametric Bayes. Two bridges connect the camps from either side: Efron (2012) showed that parametric-bootstrap replications approximate a Jeffreys-type posterior and can be importance-reweighted to make the correspondence exact; Newton and Raftery (1994) arrived from the parametric side with the weighted likelihood bootstrap, using random weights on the log-likelihood terms as approximate posterior sampling.</p>
 <p>Rubin, characteristically, was blunt about the uncomfortable part: this posterior puts <strong>zero mass on any value you did not observe</strong>. Under it, <span class="math inline">\(P(X &gt; \max(x)\,|\,\text{data}) = 0\)</span>, exactly. No smoothing, no extrapolation, no tail. Whether that is a feature (honesty) or a bug (absurdity) is, he noted, a question about the model both bootstraps share — and it will be the recurring villain of this post.</p>
 <div class="cell">
@@ -479,21 +507,21 @@ Figure&nbsp;2: The marginal distribution of a single observation’s weight unde
 <p>The bridge is a pair of linearisations. Write <span class="math inline">\(\ell(\theta)\)</span> for the log-likelihood (or, for M-estimation, the objective), and define the two information matrices</p>
 <p><span class="math display">\[
 J = -E\!\left[\partial^2_\theta\, \ell(\theta)\right]
-\qquad\text{(curvature: how sharply the objective bends)},
+\qquad\class{eq-note}{\text{(curvature: how sharply the objective bends)}},
 \]</span></p>
 <p><span class="math display">\[
 I = E\!\left[\partial_\theta\, \ell(\theta)\, \partial_\theta\, \ell(\theta)^{\!\top}\right]
-\qquad\text{(score noise: how much the gradient jitters)}.
+\qquad\class{eq-note}{\text{(score noise: how much the gradient jitters)}}.
 \]</span></p>
 <p>Both paradigms are, to first order, Gaussian around <span class="math inline">\(\hat\theta\)</span> — but with different covariances:</p>
 <p><span id="eq-boot"><span class="math display">\[
 \sqrt{n}\,(\hat\theta^* - \hat\theta) \,\big|\, X \;\rightsquigarrow\; N\!\left(0,\; J^{-1} I J^{-1}\right)
-\qquad \text{(bootstrap: delta method / influence functions)},
-\tag{2}\]</span></span></p>
+\qquad \class{eq-note}{\text{(bootstrap: delta method / influence functions)}},
+\qquad(2)\]</span></span></p>
 <p><span id="eq-bvm"><span class="math display">\[
 \sqrt{n}\,(\theta - \hat\theta) \,\big|\, X \;\rightsquigarrow\; N\!\left(0,\; J^{-1}\right)
-\qquad \text{(Bayes: Bernstein–von Mises)}.
-\tag{3}\]</span></span></p>
+\qquad \class{eq-note}{\text{(Bayes: Bernstein–von Mises)}}.
+\qquad(3)\]</span></span></p>
 <p>Unpacking the sandwich <span class="math inline">\(J^{-1} I J^{-1}\)</span> once, properly: the outer <span class="math inline">\(J^{-1}\)</span>’s translate gradient noise into parameter movement (a flat objective amplifies noise, a sharp one damps it), and the middle <span class="math inline">\(I\)</span> <em>is</em> the gradient noise. The bootstrap estimates this whole composite, because perturbing the data directly shakes the score and watches the estimator respond. The posterior in <a href="#eq-bvm" class="quarto-xref">Equation&nbsp;3</a> sees only the curvature <span class="math inline">\(J\)</span>, because with the data held fixed, curvature is all the likelihood surface has to offer.</p>
 <div class="callout callout-style-default callout-important callout-titled">
 <div class="callout-header d-flex align-content-center">
