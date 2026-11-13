@@ -39,12 +39,15 @@ def sampler(law, d, g):
     if law == "rademacher":
         return lambda n: torch.randint(0, 2, (n, d), generator=g).double() * 2 - 1
     if law == "student5":
-        chi = torch.distributions.Chi2(5.0)
-        return lambda n: (
-            torch.randn(n, d, generator=g)
-            / torch.sqrt(chi.sample((n, d)) / 5)
-            * math.sqrt(3 / 5)
-        )
+        # t_5 = N(0, 1) / sqrt(chi^2_5 / 5), the chi-square as a sum of five squared
+        # normals so every draw comes from g; scaled to variance 1.
+        def draw_t(n):
+            chi2 = torch.randn(n, d, 5, generator=g).pow(2).sum(-1)
+            return (
+                torch.randn(n, d, generator=g) / torch.sqrt(chi2 / 5) * math.sqrt(3 / 5)
+            )
+
+        return draw_t
     if law == "shell":
         return lambda n: (
             torch.nn.functional.normalize(torch.randn(n, d, generator=g), dim=1)

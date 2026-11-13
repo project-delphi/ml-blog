@@ -46,7 +46,8 @@
     ctl(WK.slider({ label: "Batch size n", min: 50, max: 300, step: 50, value: st.n,
       fmt: WK.fmt.int, oninput: function (v) {
         // Wait for the slider to settle: every new n costs a fresh set of null batches.
-        st.n = Math.round(v); clearTimeout(nTimer); nTimer = setTimeout(reset, 250);
+        var next = Math.round(v); clearTimeout(nTimer);
+        nTimer = setTimeout(function () { st.n = next; reset(); }, 250); // st.n always matches sim.X
       } }));
     var btn = function (label, fn) {
       return WK.el("button", { type: "button", class: "widget-toggle-btn", text: label, onclick: fn,

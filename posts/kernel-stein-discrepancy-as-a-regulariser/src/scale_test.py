@@ -26,7 +26,9 @@ LOSSES = {
     "ksd_imq_v": lambda z, g: common.ksd(z, c2=1.0, ustat=False),
     "ksd_imq": lambda z, g: common.ksd(z, c2=1.0),
     "ksd_rbf": lambda z, g: common.ksd_rbf(z),
-    "ksd_mix_fixed": lambda z, g: common.ksd(z, c2=1.0) + 10 * common.ksd_rbf(z),
+    "ksd_mix_fixed": lambda z, g: (
+        common.ksd(z, c2=1.0) + common.MIX_W * common.ksd_rbf(z)
+    ),
     "ksd_mix": lambda z, g: common.ksd_mix(z),
     "mmd": lambda z, g: common.mmd(z, gen=g),
     "sigreg": lambda z, g: common.sigreg(z, gen=g),

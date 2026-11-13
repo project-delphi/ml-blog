@@ -165,14 +165,18 @@ def ksd_rbf(z, l2=None, ustat=True):
 MIX_W = 10.0  # weight of the Gaussian part in the mixed kernel IMQ + MIX_W * Gaussian
 
 
-def median_l2(z):
+def median_l2(z, detach=False):
     """l^2 = med^2 / (2 log n), med^2 the median squared distance between batch codes.
     Gradient flows through the median, so the batch cannot lower the loss by spreading
-    out until the kernel stops seeing it (a detached median rewards exactly that).
+    out until the kernel stops seeing it (a detached median rewards exactly that;
+    ``detach=True`` exists for bandwidth_checks.py to show it).
     """
     n = z.shape[0]
     iu = torch.triu_indices(n, n, 1, device=z.device)
-    return _sqdist(z, z)[iu[0], iu[1]].median() / (2 * math.log(n))
+    u = _sqdist(z, z)
+    if detach:
+        u = u.detach()
+    return u[iu[0], iu[1]].median() / (2 * math.log(n))
 
 
 def ksd_mix(z, w=MIX_W):

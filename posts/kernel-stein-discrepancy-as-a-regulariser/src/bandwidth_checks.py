@@ -12,21 +12,15 @@
    too-wide batch. Three seeds; the range is printed.
 """
 
-import math
-
 import common
 import torch
 
 torch.set_default_dtype(torch.float64)
 D, N = 64, 256
-IU = torch.triu_indices(N, N, 1)
 
 
 def gauss_median(z, detach):
-    u = common._sqdist(z, z)
-    if detach:
-        u = u.detach()
-    return common.ksd_rbf(z, l2=u[IU[0], IU[1]].median() / (2 * math.log(N)))
+    return common.ksd_rbf(z, l2=common.median_l2(z, detach=detach))
 
 
 g = torch.Generator().manual_seed(0)

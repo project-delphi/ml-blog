@@ -117,17 +117,13 @@ def main():
             tag, cmd, out = queue.pop(0)
             out.mkdir(parents=True, exist_ok=True)
             log = open(out / f"{tag}.log", "w")
-            running.append(
-                (
-                    tag,
-                    subprocess.Popen(
-                        cmd, stdout=log, stderr=subprocess.STDOUT, cwd=HERE
-                    ),
-                )
-            )
-        for tag, p in list(running):
+            proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=HERE)
+            running.append((tag, proc, log))
+        for job in list(running):
+            tag, p, log = job
             if p.poll() is not None:
-                running.remove((tag, p))
+                running.remove(job)
+                log.close()
                 print(f"{time.time() - t0:7.0f}s {tag} exit {p.returncode}", flush=True)
         time.sleep(2)
 

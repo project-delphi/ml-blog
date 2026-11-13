@@ -83,6 +83,8 @@ def vae_rows():
         "cov_err",
         "sliced_w2",
         "excess_kurt",
+        "max_norm",
+        "top10_share",
     )
     for (reg, lam), rs in sorted(groups.items()):
         row = {"reg": reg, "lam": lam, "seeds": len(rs)}
@@ -263,7 +265,9 @@ def main():
                 f"{r['reg']:8s} lam {r['lam']:<7g} n={r['seeds']} mse {r['test_mse'] * 1e3:.2f}e-3 "
                 f"fcd_prior {r['fcd_prior']:.2f} [{r['fcd_prior_lo']:.2f}, {r['fcd_prior_hi']:.2f}] "
                 f"fcd_rec {r['fcd_rec']:.2f} gap {r['gap']:.2f} cov {r['cov_err']:.3f} sw2 {r['sliced_w2']:.4f} "
-                f"kurt {r['excess_kurt']:.2f} mean {r['mean_norm']:.2f}"
+                f"kurt {r['excess_kurt']:.2f} mean {r['mean_norm']:.2f} "
+                f"max|z| {r['max_norm_lo']:.1f}-{r['max_norm_hi']:.1f} "
+                f"top10 {r['top10_share_lo'] * 100:.1f}-{r['top10_share_hi'] * 100:.1f}%"
             )
         print(
             "sample grid picks:",
@@ -274,13 +278,22 @@ def main():
         pilot = defaultdict(dict)
         for p in sorted((RES / "jepa-pilot").glob("*_val.json")):
             r = json.loads(p.read_text())
-            pilot[r["reg"]][r["lam"]] = r["probe_backbone"]
-        for reg, by_lam in sorted(pilot.items()):
-            best = max(by_lam, key=by_lam.get)
-            cells = "  ".join(
-                f"{lam:g}: {v * 100:.1f}" for lam, v in sorted(by_lam.items())
+            blob = torch.load(p.with_suffix(".pt"))
+            z = blob["z_test"].double()
+            pilot[r["reg"]][r["lam"]] = (
+                r["probe_backbone"],
+                class_separation(z, blob["y_test"]),
+                float(z.norm(dim=1).mean()),
+                r["codes"]["sliced_w2"],
             )
-            print(f"{reg:8s} {cells}   -> {best:g}")
+        for reg, by_lam in sorted(pilot.items()):
+            best = max(by_lam, key=lambda lam: by_lam[lam][0])
+            print(f"{reg:8s} -> best lambda {best:g}")
+            for lam, (probe, sep, norm, sw2) in sorted(by_lam.items()):
+                print(
+                    f"    lam {lam:<5g} probe {probe * 100:.1f}  separation {sep:.3f}  "
+                    f"mean|z| {norm:.2f}  sliced W2 {sw2:.3f}"
+                )
     if (RES / "jepa").exists():
         print("\nJEPA (means over seeds; ranges in brackets)")
         for r in jepa_rows():
@@ -302,6 +315,9 @@ def pct(v):
 
 def tables():
     """The detection and scale tables, as the post prints them."""
+    if not (RES / "detect.json").exists() or not (RES / "scale.json").exists():
+        print("\n(run detect.py and scale_test.py for the detection and scale tables)")
+        return
     det = json.loads((RES / "detect.json").read_text())
     rows = [
         ("moments", "Moments"),
@@ -323,6 +339,12 @@ def tables():
             pct(det["rate"][f"{law}|64"][key]) for law in laws
         ]
         print(f"| {label} | " + " | ".join(cells) + " |")
+    # the control: Gaussian batches against the same thresholds (5% in expectation)
+    null = "  ".join(
+        f"{label}: {pct(det['rate']['gaussian|2'][key])} / {pct(det['rate']['gaussian|64'][key])}"
+        for key, label in rows
+    )
+    print("\nGaussian control (d = 2 / d = 64):", null)
     sc = json.loads((RES / "scale.json").read_text())
     print("\nscale test, learned scales over three seeds:")
     for name, runs in sc["runs"].items():

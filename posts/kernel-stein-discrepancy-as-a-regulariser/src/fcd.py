@@ -43,5 +43,10 @@ def summarise_vae(json_path, ref=None):
     out["confident"] = float(
         (blob["probs_prior"].float().max(1).values > 0.9).float().mean()
     )
+    # outliers among the first 2,000 test codes: the largest norm, and the share of the
+    # total squared norm carried by the ten largest (about 0.8% for N(0, I_64) draws)
+    r = blob["z_test"].double().norm(dim=1).sort(descending=True).values
+    out["max_norm"] = float(r[0])
+    out["top10_share"] = float(r[:10].pow(2).sum() / r.pow(2).sum())
     out.update(res["codes"])
     return out
