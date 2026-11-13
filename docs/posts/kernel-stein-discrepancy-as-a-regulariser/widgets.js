@@ -15,10 +15,11 @@
   WK.mount("widget-forces", function (root, WK) {
     var st = { law: "ring", reg: "moments", n: 150, seed: 1 };
     var sim = null, playing = false, raf = null, nullCache = {}, nullPending = {};
+    var nTimer = null;
 
     function readPalette() {
       var cs = getComputedStyle(document.documentElement), p = {};
-      WK.tokens.forEach(function (t) { p[t] = cs.getPropertyValue("--w-" + t).trim() || "#888888"; });
+      WK.tokens.forEach(function (t) { p[t] = cs.getPropertyValue("--w-" + t).trim() || cs.getPropertyValue("--w-muted").trim(); });
       return p;
     }
 
@@ -40,10 +41,13 @@
       onchange: function (v) { st.law = v; reset(); } }));
     var regT = ctl(WK.toggle({ label: "Regulariser", value: st.reg,
       options: M.REGS.map(function (r) { return { value: r, label: M.LABELS[r] }; }),
-      onchange: function (v) { st.reg = v; sim.gref = gref(); render(); } }));
+      onchange: function (v) { st.reg = v; sim.gref = gref(); sim.lastG = null; render(); } }));
     regT.root.style.flex = "1 1 100%";
     ctl(WK.slider({ label: "Batch size n", min: 50, max: 300, step: 50, value: st.n,
-      fmt: WK.fmt.int, oninput: function (v) { st.n = Math.round(v); reset(); } }));
+      fmt: WK.fmt.int, oninput: function (v) {
+        // Wait for the slider to settle: every new n costs a fresh set of null batches.
+        st.n = Math.round(v); clearTimeout(nTimer); nTimer = setTimeout(reset, 250);
+      } }));
     var btn = function (label, fn) {
       return WK.el("button", { type: "button", class: "widget-toggle-btn", text: label, onclick: fn,
         style: { border: "1px solid var(--w-rule)", borderRadius: "999px", marginRight: "0.4rem" } });
@@ -80,7 +84,10 @@
       if (nullCache[key]) return nullCache[key];
       if (!nullPending[key]) {
         nullPending[key] = true;
-        setTimeout(function () { nullCache[key] = M.nullStats(reg, n, NULL_REPS, 1, OPT); render(); }, 0);
+        setTimeout(function () {
+          if (n !== st.n) { delete nullPending[key]; return; } // the slider has moved on
+          nullCache[key] = M.nullStats(reg, n, NULL_REPS, 1, OPT); render();
+        }, 0);
       }
       return null;
     }
@@ -92,7 +99,8 @@
     }
     function advance(k) {
       for (var s = 0; s < k && sim.t < MAX_STEPS; s++) {
-        M.descend(sim.X, st.reg, 1, ETA, sim.gref, Object.assign({ nrm: sim.nrm }, OPT));
+        // keep the gradient the step used, so the arrows show the direction descent took
+        sim.lastG = M.descend(sim.X, st.reg, 1, ETA, sim.gref, Object.assign({ nrm: sim.nrm }, OPT)).g;
         sim.t++;
       }
       if (sim.t >= MAX_STEPS) pause();
@@ -186,8 +194,8 @@
     }
 
     function render(withChart) {
-      var cur = M.evaluate(st.reg, sim.X, Object.assign({ seed: st.seed * 17 + 3 }, OPT));
-      drawScene(cur.g);
+      var g = sim.lastG || M.evaluate(st.reg, sim.X, Object.assign({ seed: st.seed * 17 + 3 }, OPT)).g;
+      drawScene(g);
       if (withChart !== false) lastZ = drawChart();
       var zs = lastZ, rm = M.radialMoments(sim.X);
       sT.set(String(sim.t));

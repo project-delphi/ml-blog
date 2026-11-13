@@ -294,5 +294,43 @@ def main():
             )
 
 
+def pct(v):
+    """A rate from 200 batches is a multiple of 0.5%: print it exactly."""
+    p = round(v * 1000) / 10
+    return f"{p:g}%"
+
+
+def tables():
+    """The detection and scale tables, as the post prints them."""
+    det = json.loads((RES / "detect.json").read_text())
+    rows = [
+        ("moments", "Moments"),
+        ("ksd_imq", "KSD, IMQ"),
+        ("ksd_rbf_wide", "KSD, Gaussian, $\\ell^2 = d$"),
+        ("ksd_rbf", "KSD, Gaussian, $\\ell^2 = d/\\log n$"),
+        ("ksd_mix", "KSD, mixed"),
+        ("mmd", "MMD, WAE kernel"),
+        ("sigreg", "SIGReg"),
+    ]
+    laws = ("rademacher", "shell", "student5", "clusters")
+    print(
+        "\n| Regulariser | $d = 2$, all four | $d = 64$: corners | sphere | $t_5$ | clusters |"
+    )
+    print("|---|---|---|---|---|---|")
+    for key, label in rows:
+        two = [det["rate"][f"{law}|2"][key] for law in laws]
+        cells = [f"{pct(min(two))}–{pct(max(two))}"] + [
+            pct(det["rate"][f"{law}|64"][key]) for law in laws
+        ]
+        print(f"| {label} | " + " | ".join(cells) + " |")
+    sc = json.loads((RES / "scale.json").read_text())
+    print("\nscale test, learned scales over three seeds:")
+    for name, runs in sc["runs"].items():
+        lo = min(r["s_min"] for r in runs)
+        hi = max(r["s_max"] for r in runs)
+        print(f"  {name:14s} {lo:.2f}–{hi:.2f}")
+
+
 if __name__ == "__main__":
     main()
+    tables()

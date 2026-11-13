@@ -254,7 +254,8 @@ var KsdRegModel = (function () {
     vals.sort(function (a, b) { return a - b; });
     var mu = vals.reduce(function (s, v) { return s + v; }, 0) / reps;
     var sd = Math.sqrt(vals.reduce(function (s, v) { return s + (v - mu) * (v - mu); }, 0) / (reps - 1));
-    return { mean: mu, sd: sd, q95: vals[Math.floor(0.95 * reps)] };
+    // q95: the value 5% of Gaussian batches exceed (the ceil(0.95 reps)-th smallest)
+    return { mean: mu, sd: sd, q95: vals[Math.ceil(0.95 * reps) - 1] };
   }
 
   function maxNorm(g) {
