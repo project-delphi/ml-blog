@@ -172,7 +172,7 @@ def vae_frontier(rows):
 
 def vae_samples(rows, target_mse):
     """Decoded prior samples, one row per arm, at the strength whose test MSE is closest
-    to target_mse (seed 0), with the reconstructions of the plain autoencoder on top.
+    to target_mse (seed 0); the same twelve N(0, I) draws in every row.
     """
     picks = []
     for arm in ARMS_VAE:
@@ -329,22 +329,22 @@ def tables():
         ("sigreg", "SIGReg"),
     ]
     laws = ("rademacher", "shell", "student5", "clusters")
+    # the control column: fresh Gaussian batches against the same threshold (5% in
+    # expectation), so its spread is the noise in every other cell
     print(
-        "\n| Regulariser | $d = 2$, all four | $d = 64$: corners | sphere | $t_5$ | clusters |"
+        "\n| Regulariser | $d = 2$, all four | $d = 64$: control | corners | sphere | $t_5$ | clusters |"
     )
-    print("|---|---|---|---|---|---|")
+    print("|---|---|---|---|---|---|---|")
     for key, label in rows:
         two = [det["rate"][f"{law}|2"][key] for law in laws]
-        cells = [f"{pct(min(two))}–{pct(max(two))}"] + [
-            pct(det["rate"][f"{law}|64"][key]) for law in laws
+        cells = [
+            f"{pct(min(two))}–{pct(max(two))}",
+            pct(det["rate"]["gaussian|64"][key]),
         ]
+        cells += [pct(det["rate"][f"{law}|64"][key]) for law in laws]
         print(f"| {label} | " + " | ".join(cells) + " |")
-    # the control: Gaussian batches against the same thresholds (5% in expectation)
-    null = "  ".join(
-        f"{label}: {pct(det['rate']['gaussian|2'][key])} / {pct(det['rate']['gaussian|64'][key])}"
-        for key, label in rows
-    )
-    print("\nGaussian control (d = 2 / d = 64):", null)
+    two = [det["rate"]["gaussian|2"][key] for key, _ in rows]
+    print(f"\nd = 2 control across regularisers: {pct(min(two))}–{pct(max(two))}")
     sc = json.loads((RES / "scale.json").read_text())
     print("\nscale test, learned scales over three seeds:")
     for name, runs in sc["runs"].items():

@@ -38,6 +38,10 @@ LOSSES = {
     "Gaussian, median detached": lambda z: gauss_median(z, True),
     "Gaussian, median differentiated": lambda z: gauss_median(z, False),
     "IMQ": lambda z: common.ksd(z, c2=1.0),
+    "mixed, median detached": lambda z: (
+        common.ksd(z, c2=1.0) + common.MIX_W * gauss_median(z, True)
+    ),
+    "mixed, median differentiated": lambda z: common.ksd_mix(z),
 }
 for name, f in LOSSES.items():
     row = []

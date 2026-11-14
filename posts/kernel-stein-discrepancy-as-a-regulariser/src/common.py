@@ -176,7 +176,8 @@ def median_l2(z, detach=False):
     u = _sqdist(z, z)
     if detach:
         u = u.detach()
-    return u[iu[0], iu[1]].median() / (2 * math.log(n))
+    # floored, so a batch with half its pairs coincident cannot divide by zero
+    return u[iu[0], iu[1]].median().clamp_min(1e-6) / (2 * math.log(n))
 
 
 def ksd_mix(z, w=MIX_W):
