@@ -72,10 +72,37 @@ ul.task-list li input[type="checkbox"] {
   }
 }</script>
 <style>html{ scroll-behavior: smooth; }</style>
+<script>
+// MathJax 4 configuration for every page (included from _quarto.yml, which also pins
+// the MathJax version). Quarto 1.6 writes no MathJax configuration of its own.
+//
+// - The font is a separate package. Pin it to the same release, or MathJax 4.0.0
+//   fetches the unversioned latest font and warns.
+// - A display wider than the column (a phone, mostly) is scaled down to fit, so an
+//   aligned derivation keeps its alignment and its equation number.
+//
+// Not "linebreak", which looks like the better choice for long one-line displays:
+// in MathJax 4.0.0 (and 4.1.3), once one display on a page has been broken, every
+// aligned/cases/matrix table typeset after it lays out with its columns overlapping
+// (k_p(x,x') printed on top of the next cell). The posts lean on aligned blocks, so
+// one broken display would garble the rest of the page on a phone.
+//
+// Size is set on Quarto's span.math wrappers (theme/math.css), never with an
+// !important font-size on mjx-container: MathJax scales a display through that
+// element's inline font-size, and an !important rule silently cancels it. With
+// matchFontHeight off, MathJax does not rescale the maths to the body face's tall
+// x-height either, so those percentages are the sizes the reader sees.
+window.MathJax = {
+  loader: {
+    paths: { "mathjax-newcm": "https://cdn.jsdelivr.net/npm/@mathjax/mathjax-newcm-font@4.0.0" },
+  },
+  output: { displayOverflow: "scale", matchFontHeight: false },
+};
+</script>
 <script src="../../widget-kit/kit.js"></script>
 
   <script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
-  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@4.0.0/tex-chtml.js" type="text/javascript"></script>
 
 <script type="text/javascript">
 const typesetMath = (el) => {
@@ -104,6 +131,7 @@ window.Quarto = {
 };
 </script>
 
+<link rel="stylesheet" href="../../theme/math.css">
 <link rel="stylesheet" href="post.css">
 <meta property="og:title" content="Stein’s Method, Part 4: Models Without Normalising Constants – Synthetic Musings">
 <meta property="og:description" content="The score of a model does not depend on its normalising constant, and Stein’s identity turns that into training objectives. Score matching as Stein’s identity under the data, the Fisher divergence as an L2 Stein discrepancy, SURE as a loss for denoisers and for choosing a regularisation strength, Stein control variates for policy gradients, and amortised SVGD.">
@@ -281,10 +309,11 @@ window.Quarto = {
 <p>Differentiate the log-likelihood of one point in <span class="math inline">\(\theta\)</span>:</p>
 <p><span id="eq-mle-gradient"><span class="math display">\[
 \begin{aligned}
-\nabla_\theta\log p_\theta(x) &amp;= \nabla_\theta\log\tilde p_\theta(x) - \nabla_\theta\log\mathcal{Z}(\theta),\\
-\nabla_\theta\log\mathcal{Z}(\theta) &amp;= \frac{1}{\mathcal{Z}(\theta)}\int\nabla_\theta\tilde p_\theta = \mathbb{E}_{p_\theta}\big[\nabla_\theta\log\tilde p_\theta(X)\big].
+\nabla_\theta\log p_\theta(x) &amp;= \nabla_\theta\log\tilde p_\theta(x) - \nabla_\theta\log\mathcal{Z}(\theta),\\[6pt]
+\nabla_\theta\log\mathcal{Z}(\theta) &amp;= \frac{1}{\mathcal{Z}(\theta)}\int\nabla_\theta\tilde p_\theta\\[4pt]
+&amp;= \mathbb{E}_{p_\theta}\big[\nabla_\theta\log\tilde p_\theta(X)\big].
 \end{aligned}
-\tag{1}\]</span></span></p>
+\qquad(1)\]</span></span></p>
 <p>The right-hand identity differentiates under the integral, then writes <span class="math inline">\(\nabla_\theta\tilde p_\theta = \tilde p_\theta\nabla_\theta\log\tilde p_\theta\)</span> and <span class="math inline">\(\tilde p_\theta/\mathcal{Z}(\theta)=p_\theta\)</span>. The maximum-likelihood gradient is therefore a difference of two expectations: one under the data, and one under the model. The second needs samples from <span class="math inline">\(p_\theta\)</span> at every step, usually from an MCMC chain run inside the training loop. The derivative in <span class="math inline">\(x\)</span> has no such term:</p>
 <p><span class="math display">\[
 \nabla_x\log p_\theta(x) = \nabla_x\log\tilde p_\theta(x) - \underbrace{\nabla_x\log\mathcal{Z}(\theta)}_{=\,0}.
@@ -322,7 +351,7 @@ Theorem 1 — score matching (Hyvärinen 2005, Theorem 1)
 <p>Assume <span class="math inline">\(q\)</span> is positive and continuously differentiable, <span class="math inline">\(s_\theta\)</span> is continuously differentiable, <span class="math inline">\(\mathbb{E}_q\lVert s_\theta\rVert^2\)</span> and <span class="math inline">\(\mathbb{E}_q\lVert s_q\rVert^2\)</span> are finite, and <span class="math inline">\(q(x)s_\theta(x)\to0\)</span> as <span class="math inline">\(\lVert x\rVert\to\infty\)</span> (Hyvärinen’s footnote 1). Assume also <span class="math inline">\(\mathbb{E}_q\lvert\nabla\!\cdot s_\theta\rvert&lt;\infty\)</span>, which the right side needs. Then</p>
 <p><span id="eq-score-matching"><span class="math display">\[
 J(\theta) = \mathbb{E}_q\Big[\tfrac12\lVert s_\theta(X)\rVert^2+\nabla\!\cdot s_\theta(X)\Big] + \text{const},
-\tag{2}\]</span></span></p>
+\qquad(2)\]</span></span></p>
 <p>where the constant <span class="math inline">\(\tfrac12\mathbb{E}_q\lVert s_q\rVert^2\)</span> does not depend on <span class="math inline">\(\theta\)</span>.</p>
 </div>
 </div>
@@ -354,10 +383,11 @@ Proposition 2 — the L² Stein discrepancy
 <div class="callout-body-container callout-body">
 <p>Let <span class="math inline">\(\lambda&gt;0\)</span>, and let <span class="math inline">\(\mathcal{F}\)</span> be the set of fields <span class="math inline">\(f\)</span> with <span class="math inline">\(\mathbb{E}_q\lVert f\rVert^2&lt;\infty\)</span> that satisfy Stein’s identity under <span class="math inline">\(q\)</span>, <span class="math inline">\(\mathbb{E}_q[\mathcal{A}_qf]=0\)</span>. If <span class="math inline">\((s_p-s_q)\in\mathcal{F}\)</span>, then</p>
 <p><span id="eq-l2-stein"><span class="math display">\[
-\sup_{f\in\mathcal{F}}\Big\{\mathbb{E}_q\big[(\mathcal{A}_pf)(X)\big]-\lambda\,\mathbb{E}_q\lVert f(X)\rVert^2\Big\} = \frac{1}{4\lambda}\,\mathrm{D_F}(q\Vert p),
-\qquad
+\begin{gathered}
+\sup_{f\in\mathcal{F}}\Big\{\mathbb{E}_q\big[(\mathcal{A}_pf)(X)\big]-\lambda\,\mathbb{E}_q\lVert f(X)\rVert^2\Big\} = \frac{1}{4\lambda}\,\mathrm{D_F}(q\Vert p),\\[6pt]
 f^* = \frac{s_p-s_q}{2\lambda}.
-\tag{3}\]</span></span></p>
+\end{gathered}
+\qquad(3)\]</span></span></p>
 </div>
 </div>
 <p><strong>Proof.</strong></p>
@@ -372,7 +402,7 @@ f^* = \frac{s_p-s_q}{2\lambda}.
 <p>Grathwohl et al.&nbsp;(2020) train an energy-based model against a neural critic <span class="math inline">\(f_\phi\)</span> instead of computing the Laplacian:</p>
 <p><span id="eq-lsd"><span class="math display">\[
 \min_\theta\ \max_\phi\ \ \mathbb{E}_q\big[s_\theta(X)^\top f_\phi(X)+\operatorname{tr}\nabla f_\phi(X)\big]-\lambda\,\mathbb{E}_q\lVert f_\phi(X)\rVert^2.
-\tag{4}\]</span></span></p>
+\qquad(4)\]</span></span></p>
 <ul>
 <li><strong>Critic step.</strong> Ascend in <span class="math inline">\(\phi\)</span>. By Proposition 2, the maximum over all square-integrable critics is <span class="math inline">\(\mathrm{D_F}(q\Vert p_\theta)/(4\lambda)\)</span>. A neural critic reaches it only as far as its family can represent <span class="math inline">\((s_\theta-s_q)/(2\lambda)\)</span>, so the inner maximum approximates it from below.</li>
 <li><strong>Model step.</strong> Only the first term depends on <span class="math inline">\(\theta\)</span>, so <span class="math inline">\(\nabla_\theta = \mathbb{E}_q\big[(\nabla_\theta s_\theta(X))^\top f_\phi(X)\big]\)</span>. For <span class="math inline">\(s_\theta=-\nabla E_\theta\)</span>, this is <span class="math inline">\(-\mathbb{E}_q\big[\nabla_\theta\big(\nabla E_\theta(X)^\top f_\phi(X)\big)\big]\)</span>: one backward pass through the energy’s input gradient, with no samples from the model and no <span class="math inline">\(\mathcal{Z}(\theta)\)</span>.</li>
@@ -429,21 +459,30 @@ f^* = \frac{s_p-s_q}{2\lambda}.
 <p>Part 1 derived SURE from Gaussian integration by parts: for <span class="math inline">\(y\sim N(\mu,\sigma^2I_d)\)</span> and a weakly differentiable estimator satisfying Part 1’s integrability conditions, the risk has an unbiased estimate that does not involve <span class="math inline">\(\mu\)</span>. Writing it in terms of <span class="math inline">\(\hat\mu\)</span> instead of the correction <span class="math inline">\(g=\hat\mu-y\)</span>:</p>
 <p><span id="eq-sure-mu"><span class="math display">\[
 \mathbb{E}\lVert\hat\mu(y)-\mu\rVert^2 = \mathbb{E}\Big[\lVert y-\hat\mu(y)\rVert^2 - d\sigma^2 + 2\sigma^2\,\nabla\!\cdot\hat\mu(y)\Big].
-\tag{5}\]</span></span></p>
+\qquad(5)\]</span></span></p>
 <p>Part 1’s form follows by substituting <span class="math inline">\(\hat\mu = y+g\)</span> and <span class="math inline">\(\nabla\!\cdot\hat\mu = d+\nabla\!\cdot g\)</span>.</p>
 <section id="training-a-denoiser-without-clean-data" class="level3" data-number="5.1">
 <h3 data-number="5.1" class="anchored" data-anchor-id="training-a-denoiser-without-clean-data"><span class="header-section-number">5.1</span> Training a denoiser without clean data</h3>
 <p>Soltanayev &amp; Chun (2018) train a denoising network <span class="math inline">\(h_w\)</span> on noisy images <span class="math inline">\(y_j = \mu_j+e_j\)</span>, <span class="math inline">\(j=1,\dots,M\)</span>, each with <span class="math inline">\(d\)</span> pixels, <span class="math inline">\(e_j\sim N(0,\sigma^2I_d)\)</span> and <span class="math inline">\(\sigma\)</span> known, and no clean <span class="math inline">\(\mu_j\)</span>. <a href="#eq-sure-mu" class="quarto-xref">Equation&nbsp;5</a> makes the expected loss computable from <span class="math inline">\(y_j\)</span> alone. The divergence of a network is expensive, so they estimate it by a random finite difference (Ramani, Blu &amp; Unser 2008):</p>
 <p><span class="math display">\[
-\nabla\!\cdot h_w(y) = \lim_{\varepsilon\to0}\mathbb{E}_{\tilde n}\Big[\tilde n^\top\,\frac{h_w(y+\varepsilon\tilde n)-h_w(y)}{\varepsilon}\Big],\qquad\tilde n\sim N(0,I_d).
+\begin{gathered}
+\nabla\!\cdot h_w(y) = \lim_{\varepsilon\to0}\mathbb{E}_{\tilde n}\Big[\tilde n^\top\,\frac{h_w(y+\varepsilon\tilde n)-h_w(y)}{\varepsilon}\Big],\\[6pt]
+\tilde n\sim N(0,I_d).
+\end{gathered}
 \]</span></p>
 <p>One draw of <span class="math inline">\(\tilde n\)</span> per image gives their training loss:</p>
 <p><span id="eq-sure-loss"><span class="math display">\[
-\mathcal{L}(w) = \frac1M\sum_{j=1}^M\Big\{\lVert y_j-h_w(y_j)\rVert^2 - d\sigma^2 + \frac{2\sigma^2}{\varepsilon}\,\tilde n_j^\top\big(h_w(y_j+\varepsilon\tilde n_j)-h_w(y_j)\big)\Big\}.
-\tag{6}\]</span></span></p>
+\begin{aligned}
+\mathcal{L}(w) = \frac1M\sum_{j=1}^M\Big\{&amp;\lVert y_j-h_w(y_j)\rVert^2 - d\sigma^2\\[4pt]
+&amp;+ \frac{2\sigma^2}{\varepsilon}\,\tilde n_j^\top\big(h_w(y_j+\varepsilon\tilde n_j)-h_w(y_j)\big)\Big\}.
+\end{aligned}
+\qquad(6)\]</span></span></p>
 <p>Its gradient follows from the chain rule, with <span class="math inline">\(J_w(y)=\partial h_w(y)/\partial w\)</span>:</p>
 <p><span class="math display">\[
-\nabla_w\mathcal{L} = \frac1M\sum_{j=1}^M\Big\{-2\,J_w(y_j)^\top\big(y_j-h_w(y_j)\big) + \frac{2\sigma^2}{\varepsilon}\big(J_w(y_j+\varepsilon\tilde n_j)-J_w(y_j)\big)^\top\tilde n_j\Big\}.
+\begin{aligned}
+\nabla_w\mathcal{L} = \frac1M\sum_{j=1}^M\Big\{&amp;-2\,J_w(y_j)^\top\big(y_j-h_w(y_j)\big)\\[4pt]
+&amp;+ \frac{2\sigma^2}{\varepsilon}\big(J_w(y_j+\varepsilon\tilde n_j)-J_w(y_j)\big)^\top\tilde n_j\Big\}.
+\end{aligned}
 \]</span></p>
 <p>That is two forward passes per image, and a backward pass through each.</p>
 <ul>
@@ -461,9 +500,12 @@ f^* = \frac{s_p-s_q}{2\lambda}.
 <li><p>Substituting into Part 1’s <span class="math inline">\(\mathrm{SURE}=d\sigma^2+\lVert g\rVert^2+2\sigma^2\nabla\!\cdot g\)</span>:</p>
 <p><span id="eq-sure-soft"><span class="math display">\[
 \mathrm{SURE}(\lambda) = d\sigma^2 - 2\sigma^2\,\#\{i:\lvert y_i\rvert\le\lambda\} + \sum_{i=1}^d\min(y_i^2,\lambda^2).
-\tag{7}\]</span></span></p></li>
+\qquad(7)\]</span></span></p></li>
 </ol>
-<p>This is the SURE criterion of Donoho &amp; Johnstone (1995), stated there for <span class="math inline">\(\sigma=1\)</span>. Their SureShrink applies it to each wavelet level, and falls back to the threshold <span class="math inline">\(\sqrt{2\log d}\)</span> on levels that look sparse. Minimising it over <span class="math inline">\(\lambda\)</span> uses only <span class="math inline">\(y\)</span>. For ridge shrinkage, <span class="math inline">\(\hat\mu = y/(1+\lambda)\)</span>, the same steps give <span class="math inline">\(\mathrm{SURE}(\lambda) = d\sigma^2+\frac{\lambda^2\lVert y\rVert^2}{(1+\lambda)^2}-\frac{2\sigma^2d\lambda}{1+\lambda}\)</span>.</p>
+<p>This is the SURE criterion of Donoho &amp; Johnstone (1995), stated there for <span class="math inline">\(\sigma=1\)</span>. Their SureShrink applies it to each wavelet level, and falls back to the threshold <span class="math inline">\(\sqrt{2\log d}\)</span> on levels that look sparse. Minimising it over <span class="math inline">\(\lambda\)</span> uses only <span class="math inline">\(y\)</span>. For ridge shrinkage, <span class="math inline">\(\hat\mu = y/(1+\lambda)\)</span>, the same steps give</p>
+<p><span class="math display">\[
+\mathrm{SURE}(\lambda) = d\sigma^2+\frac{\lambda^2\lVert y\rVert^2}{(1+\lambda)^2}-\frac{2\sigma^2d\,\lambda}{1+\lambda}.
+\]</span></p>
 <p>The signal in the chart is synthetic: 256 coordinates, 25 of them nonzero with magnitudes drawn between 2 and 6, observed once in Gaussian noise of known <span class="math inline">\(\sigma\)</span>. It stands in for the wavelet coefficients of an image: a few large values among many near-zero ones. A wrong <span class="math inline">\(\lambda\)</span> either keeps the noise (too small) or erases the signal (too large).</p>
 <p>The chart shows SURE(<span class="math inline">\(\lambda\)</span>) and the true loss <span class="math inline">\(\lVert\hat\mu_\lambda(y)-\mu\rVert^2\)</span> against <span class="math inline">\(\lambda\)</span> for one noisy draw, with stat tiles for the <span class="math inline">\(\lambda\)</span> each one picks. The true loss needs the clean signal and is plotted only for comparison; in practice only SURE is available.</p>
 <div id="widget-sure">
@@ -502,7 +544,7 @@ Proposition 3 — Stein’s identity for reparameterisable policies (Liu et al.&
 <p>Let the action be <span class="math inline">\(a=T_\theta(s,\xi)\)</span> with <span class="math inline">\(\xi\)</span> independent of <span class="math inline">\(\theta\)</span>, and let <span class="math inline">\(\phi(s,\cdot)\)</span> be differentiable. Under conditions that allow differentiation under the integral,</p>
 <p><span id="eq-policy-stein"><span class="math display">\[
 \mathbb{E}_{a\sim\pi_\theta(\cdot\mid s)}\big[\nabla_\theta\log\pi_\theta(a\mid s)\,\phi(s,a)\big] = \mathbb{E}_\xi\big[\nabla_\theta T_\theta(s,\xi)\,\nabla_a\phi(s,a)\big].
-\tag{8}\]</span></span></p>
+\qquad(8)\]</span></span></p>
 </div>
 </div>
 <p><strong>Proof.</strong> Compute <span class="math inline">\(\nabla_\theta\mathbb{E}_{a\sim\pi_\theta}[\phi(s,a)]\)</span> two ways.</p>
@@ -515,7 +557,7 @@ Proposition 3 — Stein’s identity for reparameterisable policies (Liu et al.&
 <p>Adding and subtracting <span class="math inline">\(\phi\)</span> gives the Stein control-variate gradient, unbiased for every <span class="math inline">\(\phi\)</span> (Liu et al.&nbsp;2018, eq. 8):</p>
 <p><span id="eq-stein-cv"><span class="math display">\[
 \nabla_\theta J(\theta) = \mathbb{E}_\pi\Big[\nabla_\theta\log\pi_\theta(a\mid s)\big(Q^\pi(s,a)-\phi(s,a)\big) + \nabla_\theta T_\theta(s,\xi)\,\nabla_a\phi(s,a)\Big].
-\tag{9}\]</span></span></p>
+\qquad(9)\]</span></span></p>
 <ul>
 <li><strong>The estimator.</strong> The sample version averages the bracket over observed <span class="math inline">\((s_t,a_t,\xi_t)\)</span>, with an estimate <span class="math inline">\(\hat Q^\pi\)</span> in place of <span class="math inline">\(Q^\pi\)</span>.</li>
 <li><strong>Fitting <span class="math inline">\(\phi\)</span>.</strong> Liu et al.&nbsp;parametrise <span class="math inline">\(\phi_w(s,a) = \hat V^\pi(s)+\psi_w(s,a)\)</span>. They fit <span class="math inline">\(w\)</span> either by regressing <span class="math inline">\(\phi_w\)</span> on observed returns, or by minimising the squared norm of the bracket in <a href="#eq-stein-cv" class="quarto-xref">Equation&nbsp;9</a>, a direct proxy for the estimator’s variance. That objective mixes derivatives in <span class="math inline">\(\theta\)</span> and <span class="math inline">\(a\)</span>, which the paper finds hard to compute efficiently with automatic differentiation. For Gaussian policies it minimises <span class="math inline">\(\operatorname{var}(\hat\nabla_\mu J)+\operatorname{var}(\hat\nabla_\Sigma J)\)</span> instead, the variances of the gradient estimates for the policy’s mean and covariance.</li>
@@ -528,16 +570,19 @@ Proposition 3 — Stein’s identity for reparameterisable policies (Liu et al.&
 <p>SVGD (Part 3) moves a fixed set of particles. A sampler network <span class="math inline">\(x=G_\eta(\xi)\)</span>, <span class="math inline">\(\xi\sim N(0,I)\)</span>, needs a rule for moving its weights <span class="math inline">\(\eta\)</span> instead. Wang &amp; Liu (2016) pull SVGD’s direction back through the network.</p>
 <ol type="1">
 <li><p>Draw <span class="math inline">\(\xi_1,\dots,\xi_m\)</span> and set <span class="math inline">\(x_i=G_\eta(\xi_i)\)</span>.</p></li>
-<li><p>Compute the SVGD direction on this batch, <span class="math inline">\(\Delta x_i = \hat\phi^*(x_i) = \frac1m\sum_j\big[k(x_j,x_i)s_p(x_j)+\nabla_{x_j}k(x_j,x_i)\big]\)</span>.</p></li>
+<li><p>Compute the SVGD direction on this batch:</p>
+<p><span class="math display">\[
+\Delta x_i = \hat\phi^*(x_i) = \frac1m\sum_j\big[k(x_j,x_i)\,s_p(x_j)+\nabla_{x_j}k(x_j,x_i)\big].
+\]</span></p></li>
 <li><p>Ask the network to output <span class="math inline">\(x_i+\epsilon\Delta x_i\)</span> instead. One gradient step on <span class="math inline">\(\sum_i\tfrac12\lVert G_\eta(\xi_i)-(x_i+\epsilon\Delta x_i)\rVert^2\)</span> at the current <span class="math inline">\(\eta\)</span>, with unit step length, gives their update:</p>
 <p><span id="eq-amortised-svgd"><span class="math display">\[
 \eta \leftarrow \eta + \epsilon\sum_{i=1}^m\partial_\eta G_\eta(\xi_i)^\top\,\Delta x_i.
-\tag{10}\]</span></span></p></li>
+\qquad(10)\]</span></span></p></li>
 </ol>
 <p>The gradient of that squared error at the current <span class="math inline">\(\eta\)</span> is <span class="math inline">\(-\epsilon\sum_i\partial_\eta G_\eta(\xi_i)^\top\Delta x_i\)</span>, so the step is backpropagation of SVGD’s direction through the generator.</p>
 <ul>
-<li><strong>Smallest instance.</strong> A location family, <span class="math inline">\(G_\eta(\xi)=\eta+\xi\)</span>, has <span class="math inline">\(\partial_\eta G=I\)</span>. The repulsion terms cancel in the sum over <span class="math inline">\(i\)</span>, because <span class="math inline">\(\nabla_{x_j}k(x_j,x_i) = -\nabla_{x_i}k(x_i,x_j)\)</span> for a translation-invariant kernel. The update reduces to <span class="math inline">\(\eta\leftarrow\eta+\frac{\epsilon}{m}\sum_{i,j}k(x_j,x_i)\,s_p(x_j)\)</span>, which moves the network’s location toward high target density.</li>
-<li><strong>A direct KSD penalty.</strong> The alternative minimises <span class="math inline">\(\mathrm{KSD}^2_V(\{G_\eta(\xi_i)\},p)\)</span> itself (Part 3). Its gradient in <span class="math inline">\(x_i\)</span> is <span class="math inline">\(\frac{2}{m^2}\sum_l\nabla_1k_p(x_i,x_l)\)</span>, and <span class="math inline">\(k_p\)</span> contains <span class="math inline">\(s_p(x)\)</span>, so it needs <span class="math inline">\(\nabla s_p\)</span>, the Hessian of <span class="math inline">\(\log p\)</span>. Amortised SVGD needs only <span class="math inline">\(s_p\)</span>. Both are free of <span class="math inline">\(\mathcal{Z}\)</span>.</li>
+<li><strong>Smallest instance.</strong> A location family, <span class="math inline">\(G_\eta(\xi)=\eta+\xi\)</span>, has <span class="math inline">\(\partial_\eta G=I\)</span>. The repulsion terms cancel in the sum over <span class="math inline">\(i\)</span>, because <span class="math inline">\(\nabla_{x_j}k(x_j,x_i) = -\nabla_{x_i}k(x_i,x_j)\)</span> for a translation-invariant kernel. The update reduces to <span class="math inline">\(\eta\leftarrow\eta+(\epsilon/m)\sum_{i,j}k(x_j,x_i)\,s_p(x_j)\)</span>, which moves the network’s location toward high target density.</li>
+<li><strong>A direct KSD penalty.</strong> The alternative minimises <span class="math inline">\(\mathrm{KSD}^2_V(\{G_\eta(\xi_i)\},p)\)</span> itself (Part 3). Its gradient in <span class="math inline">\(x_i\)</span> is <span class="math inline">\((2/m^2)\sum_l\nabla_1k_p(x_i,x_l)\)</span>, and <span class="math inline">\(k_p\)</span> contains <span class="math inline">\(s_p(x)\)</span>, so it needs <span class="math inline">\(\nabla s_p\)</span>, the Hessian of <span class="math inline">\(\log p\)</span>. Amortised SVGD needs only <span class="math inline">\(s_p\)</span>. Both are free of <span class="math inline">\(\mathcal{Z}\)</span>.</li>
 <li><strong>In this blog.</strong> <a href="../stein-jepa-nuisance-leakage/">Nuisance Leakage in JEPA Embeddings</a> uses a KSD penalty toward <span class="math inline">\(N(0,I)\)</span> on an encoder’s embeddings. That target has <span class="math inline">\(\nabla s_p=-I\)</span>, which makes the Hessian term free.</li>
 </ul>
 </section>

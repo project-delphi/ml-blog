@@ -106,10 +106,37 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   }
 }</script>
 <style>html{ scroll-behavior: smooth; }</style>
+<script>
+// MathJax 4 configuration for every page (included from _quarto.yml, which also pins
+// the MathJax version). Quarto 1.6 writes no MathJax configuration of its own.
+//
+// - The font is a separate package. Pin it to the same release, or MathJax 4.0.0
+//   fetches the unversioned latest font and warns.
+// - A display wider than the column (a phone, mostly) is scaled down to fit, so an
+//   aligned derivation keeps its alignment and its equation number.
+//
+// Not "linebreak", which looks like the better choice for long one-line displays:
+// in MathJax 4.0.0 (and 4.1.3), once one display on a page has been broken, every
+// aligned/cases/matrix table typeset after it lays out with its columns overlapping
+// (k_p(x,x') printed on top of the next cell). The posts lean on aligned blocks, so
+// one broken display would garble the rest of the page on a phone.
+//
+// Size is set on Quarto's span.math wrappers (theme/math.css), never with an
+// !important font-size on mjx-container: MathJax scales a display through that
+// element's inline font-size, and an !important rule silently cancels it. With
+// matchFontHeight off, MathJax does not rescale the maths to the body face's tall
+// x-height either, so those percentages are the sizes the reader sees.
+window.MathJax = {
+  loader: {
+    paths: { "mathjax-newcm": "https://cdn.jsdelivr.net/npm/@mathjax/mathjax-newcm-font@4.0.0" },
+  },
+  output: { displayOverflow: "scale", matchFontHeight: false },
+};
+</script>
 <script src="../../widget-kit/kit.js"></script>
 
   <script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
-  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@4.0.0/tex-chtml.js" type="text/javascript"></script>
 
 <script type="text/javascript">
 const typesetMath = (el) => {
@@ -138,6 +165,7 @@ window.Quarto = {
 };
 </script>
 
+<link rel="stylesheet" href="../../theme/math.css">
 <meta property="og:title" content="Attention Is a Softmax Over Dot Products, and the Divisor Keeps It Trainable – Synthetic Musings">
 <meta property="og:description" content="How a transformer decides which tokens matter to each other: the three matrices, the softmax that does the choosing, an interactive look at why the scores are divided by the square root of the width, and the layer in PyTorch.">
 <meta property="og:image" content="https://project-delphi.github.io/ml-blog/posts/attention/cover.png">
@@ -281,8 +309,10 @@ window.Quarto = {
 <h2 class="anchored" data-anchor-id="a-sentence-becomes-a-matrix-before-attention-sees-it">A sentence becomes a matrix before attention sees it</h2>
 <p>Attention operates on vectors, so the first job is to make some. The sentence is split into tokens by a subword tokenizer, each token id indexes a row of an embedding table <span class="math inline">\(E \in \mathbb{R}^{V \times d}\)</span> (<span class="math inline">\(V\)</span> vocabulary entries, <span class="math inline">\(d\)</span> dimensions), and the rows for the sentence are stacked into <span class="math inline">\(X \in \mathbb{R}^{n \times d}\)</span>, one row per token. Nothing in that matrix says which token came first, and attention itself is order-blind, so a positional encoding is added: sinusoids of different frequencies,</p>
 <p><span class="math display">\[
-P_{i,2j} = \sin\!\left(\frac{i}{10000^{2j/d}}\right), \qquad
-P_{i,2j+1} = \cos\!\left(\frac{i}{10000^{2j/d}}\right),
+\begin{aligned}
+P_{i,2j} &amp;= \sin\!\left(\frac{i}{10000^{2j/d}}\right),\\[6pt]
+P_{i,2j+1} &amp;= \cos\!\left(\frac{i}{10000^{2j/d}}\right),
+\end{aligned}
 \]</span></p>
 <p>and the input to the first layer is <span class="math inline">\(X + P\)</span>. Everything after this point is linear algebra on that matrix.</p>
 </section>
@@ -290,11 +320,20 @@ P_{i,2j+1} = \cos\!\left(\frac{i}{10000^{2j/d}}\right),
 <h2 class="anchored" data-anchor-id="query-key-value-one-input-three-roles">Query, key, value: one input, three roles</h2>
 <p>Each token plays three parts. As a <strong>query</strong> it asks what it needs from the rest of the sentence; as a <strong>key</strong> it advertises what it has; as a <strong>value</strong> it is the content handed over when chosen. Three learned matrices produce the three views of the same input:</p>
 <p><span class="math display">\[
-Q = X W_Q, \qquad K = X W_K, \qquad V = X W_V, \qquad W_Q, W_K, W_V \in \mathbb{R}^{d \times d}.
+\begin{aligned}
+Q &amp;= X W_Q,\\[4pt]
+K &amp;= X W_K,\\[4pt]
+V &amp;= X W_V,
+\end{aligned}
+\qquad W_Q, W_K, W_V \in \mathbb{R}^{d \times d}.
 \]</span></p>
 <p>The scores are every query against every key, a single matrix product, and the softmax turns each row of scores into weights that sum to one; the output for a token is those weights applied to the values:</p>
 <p><span class="math display">\[
-S = \frac{Q K^\mathsf{T}}{\sqrt{d}}, \qquad A = \operatorname{softmax}(S), \qquad Z = A V.
+\begin{aligned}
+S &amp;= \frac{Q K^\mathsf{T}}{\sqrt{d}},\\[6pt]
+A &amp;= \operatorname{softmax}(S),\\[4pt]
+Z &amp;= A V.
+\end{aligned}
 \]</span></p>
 <p>Row <span class="math inline">\(i\)</span> of <span class="math inline">\(A\)</span> is token <span class="math inline">\(i\)</span>’s attention: how much of each other token it reads. The softmax is what makes it a choice rather than a blur, and the <span class="math inline">\(\sqrt{d}\)</span> under the scores is what keeps the choice from becoming a fixed one.</p>
 </section>
@@ -311,9 +350,10 @@ S = \frac{Q K^\mathsf{T}}{\sqrt{d}}, \qquad A = \operatorname{softmax}(S), \qqua
 <p>One attention pattern per layer is one way of reading the sentence. Multi-head attention runs <span class="math inline">\(H\)</span> of them in parallel, each with its own <span class="math inline">\(W_Q^{(h)}, W_K^{(h)},
 W_V^{(h)}\)</span> of width <span class="math inline">\(d_k = d / H\)</span>, so that one head can track syntax while another tracks coreference and a third tracks position:</p>
 <p><span class="math display">\[
-Z^{(h)} = \operatorname{softmax}\!\left(\frac{Q^{(h)} K^{(h)\mathsf{T}}}{\sqrt{d_k}}\right) V^{(h)},
-\qquad
-Z = \left[ Z^{(1)} \,\|\, \cdots \,\|\, Z^{(H)} \right] W_O.
+\begin{aligned}
+Z^{(h)} &amp;= \operatorname{softmax}\!\left(\frac{Q^{(h)} K^{(h)\mathsf{T}}}{\sqrt{d_k}}\right) V^{(h)},\\[6pt]
+Z &amp;= \left[ Z^{(1)} \,\|\, \cdots \,\|\, Z^{(H)} \right] W_O.
+\end{aligned}
 \]</span></p>
 <p>The heads’ outputs are concatenated back to width <span class="math inline">\(d\)</span> and mixed by one more learned matrix <span class="math inline">\(W_O\)</span>. The divisor is now <span class="math inline">\(\sqrt{d_k}\)</span>, the per-head width, for the same reason as before.</p>
 </section>
