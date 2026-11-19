@@ -84,7 +84,8 @@ def _get(key: str, tries: int = 6) -> bytes:
 
 
 def pm25_hourly(out: Path) -> pd.DataFrame:
-    path = out / f"openaq_{LOCATION}_hourly.csv"
+    # The window is in the name, so a download for another span is never reused.
+    path = out / f"openaq_{LOCATION}_hourly_to_{END}.csv"
     if not path.exists():
         # A day's file runs 01:00 to the next 00:00, so END's file holds its last hour.
         # Cutting at END keeps the download, and its SHA-256, fixed after END.
@@ -93,7 +94,7 @@ def pm25_hourly(out: Path) -> pd.DataFrame:
             k
             for y in range(2016, int(END[:4]) + 1)
             for k in _keys(y)
-            if re.search(r"-(\d{8})\.csv\.gz$", k).group(1) <= last
+            if (m := re.search(r"-(\d{8})\.csv\.gz$", k)) and m.group(1) <= last
         ]
         with ThreadPoolExecutor(6) as ex:
             parts = list(ex.map(_get, keys))
@@ -103,7 +104,7 @@ def pm25_hourly(out: Path) -> pd.DataFrame:
 
 
 def era5_hourly(out: Path) -> pd.DataFrame:
-    path = out / "era5_hourly.csv"
+    path = out / f"era5_hourly_{START}_to_{END}.csv"
     if not path.exists():
         # One day either side: an accumulated value is labelled at the end of its hour,
         # so the first and last days need a neighbour's 00:00 or 23:00 label.
@@ -130,6 +131,7 @@ def era5_hourly(out: Path) -> pd.DataFrame:
 
 def pm25_daily(h: pd.DataFrame) -> pd.DataFrame:
     h = h[h["parameter"] == "pm25"].copy()
+    assert h["sensors_id"].nunique() == 1, "expected one PM2.5 sensor at the location"
     assert (h["datetime"].str[19:] == "+05:30").all(), (
         "expected India Standard Time stamps"
     )
@@ -204,6 +206,8 @@ def _sha(path: Path) -> str:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        sys.exit("usage: fetch_delhi.py <download directory outside the repo>")
     out = Path(sys.argv[1]).expanduser()
     out.mkdir(parents=True, exist_ok=True)
     pm = pm25_daily(pm25_hourly(out))
