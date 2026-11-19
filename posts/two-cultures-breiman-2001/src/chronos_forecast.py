@@ -72,13 +72,13 @@ def forecast(pipe, m, days, weather: bool, target="ozone", cov=WEATHER) -> pd.Da
 
 
 if __name__ == "__main__":
-    pipe = BaseChronosPipeline.from_pretrained(
-        MODEL, revision=REVISION, device_map="cpu"
-    )
     if sys.argv[1:] not in ([], ["delhi"]):
         sys.exit(
             "usage: chronos_forecast.py [delhi]  (no argument runs the 1976 ozone forecasts)"
         )
+    pipe = BaseChronosPipeline.from_pretrained(
+        MODEL, revision=REVISION, device_map="cpu"
+    )
     if sys.argv[1:] == ["delhi"]:
         df, m, key, path = delhi.design(), delhi_daily(), "day", delhi.CHRONOS_FILE
         _, dv, te = delhi.masks(df)

@@ -379,6 +379,7 @@ the repo and writes the daily files here. Access date **2026-11-19**. One row pe
 - Terms: OpenAQ passes through the original source's terms and asks for attribution to
   both the original provider and OpenAQ (<https://docs.openaq.org/docs/data-policy>).
   AirNow describes embassy data as provisional, not fully verified or validated.
+- Section 8's SHA-256 values are of the CSVs `fetch_delhi.py` writes from the downloads (pandas 3.1.1), not of the raw responses, so a different pandas, an OpenAQ backfill or ERA5's late revisions can change them while the daily files stay the same.
 - SHA-256 of the concatenated hourly download (`openaq_8118_hourly_2016-11-01_to_2026-10-31.csv`, 79,677 rows,
   stamped 2016-11-09 23:00 to 2026-11-01 00:00; the script cuts the download at the last
   day, so a later run gives the same file): `481df96f2278d128245c1419131f0ca406982e847dcb0d3dc31fce381390e95b`.
@@ -402,7 +403,7 @@ the repo and writes the daily files here. Access date **2026-11-19**. One row pe
   `timezone=Asia/Kolkata`) at the monitor's coordinates. The nearest ERA5 grid point,
   which the API returns, is 28.75 N, 77.25 E, about 13 km north of the monitor.
   Open-Meteo's data are CC BY 4.0; ERA5 is Copernicus Climate Change Service data.
-- SHA-256 of the hourly download (`era5_hourly_2016-11-01_to_2026-10-31.csv`):
+- SHA-256 of the hourly download (`era5_era5_ef4413f6_hourly_2016-11-01_to_2026-10-31.csv`):
   `5f83a80fa0d23912a991aa4e4212d327e7bdab84f53b13e80211ff26520deb47`. The request runs
   one day either side of the span (2016-10-31 to 2026-11-01).
 - Day boundaries: instantaneous values (temperature, humidity, pressure, wind,

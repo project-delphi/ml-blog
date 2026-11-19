@@ -323,7 +323,9 @@ On `{python} n_te` autumn days the gap between a selected regression and a model
 
 ## Ten years of New Delhi PM2.5 {#sec-delhi}
 
-The 1976 comparison ends in a tie on `{python} n_te` test days, a single autumn. Breiman's project had seven years and tested on the last two. A public record longer than the project's now exists for one of the most polluted cities in the world, and the same models can be run on it with only the data changed.
+The 1976 comparison ends in a tie on `{python} n_te` test days, a single autumn, where Breiman's project had seven years and tested on the last two.
+
+A public record longer than the project's now exists for one of the most polluted cities in the world, and the same models run on it with only the data changed.
 
 ### Data {#sec-delhi-data}
 
@@ -450,9 +452,11 @@ hits_lo = min(s["hits"] for k, s in d_sc.items() if k != "persistence")
 hits_hi = max(s["hits"] for k, s in d_sc.items() if k != "persistence")
 assert max(d_sc, key=lambda k: d_sc[k]["hits"]) == "persistence"
 assert d_sc["persistence"]["hits"] >= sev_days / 2
-dev_months = delhi.dates(ddf.index[dv_d]).month
+# Months of the forecast target day t + 1, as for `win` below.
+dev_months = delhi.dates(ddf.index[dv_d] + 1).month
 dev_smog = int(np.isin(dev_months, [11, 12, 1]).sum())
-assert 2 not in set(dev_months) and dev_smog >= 50
+dev_feb = int((dev_months == 2).sum())
+assert dev_feb <= 2 and dev_smog >= 50
 assert max(d_sc, key=lambda k: d_sc[k]["false_alarms"]) == "persistence"
 sev_mask = dref["y"].to_numpy() >= delhi.ALERT
 sev_obs = float(np.median(dref["y"].to_numpy()[sev_mask]))
@@ -461,9 +465,13 @@ d_cover = {k: float(((dpick(k, "test")["q10"] <= dpick(k, "test")["y"])
                      & (dpick(k, "test")["y"] <= dpick(k, "test")["q90"])).mean())
            for k in ["chronos_pm25", "chronos_weather"]}
 win = np.isin(delhi.dates(dref["day"].to_numpy() + 1).month, [11, 12, 1, 2])
+err2 = (dref["pred"].to_numpy() - dref["y"].to_numpy()) ** 2
+assert err2[win].sum() / err2.sum() > 0.5  # winter carries most of the squared error
 win_rmse = modern.rmse(dref["pred"][win], dref["y"][win])
 rest_rmse = modern.rmse(dref["pred"][~win], dref["y"][~win])
 d_tuned = dpick("forest_tuned", "test")["params"].iloc[0]
+d_boost = dpick("boosting", "test")["params"].iloc[0]
+assert all(e in d_boost for e in ["learning_rate=0.03", "max_leaf_nodes=16", "min_samples_leaf=20"])
 r_today = float(np.corrcoef(dref["pred"], ddf["pm25_lag0"].loc[dref["day"]])[0, 1])
 r_next = float(np.corrcoef(dref["pred"], dref["y"])[0, 1])
 assert r_today > r_next
@@ -473,7 +481,7 @@ md(pd.DataFrame(rows_d))
 - **The 1976 tie breaks.** On `{python} n_ted` test days the untuned forest scores `{python} f"{d_rng['forest'][0]:.1f}"`–`{python} f"{d_rng['forest'][1]:.1f}"` against `{python} f"{d_lo['linear_quad']:.1f}"` for the selected quadratic regression, and the interval on the difference lies wholly above zero on all five seeds of the forest; its lowest lower end is `{python} f"{quad_low:+.2f}"`. The same holds for the lasso and persistence. Chronos-2 is worse than the forest on `{python} worse_on["chronos_pm25"]` seeds of five on PM2.5 alone and on `{python} worse_on["chronos_weather"]` with the weather; on the other seeds the interval's lower end lies between `{python} ch_neg_lo` and `{python} ch_neg_hi`.
 - **The gap is small.** Over its five seeds the forest's error is `{python} gain_quad` below the 1970s route's and `{python} gain_persist` below persistence's. Ten years resolve a difference that one autumn could not; they do not make it large.
 - **The three tree ensembles tie.** Boosting (`{python} f"{d_rng['boosting'][0]:.1f}"`–`{python} f"{d_rng['boosting'][1]:.1f}"`) and the tuned forest (`{python} f"{d_rng['forest_tuned'][0]:.1f}"`–`{python} f"{d_rng['forest_tuned'][1]:.1f}"`, settled on `{python} d_tuned`) are inside the noise of the untuned forest on at least four seeds of five. Tuning again bought nothing.
-- **The dev year agrees with the test years this time.** Persistence is worst on both. Boosting is best on November 2022 – October 2023, and on the test years it is one of the three tree ensembles that tie for best. Gaps leave the dev year's `{python} n_dvd` usable days with no February, but `{python} dev_smog` of them fall in November–January, three of the four winter months that carry most of the test error; @sec-ozone-modern's dev months were summer only.
+- **The dev year agrees with the test years this time.** Persistence is worst on both. Boosting is best on November 2022 – October 2023, and on the test years it is one of the three tree ensembles that tie for best. Gaps leave the dev year's `{python} n_dvd` usable days with `{python} dev_feb` in February, but `{python} dev_smog` of them fall in November–January, three of the four winter months that carry most of the test error; @sec-ozone-modern's dev months were summer only.
 - **Chronos-2 matches the 1970s route without being fitted to this record.** It scores `{python} f"{d_lo['chronos_pm25']:.1f}"` on PM2.5 alone against `{python} f"{d_lo['linear_quad']:.1f}"` for the selected regression, a difference inside the noise (`{python} f"{ch_quad[0]:+.1f}"` to `{python} f"{ch_quad[1]:+.1f}"`), and `{python} f"{d_lo['chronos_weather']:.1f}"` with the weather added: the covariates did not help it. Its pretraining data could hold this monitor's earlier years, but the last `{python} n_late` test days, November 2025 to October 2026, came after its release, and on them it scores `{python} f"{late_rmse['chronos_pm25']:.1f}"` against the regression's `{python} f"{late_rmse['linear_quad']:.1f}"`. Its nominal 80% intervals held the next day's PM2.5 on `{python} f"{d_cover['chronos_pm25']:.0%}"` and `{python} f"{d_cover['chronos_weather']:.0%}"` of test days.
 - **Winter carries the error.** For the forest, RMSE is `{python} f"{win_rmse:.0f}"` on forecasts of November–February days and `{python} f"{rest_rmse:.0f}"` on the rest of the year.
 - **The failure has changed sides.** The test forecasts include `{python} sev_days` Severe days, enough to see a pattern. The trained models and Chronos-2 catch `{python} hits_lo` to `{python} hits_hi` of them, fewer than half. On Severe days the median observation is `{python} f"{sev_obs:.0f}"` and the forest's median forecast `{python} f"{sev_rf:.0f}"`: a forecast built to minimise squared error is pulled toward typical days. Persistence catches the most, and issues the most false alarms. Breiman's project failed on false alarms; at a threshold of 250 these models fail on misses, and lowering the threshold trades one for the other.
@@ -486,10 +494,10 @@ fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7.5, 5.2), height_ratios=[1, 1.15]
 full = dd.set_index("date")["pm25"].asfreq("D")
 ax1.plot(full.index, full.to_numpy(), color=INK, lw=0.6)
 ax1.set_ylim(top=full.max() * 1.12)  # room for the split labels above the highest day
-for lo, hi, lab in [(delhi.DEV_START, delhi.TEST_START, "dev"),
+for span_lo, span_hi, lab in [(delhi.DEV_START, delhi.TEST_START, "dev"),
                     (delhi.TEST_START, pd.Timestamp("2026-10-31"), "test")]:
-    ax1.axvspan(lo, hi, color=RULE, alpha=0.5 if lab == "dev" else 0.9, lw=0)
-    ax1.text(lo + (hi - lo) / 2, 0.97, lab, ha="center", va="top", color=MUTED,
+    ax1.axvspan(span_lo, span_hi, color=RULE, alpha=0.5 if lab == "dev" else 0.9, lw=0)
+    ax1.text(span_lo + (span_hi - span_lo) / 2, 0.97, lab, ha="center", va="top", color=MUTED,
              transform=ax1.get_xaxis_transform())
 ax1.axhline(delhi.ALERT, color=MUTED, ls="--", lw=0.8)
 ax1.set_ylabel("PM2.5, µg/m³")
@@ -517,7 +525,9 @@ fig.tight_layout()
 plt.show()
 ```
 
-The forecasts in the lower panel rise and fall with each smog episode a day late and stop short of its peak. Over the test years the forest's forecast correlates `{python} f"{r_today:.2f}"` with today's PM2.5 and `{python} f"{r_next:.2f}"` with tomorrow's, the one it is meant to predict. With ten years of data the forest's advantage over a selected regression becomes measurable, and it is a few percent.
+The forecasts in the lower panel rise and fall with each smog episode a day late and stop short of its peak. Over the test years the forest's forecast correlates `{python} f"{r_today:.2f}"` with today's PM2.5 and `{python} f"{r_next:.2f}"` with tomorrow's, the one it is meant to predict.
+
+With ten years of data the forest's advantage over a selected regression becomes measurable, and it is a few percent.
 
 ## Conclusions are about the model {#sec-model-not-nature}
 
@@ -655,6 +665,7 @@ Two limits matter for the rest of the series.
 - **The dev months are `{python} n_dev` day pairs from one season.** Settings chosen on them are a guess about autumn made from summer. The grids and the split were set once and not revised after the test scores were seen. One model was dropped after them: an equal average of the tuned forest, boosting and Chronos-2 with meteorology, which scores `{python} f"{avg_rmse:.2f}"` on the test months, within the forest's and boosting's range.
 - **Chronos-2's forecasts are read from a file.** `src/chronos_forecast.py` writes them with its own pinned venv (`src/requirements-chronos.txt`) and a pinned model revision, because the series' shared venv has no torch; the render does not run the model. Its pretraining corpus was not checked for this 1976 record or for the Delhi monitor; Chronos-2 was released in October 2025, so the Delhi test years before then may be in it, and @sec-delhi-result reports the later days separately.
 - **The Delhi weather is a reanalysis.** ERA5 for day $t$ is a reconstruction made after the fact, at a grid point about 13 km from the monitor; a forecaster on day $t$ would have the station readings instead. Boundary-layer height, the variable most like the 1976 inversion base, is left out because the archive lacks it for half of 2024.
+- **The Delhi run reuses the ozone grids.** They were sized for the 1976 record's training months, and on Delhi's `{python} f"{n_trd + n_dvd:,}"` training and dev day pairs boosting settled at three edges of its grid (`{python} d_boost`). A wider grid might tune boosting further; the tie among the tree ensembles is a result for these grids.
 - **The Delhi record has holes.** `{python} f"{1 - n_pm / n_days:.0%}"` of days have no 24-hour mean, mostly in runs, and a forecast needs four complete days in a row, so `{python} f"{len(ddf):,}"` of `{python} f"{n_days - 3:,}"` possible day pairs are usable. The alert threshold is applied to a point forecast; @sec-delhi-result does not tune it.
 - **LightGBM itself was not run.** Its macOS wheel needs a system OpenMP library; scikit-learn's histogram boosting uses the same binning idea.
 - **The goodness-of-fit design is ours.** The paper does not describe its simulation. The product term was fixed before any result; the sine term was chosen after the first result was seen, which the text labels.

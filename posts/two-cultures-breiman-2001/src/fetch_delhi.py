@@ -40,6 +40,7 @@ LOCATION, LAT, LON = 8118, 28.63576, 77.22445
 START, END = "2016-11-01", "2026-10-31"
 BUCKET = "https://openaq-data-archive.s3.amazonaws.com"
 ERA5 = "https://archive-api.open-meteo.com/v1/archive"
+MODEL = "era5"
 HOURLY = [
     "temperature_2m",
     "relative_humidity_2m",
@@ -96,12 +97,13 @@ def pm25_hourly(out: Path):
     if not path.exists():
         # A day's file runs 01:00 to the next 00:00, so END's file holds its last hour.
         # Cutting at END keeps the download, and its SHA-256, fixed after END.
-        last = END.replace("-", "")
+        first, last = START.replace("-", ""), END.replace("-", "")
         keys = [
             k
             for y in range(int(START[:4]), int(END[:4]) + 1)
             for k in _keys(y)
-            if (m := re.search(r"-(\d{8})\.csv\.gz$", k)) and m.group(1) <= last
+            if (m := re.search(r"-(\d{8})\.csv\.gz$", k))
+            and first <= m.group(1) <= last
         ]
         with ThreadPoolExecutor(6) as ex:
             parts = list(ex.map(_get, keys))
@@ -111,7 +113,9 @@ def pm25_hourly(out: Path):
 
 
 def era5_hourly(out: Path):
-    path = out / f"era5_hourly_{START}_to_{END}.csv"
+    # Model and variables are in the name too, so changing either fetches afresh.
+    tag = hashlib.sha256(",".join(HOURLY).encode()).hexdigest()[:8]
+    path = out / f"era5_{MODEL}_{tag}_hourly_{START}_to_{END}.csv"
     if not path.exists():
         # One day either side: an accumulated value is labelled at the end of its hour,
         # so the first and last days need a neighbour's 00:00 or 23:00 label.
@@ -124,7 +128,7 @@ def era5_hourly(out: Path):
                 "start_date": (pd.Timestamp(START) - day).strftime("%Y-%m-%d"),
                 "end_date": (pd.Timestamp(END) + day).strftime("%Y-%m-%d"),
                 "hourly": ",".join(HOURLY),
-                "models": "era5",
+                "models": MODEL,
                 "timezone": "Asia/Kolkata",
             },
             timeout=600,
