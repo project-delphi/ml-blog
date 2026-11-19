@@ -3,7 +3,8 @@
 Design: predict day t+1's maximum one-hour ozone from days t, t-1 and t-2 of
 eight meteorological readings and ozone itself (27 columns), plus season (sine
 and cosine of day of year) and a weekend flag: 30 candidate predictors.
-Training is January-August, testing September-December, a time-ordered split.
+The split is by the day t a forecast is made: training rows have t in January-August
+(so the last target is 1 September), test rows t in September-December.
 
 The linear route re-enacts the 1970s project as Breiman describes it: a large
 linear regression with variable selection, then squares and interactions of the

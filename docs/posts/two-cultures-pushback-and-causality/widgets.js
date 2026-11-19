@@ -26,7 +26,7 @@ WK.mount("widget-confound", function (root, WK) {
     text: "New patients", onclick: function () { seed += 1; draw(); } }));
   var tNaive = WK.stat({ label: "Slope of Y on T (predictive)" , value: "" });
   var tR2 = WK.stat({ label: "R² of that prediction", value: "" });
-  var tAdj = WK.stat({ label: "Slope of T adjusting for severity", value: "" });
+  var tAdj = WK.stat({ label: "Slope of Y on T, adjusting for severity", value: "" });
   var tTau = WK.stat({ label: "Causal effect τ", value: "" });
   [tNaive, tR2, tAdj, tTau].forEach(function (s) { f.stats.appendChild(s.root); });
   var W = 600, H = 340, L = 48, R = 16, T = 14, B = 40;
