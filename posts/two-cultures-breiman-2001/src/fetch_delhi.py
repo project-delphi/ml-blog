@@ -83,27 +83,34 @@ def _get(key: str, tries: int = 6) -> bytes:
             time.sleep(2**i)
 
 
-def pm25_hourly(out: Path) -> pd.DataFrame:
+def _save(df: pd.DataFrame, path: Path) -> None:
+    # Write then rename, so an interrupted run never leaves a partial file to reuse.
+    tmp = path.with_suffix(".tmp")
+    df.to_csv(tmp, index=False)
+    tmp.rename(path)
+
+
+def pm25_hourly(out: Path):
     # The window is in the name, so a download for another span is never reused.
-    path = out / f"openaq_{LOCATION}_hourly_to_{END}.csv"
+    path = out / f"openaq_{LOCATION}_hourly_{START}_to_{END}.csv"
     if not path.exists():
         # A day's file runs 01:00 to the next 00:00, so END's file holds its last hour.
         # Cutting at END keeps the download, and its SHA-256, fixed after END.
         last = END.replace("-", "")
         keys = [
             k
-            for y in range(2016, int(END[:4]) + 1)
+            for y in range(int(START[:4]), int(END[:4]) + 1)
             for k in _keys(y)
             if (m := re.search(r"-(\d{8})\.csv\.gz$", k)) and m.group(1) <= last
         ]
         with ThreadPoolExecutor(6) as ex:
             parts = list(ex.map(_get, keys))
         frames = [pd.read_csv(io.BytesIO(gzip.decompress(b))) for b in parts]
-        pd.concat(frames, ignore_index=True).to_csv(path, index=False)
-    return pd.read_csv(path)
+        _save(pd.concat(frames, ignore_index=True), path)
+    return pd.read_csv(path), path
 
 
-def era5_hourly(out: Path) -> pd.DataFrame:
+def era5_hourly(out: Path):
     path = out / f"era5_hourly_{START}_to_{END}.csv"
     if not path.exists():
         # One day either side: an accumulated value is labelled at the end of its hour,
@@ -125,8 +132,8 @@ def era5_hourly(out: Path) -> pd.DataFrame:
         r.raise_for_status()
         j = r.json()
         print(f"ERA5 grid point {j['latitude']}, {j['longitude']}")
-        pd.DataFrame(j["hourly"]).to_csv(path, index=False)
-    return pd.read_csv(path)
+        _save(pd.DataFrame(j["hourly"]), path)
+    return pd.read_csv(path), path
 
 
 def pm25_daily(h: pd.DataFrame) -> pd.DataFrame:
@@ -210,11 +217,12 @@ if __name__ == "__main__":
         sys.exit("usage: fetch_delhi.py <download directory outside the repo>")
     out = Path(sys.argv[1]).expanduser()
     out.mkdir(parents=True, exist_ok=True)
-    pm = pm25_daily(pm25_hourly(out))
-    wx = era5_daily(era5_hourly(out))
+    pm_h, pm_path = pm25_hourly(out)
+    wx_h, wx_path = era5_hourly(out)
+    pm, wx = pm25_daily(pm_h), era5_daily(wx_h)
     _write(pm, "delhi_pm25_daily.csv.gz")
     _write(wx, "delhi_era5_daily.csv.gz")
-    for f in sorted(out.glob("*.csv")):
+    for f in (pm_path, wx_path):
         print(f"{f.name}  sha256 {_sha(f)}")
     yr = pm.assign(y=pm["date"].dt.year).groupby("y")["pm25"]
     print(pd.DataFrame({"days": yr.count(), "mean": yr.mean().round(0)}))

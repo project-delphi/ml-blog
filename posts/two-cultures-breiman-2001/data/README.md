@@ -35,7 +35,7 @@ imputed, recoded, deduplicated or reordered unless the section says so.
 | `delhi_pm25_daily.csv.gz` | 3,652 × 4 | regression (`pm25`) | 1,490 (745 days without a daily mean) | 26,727 | US Embassy New Delhi via OpenAQ |
 | `delhi_era5_daily.csv.gz` | 3,652 × 15 | (predictors) | 543 (`blh_*`, 181 days) | 131,971 | ERA5 via Open-Meteo |
 
-All of `raw/` together, documentation included, is about 5.2 MB.
+All of `raw/` together, documentation and section 8's files included, is 4,940,278 bytes (about 4.9 MB).
 
 **Mapping to Breiman's Table 1.** The column counts there are covariates only. To get
 them, drop `Sample_code_number` and `Class` from Cancer (9 covariates), `Id` and `Type`
@@ -379,7 +379,7 @@ the repo and writes the daily files here. Access date **2026-11-19**. One row pe
 - Terms: OpenAQ passes through the original source's terms and asks for attribution to
   both the original provider and OpenAQ (<https://docs.openaq.org/docs/data-policy>).
   AirNow describes embassy data as provisional, not fully verified or validated.
-- SHA-256 of the concatenated hourly download (`openaq_8118_hourly_to_2026-10-31.csv`, 79,677 rows,
+- SHA-256 of the concatenated hourly download (`openaq_8118_hourly_2016-11-01_to_2026-10-31.csv`, 79,677 rows,
   stamped 2016-11-09 23:00 to 2026-11-01 00:00; the script cuts the download at the last
   day, so a later run gives the same file): `481df96f2278d128245c1419131f0ca406982e847dcb0d3dc31fce381390e95b`.
 - Hourly cleaning: 6,157 hours coded `-999`, 191 other negative values and 22 zeros are

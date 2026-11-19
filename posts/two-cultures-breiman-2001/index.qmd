@@ -354,9 +354,9 @@ assert n_days == 3652
 
 The design copies @sec-ozone and @sec-ozone-modern; only these points differ.
 
-- **Target and alert.** Day $t+1$'s 24-hour mean PM2.5. An alert is a forecast of 250 or more, the Severe band, which the training and dev years reach on `{python} f"{sev_tr / (n_trd + n_dvd):.0%}"` of days.
+- **Target and alert.** Day $t+1$'s 24-hour mean PM2.5. An alert is a forecast of 250 or more, the Severe band, which `{python} f"{sev_tr / (n_trd + n_dvd):.0%}"` of the training and dev day pairs reach.
 - **Predictors.** Days $t$, $t-1$ and $t-2$ of PM2.5 and the eight weather readings (27 columns), plus season and whether day $t+1$ is a weekend: 30 candidates, as for ozone.
-- **Split.** By the day the forecast is made. Train: November 2016 to October 2022 (`{python} f"{n_trd:,}"` day pairs). Dev: November 2022 to October 2023 (`{python} n_dvd`). Test: November 2023 to October 2026 (`{python} n_ted`), three winters with `{python} sev_te` Severe days. As in the project, the split is by time and every season appears on both sides of it.
+- **Split.** By the day the forecast is made. Train: November 2016 to October 2022 (`{python} f"{n_trd:,}"` day pairs). Dev: November 2022 to October 2023 (`{python} n_dvd`). Test: November 2023 to October 2026 (`{python} n_ted`), three winters whose day pairs include `{python} sev_te` Severe days. As in the project, the split is by time and every season appears on both sides of it.
 - **Chronos-2** sees the daily record from 1 November 2016 to day $t$, gaps included, once on PM2.5 alone and once with the eight weather series as covariates.
 
 ### Result {#sec-delhi-result}
@@ -449,6 +449,10 @@ assert all(s["hits"] < sev_days / 2 for k, s in d_sc.items() if k != "persistenc
 hits_lo = min(s["hits"] for k, s in d_sc.items() if k != "persistence")
 hits_hi = max(s["hits"] for k, s in d_sc.items() if k != "persistence")
 assert max(d_sc, key=lambda k: d_sc[k]["hits"]) == "persistence"
+assert d_sc["persistence"]["hits"] >= sev_days / 2
+dev_months = delhi.dates(ddf.index[dv_d]).month
+dev_smog = int(np.isin(dev_months, [11, 12, 1]).sum())
+assert 2 not in set(dev_months) and dev_smog >= 50
 assert max(d_sc, key=lambda k: d_sc[k]["false_alarms"]) == "persistence"
 sev_mask = dref["y"].to_numpy() >= delhi.ALERT
 sev_obs = float(np.median(dref["y"].to_numpy()[sev_mask]))
@@ -469,10 +473,10 @@ md(pd.DataFrame(rows_d))
 - **The 1976 tie breaks.** On `{python} n_ted` test days the untuned forest scores `{python} f"{d_rng['forest'][0]:.1f}"`–`{python} f"{d_rng['forest'][1]:.1f}"` against `{python} f"{d_lo['linear_quad']:.1f}"` for the selected quadratic regression, and the interval on the difference lies wholly above zero on all five seeds of the forest; its lowest lower end is `{python} f"{quad_low:+.2f}"`. The same holds for the lasso and persistence. Chronos-2 is worse than the forest on `{python} worse_on["chronos_pm25"]` seeds of five on PM2.5 alone and on `{python} worse_on["chronos_weather"]` with the weather; on the other seeds the interval's lower end lies between `{python} ch_neg_lo` and `{python} ch_neg_hi`.
 - **The gap is small.** Over its five seeds the forest's error is `{python} gain_quad` below the 1970s route's and `{python} gain_persist` below persistence's. Ten years resolve a difference that one autumn could not; they do not make it large.
 - **The three tree ensembles tie.** Boosting (`{python} f"{d_rng['boosting'][0]:.1f}"`–`{python} f"{d_rng['boosting'][1]:.1f}"`) and the tuned forest (`{python} f"{d_rng['forest_tuned'][0]:.1f}"`–`{python} f"{d_rng['forest_tuned'][1]:.1f}"`, settled on `{python} d_tuned`) are inside the noise of the untuned forest on at least four seeds of five. Tuning again bought nothing.
-- **The dev year agrees with the test years this time.** Persistence is worst on both. Boosting is best on November 2022 – October 2023, and on the test years it is one of the three tree ensembles that tie for best. A dev set that spans a full year samples every season the test set holds; @sec-ozone-modern's summer dev months did not.
+- **The dev year agrees with the test years this time.** Persistence is worst on both. Boosting is best on November 2022 – October 2023, and on the test years it is one of the three tree ensembles that tie for best. Gaps leave the dev year's `{python} n_dvd` usable days with no February, but `{python} dev_smog` of them fall in November–January, three of the four winter months that carry most of the test error; @sec-ozone-modern's dev months were summer only.
 - **Chronos-2 matches the 1970s route without being fitted to this record.** It scores `{python} f"{d_lo['chronos_pm25']:.1f}"` on PM2.5 alone against `{python} f"{d_lo['linear_quad']:.1f}"` for the selected regression, a difference inside the noise (`{python} f"{ch_quad[0]:+.1f}"` to `{python} f"{ch_quad[1]:+.1f}"`), and `{python} f"{d_lo['chronos_weather']:.1f}"` with the weather added: the covariates did not help it. Its pretraining data could hold this monitor's earlier years, but the last `{python} n_late` test days, November 2025 to October 2026, came after its release, and on them it scores `{python} f"{late_rmse['chronos_pm25']:.1f}"` against the regression's `{python} f"{late_rmse['linear_quad']:.1f}"`. Its nominal 80% intervals held the next day's PM2.5 on `{python} f"{d_cover['chronos_pm25']:.0%}"` and `{python} f"{d_cover['chronos_weather']:.0%}"` of test days.
 - **Winter carries the error.** For the forest, RMSE is `{python} f"{win_rmse:.0f}"` on forecasts of November–February days and `{python} f"{rest_rmse:.0f}"` on the rest of the year.
-- **The failure has changed sides.** The test years hold `{python} sev_days` Severe days, enough to see a pattern. The trained models and Chronos-2 catch `{python} hits_lo` to `{python} hits_hi` of them, fewer than half. On Severe days the median observation is `{python} f"{sev_obs:.0f}"` and the forest's median forecast `{python} f"{sev_rf:.0f}"`: a forecast built to minimise squared error is pulled toward typical days. Persistence catches the most, and issues the most false alarms. Breiman's project failed on false alarms; at a threshold of 250 these models fail on misses, and lowering the threshold trades one for the other.
+- **The failure has changed sides.** The test forecasts include `{python} sev_days` Severe days, enough to see a pattern. The trained models and Chronos-2 catch `{python} hits_lo` to `{python} hits_hi` of them, fewer than half. On Severe days the median observation is `{python} f"{sev_obs:.0f}"` and the forest's median forecast `{python} f"{sev_rf:.0f}"`: a forecast built to minimise squared error is pulled toward typical days. Persistence catches the most, and issues the most false alarms. Breiman's project failed on false alarms; at a threshold of 250 these models fail on misses, and lowering the threshold trades one for the other.
 
 ```{python}
 #| label: fig-delhi
@@ -667,7 +671,7 @@ Two limits matter for the rest of the series.
 | Chlorine (§3.2) | 30,000 mass spectra | none | tree on 1,500 questions, 95% accuracy | not attempted | data not public; not simulated |
 | Goodness of fit (§5.2) | 7-D simulation, setup not given | 7 real meteorological columns, simulated response | tests did not reject until nonlinearity extreme | product term: tests reject before the forest gains; sine term: tests miss what the forest gains | outcome depends on the shape of the nonlinearity |
 
-: Part 1's rows of the series reproduction table. [Part 5](../two-cultures-pushback-and-causality/) collects all five parts. {#tbl-status}
+: Part 1's rows of the series reproduction table. [Part 5](../two-cultures-pushback-and-causality/) collects all five parts; the long-record row is in Part 1 only. {#tbl-status}
 
 :::
 
