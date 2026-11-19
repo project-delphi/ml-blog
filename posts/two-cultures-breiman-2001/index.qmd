@@ -1,12 +1,12 @@
 ---
 title: "The Two Cultures, Part 1: Two Ways to Fill a Black Box"
-subtitle: "Breiman's 2001 argument, his ozone project re-run on the 1976 Los Angeles record, and when a goodness-of-fit test sees what a forest can use"
-description: "Leo Breiman's Statistical Modeling: The Two Cultures (2001) said statistics validated its models by the wrong test. The paper's two goals and two cultures, the consulting projects behind them, the ozone forecast re-run on public 1976 data with the lasso, gradient boosting and Chronos-2 added, and a goodness-of-fit simulation on real meteorology whose verdict depends on the shape of the nonlinearity."
+subtitle: "Breiman's 2001 argument, his ozone project re-run on the 1976 Los Angeles record and on ten years of New Delhi PM2.5, and when a goodness-of-fit test sees what a forest can use"
+description: "Leo Breiman's Statistical Modeling: The Two Cultures (2001) said statistics validated its models by the wrong test. The paper's two goals and two cultures, the consulting projects behind them, the ozone forecast re-run on public 1976 data with the lasso, gradient boosting and Chronos-2 added, the same comparison on ten years of New Delhi PM2.5, and a goodness-of-fit simulation on real meteorology whose verdict depends on the shape of the nonlinearity."
 author: "Ravi Kalia"
 date: "2026-11-18T10:00:00"
 categories: [Statistics, Machine Learning, Reading]
 image: "./cover.png"
-tags: [Breiman, two cultures, data modeling, algorithmic modeling, random forests, goodness of fit, RESET test, ozone, prediction, reproduction, gradient boosting, lasso, Chronos-2, time-series foundation models]
+tags: [Breiman, two cultures, data modeling, algorithmic modeling, random forests, goodness of fit, RESET test, ozone, prediction, reproduction, gradient boosting, lasso, Chronos-2, time-series foundation models, PM2.5, Delhi, air quality]
 jupyter: two-cultures-blog
 resources:
   - widgets.js
@@ -30,7 +30,7 @@ Anyone who has fitted a regression knows the routine. Fit the model, read $R^2$,
 
 This is the first of five parts.
 
-1. **Two ways to fill a black box** (this part): the paper's two goals and two cultures, the consulting projects behind them, and the question of how a model should be checked.
+1. **Two ways to fill a black box** (this part): the paper's two goals and two cultures, the consulting projects behind them, the ozone forecast re-run on 1976 Los Angeles and ten years of New Delhi, and the question of how a model should be checked.
 2. [**Rashomon**](../two-cultures-rashomon/): many different models fit about equally well.
 3. [**Occam and Bellman**](../two-cultures-occam-and-bellman/): forests against single trees on Breiman's ten benchmark sets, and whether more features help.
 4. [**Information from a black box**](../two-cultures-black-box-information/): the hepatitis, liver and lymphoma analyses, and what variable importance can and cannot say.
@@ -142,8 +142,8 @@ The project's seven-year, 450-variable database is not public. The closest publi
 - **Who collected it and why.** Routine air-quality and weather monitoring in the Basin, collected for the smog alerts and weather forecasting the ozone project served.
 - **What this post asks of it.** Whether a forest predicts next-day ozone better than the selected linear regressions of the 1970s project, under a time-ordered split.
 - **Cost of a wrong answer.** A missed alert leaves children on playgrounds on a smog day; a false alarm keeps government workers home for nothing (p. 200). Breiman's project failed on false alarms.
-- **Why these methods.** They are the two the paper compares: the project's own procedure, and the forest he wished he had had. @sec-ozone-modern adds three the paper does not run: the lasso, gradient boosting and a pretrained forecasting model.
-- **What it is not.** One year against seven, nine variables against 450, one station against dozens. It is a stand-in.
+- **Why these methods.** They are the two the paper compares: the project's own procedure, and the forest he wished he had had. @sec-ozone-modern adds three the paper does not run: the lasso, gradient boosting and a pretrained forecasting model. @sec-delhi runs all of them on ten years of New Delhi air.
+- **What it is not.** One year against seven, nine variables against 450, one station against dozens. It is a stand-in; @sec-delhi has the length and not the variables.
 
 Two quirks decided which copy to use. `faraway::ozone` labels each row with a `doy` field, but it repeats at month boundaries (two rows each for days 61, 121, 181, …) and runs to 390, so it cannot pair a day with the next one. `mlbench::Ozone` carries month and day of month, so the next-day design uses it, keeping only rows where all the needed days are present.
 
@@ -321,6 +321,214 @@ md(pd.DataFrame(rows_m))
 
 On `{python} n_te` autumn days the gap between a selected regression and a model that assumes nothing cannot be resolved, and the models now standard for the job do not resolve it either.
 
+## Ten years of New Delhi PM2.5 {#sec-delhi}
+
+The 1976 comparison ends in a tie on `{python} n_te` test days, a single autumn, where Breiman's project had seven years and tested on the last two.
+
+A public record longer than the project's now exists for one of the most polluted cities in the world, and the same models run on it with only the data changed.
+
+### Data {#sec-delhi-data}
+
+```{python}
+#| label: delhi-design
+from twocultures import delhi
+
+dd = delhi.daily()
+ddf = delhi.design()
+tr_d, dv_d, te_d = delhi.masks(ddf)
+yd = ddf["target"]
+n_days, n_pm = len(dd), int(dd["pm25"].notna().sum())
+n_trd, n_dvd, n_ted = int(tr_d.sum()), int(dv_d.sum()), int(te_d.sum())
+sev_tr, sev_te = int((yd[tr_d | dv_d] >= delhi.ALERT).sum()), int((yd[te_d] >= delhi.ALERT).sum())
+assert n_days == 3652
+```
+
+- **Source.** Hourly PM2.5 from the US Embassy monitor in New Delhi, as archived by OpenAQ, averaged to 24-hour means; and ERA5 reanalysis weather (Hersbach et al. 2020) at the monitor's coordinates, from the Open-Meteo archive. Both are open and need no key. `src/fetch_delhi.py` downloads them and writes the two daily files. Access date, cleaning rules and checksums are in [`data/README.md`](https://github.com/project-delphi/ml-blog/tree/main/posts/two-cultures-breiman-2001/data), section 8.
+- **Span.** `{python} f"{n_days:,}"` days, 1 November 2016 to 31 October 2026, ten years that each run November to October and so hold one winter. A day has a mean when at least 18 of its hours are valid: `{python} f"{n_pm:,}"` days (`{python} f"{n_pm / n_days:.0%}"`). The longest gap is 135 days in mid-2022.
+- **Variables.** The target is the next day's 24-hour mean PM2.5, in µg/m³. The eight weather readings are daily maximum and minimum temperature, mean humidity, mean surface pressure, total rainfall, mean wind speed, and the mean east–west and north–south wind components. ERA5 also gives boundary-layer height, the closest match to Los Angeles's inversion base height, but it is missing from the archive for January–June 2024, so it is left out.
+- **Who collected it and why.** The US State Department runs the monitor to tell embassy staff and US citizens in the city how polluted the air is, and reports it to AirNow, which labels the data provisional. ERA5 is the European Centre for Medium-Range Weather Forecasts' reconstruction of past weather, made by fitting a weather model to the observations of the time.
+- **What this section asks of it.** Whether the 1976 tie survives a test period ten times as long.
+- **Cost of a wrong answer.** India's air quality index calls a 24-hour PM2.5 mean of 250 µg/m³ or more "Severe" (CPCB 2014). Delhi's Graded Response Action Plan steps up restrictions on construction and traffic as the index worsens (CAQM). A missed Severe day starts the restrictions late; a false alarm halts work for nothing.
+- **Why these methods.** They are @sec-ozone-modern's, with the same grids, so a difference in verdict comes from the data.
+- **What it is not.** PM2.5, not ozone: fine particles are what drive Delhi's winter alerts. One monitor, against the project's dozens of stations, and reanalysis weather at a grid point about 13 km from it.
+
+### Design {#sec-delhi-design}
+
+The design copies @sec-ozone and @sec-ozone-modern; only these points differ.
+
+- **Target and alert.** Day $t+1$'s 24-hour mean PM2.5. An alert is a forecast of 250 or more, the Severe band, which `{python} f"{sev_tr / (n_trd + n_dvd):.0%}"` of the training and dev day pairs reach.
+- **Predictors.** Days $t$, $t-1$ and $t-2$ of PM2.5 and the eight weather readings (27 columns), plus season and whether day $t+1$ is a weekend: 30 candidates, as for ozone.
+- **Split.** By the day the forecast is made. Train: November 2016 to October 2022 (`{python} f"{n_trd:,}"` day pairs). Dev: November 2022 to October 2023 (`{python} n_dvd`). Test: November 2023 to October 2026 (`{python} n_ted`), three winters whose day pairs include `{python} sev_te` Severe days. As in the project, the split is by time and every season appears on both sides of it.
+- **Chronos-2** sees the daily record from 1 November 2016 to day $t$, gaps included, once on PM2.5 alone and once with the eight weather series as covariates.
+
+### Result {#sec-delhi-result}
+
+```{python}
+#| label: tbl-delhi
+#| tbl-cap: "Next-day PM2.5 in New Delhi, tuned on November 2022 – October 2023 and scored on November 2023 – October 2026, in µg/m³. An alert is a forecast of 250 or more. Test RMSE is the range over five seeds for the seeded models. The interval is on test RMSE minus the untuned forest's; above zero means worse than the forest. Dev RMSE, the interval and the alert columns are for seed 0."
+dmod = pd.concat([cache.frame(delhi.CACHE_TAG, delhi.run), delhi.chronos()],
+                 ignore_index=True)
+dmod["y"] = yd.loc[dmod["day"]].to_numpy()
+
+
+def dpick(model, split, seed=0):
+    return dmod[(dmod["model"] == model) & (dmod["split"] == split) & (dmod["seed"] == seed)]
+
+
+dnames = {**{k: v for k, v in names.items() if not k.startswith("chronos")},
+          "persistence": "Persistence (today's PM2.5)",
+          "chronos_pm25": "Chronos-2, PM2.5 only",
+          "chronos_weather": "Chronos-2, PM2.5 + weather"}
+dref = dpick("forest", "test")
+d_dev, d_rng, d_ci, d_sc, rows_d = {}, {}, {}, {}, []
+for key, label in dnames.items():
+    d, t = dpick(key, "dev"), dpick(key, "test")
+    assert (t["day"].to_numpy() == dref["day"].to_numpy()).all()
+    d_dev[key] = modern.rmse(d["pred"], d["y"])
+    seeds = sorted(dmod.loc[dmod["model"] == key, "seed"].unique())
+    r = [modern.rmse(g["pred"], g["y"]) for g in (dpick(key, "test", s) for s in seeds)]
+    d_rng[key] = (min(r), max(r))
+    d_ci[key] = modern.block_bootstrap(t["pred"], dref["pred"], t["y"])
+    d_sc[key] = ozone.scores(t["pred"].to_numpy(), t["y"].to_numpy(), alert=delhi.ALERT)
+    rows_d.append({
+        "Model": label, "Dev RMSE": f"{d_dev[key]:.1f}",
+        "Test RMSE": (f"{r[0]:.1f}" if len(r) == 1 else f"{min(r):.1f}–{max(r):.1f}"),
+        "Test − forest, 95% interval": ("—" if key == "forest"
+                                         else f"{d_ci[key][0]:+.1f} to {d_ci[key][1]:+.1f}"),
+        "Alerts issued": d_sc[key]["alerts_issued"], "Hits": d_sc[key]["hits"],
+        "False alarms": d_sc[key]["false_alarms"]})
+
+trees = ["forest", "forest_tuned", "boosting"]
+others = [k for k in dnames if k not in trees]
+# Lower ends of each other model's interval against the forest, one per forest seed.
+lows = {k: [modern.block_bootstrap(dpick(k, "test")["pred"],
+                                   dpick("forest", "test", s)["pred"], dref["y"])[0]
+            for s in modern.SEEDS] for k in others}
+worse_on = {k: sum(lo > 0 for lo in v) for k, v in lows.items()}
+assert all(worse_on[k] == 5 for k in ["persistence", "linear_quad", "lasso"]), worse_on
+assert all(1 <= worse_on[k] < 5 for k in ["chronos_pm25", "chronos_weather"]), worse_on
+quad_low = min(lows["linear_quad"])
+ch_neg = [lo for k in ["chronos_pm25", "chronos_weather"] for lo in lows[k] if lo <= 0]
+ch_neg_lo, ch_neg_hi = (f"{x:+.2f}".replace("-0.00", "0.00") for x in (min(ch_neg), max(ch_neg)))
+assert all(d_ci[k][0] > 0 for k in others)
+# The tuned forest and boosting tie with the forest on at least four seeds of five.
+for k in ["forest_tuned", "boosting"]:
+    ties = [modern.block_bootstrap(dpick(k, "test", s)["pred"], dpick("forest", "test", s)["pred"],
+                                   dref["y"]) for s in modern.SEEDS]
+    assert sum(lo < 0 < hi for lo, hi in ties) >= 4, (k, ties)
+    assert not any(hi < 0 for _, hi in ties)
+d_lo = {k: v[0] for k, v in d_rng.items()}
+assert max(d_lo, key=d_lo.get) == "persistence"
+assert max(d_lo[k] for k in trees) < min(d_lo[k] for k in others)
+# Chronos-2 on PM2.5 alone against the selected regression: inside the noise.
+ch_quad = modern.block_bootstrap(dpick("chronos_pm25", "test")["pred"],
+                                 dpick("linear_quad", "test")["pred"], dref["y"])
+assert ch_quad[0] < 0 < ch_quad[1], ch_quad
+# Test days after Chronos-2's release (October 2025) cannot be in its pretraining data.
+late = dref["day"].to_numpy() >= delhi.day_of(pd.Timestamp("2025-11-01"))
+n_late = int(late.sum())
+late_rmse = {k: modern.rmse(dpick(k, "test")["pred"][late], dref["y"][late])
+             for k in ["linear_quad", "chronos_pm25"]}
+ch_quad_late = modern.block_bootstrap(dpick("chronos_pm25", "test")["pred"][late],
+                                      dpick("linear_quad", "test")["pred"][late], dref["y"][late])
+assert ch_quad_late[0] < 0 < ch_quad_late[1], ch_quad_late
+assert d_lo["chronos_weather"] > d_lo["chronos_pm25"]
+d_dev_order = sorted(d_dev, key=d_dev.get)
+assert d_dev_order[0] == "boosting" and d_dev_order[-1] == "persistence"
+# The forest's gain, as a range over its five seeds.
+
+
+def gain(base):
+    lo, hi = 1 - d_rng["forest"][1] / d_lo[base], 1 - d_rng["forest"][0] / d_lo[base]
+    a, b = round(100 * lo), round(100 * hi)
+    return f"{a}%" if a == b else f"{a}–{b}%"
+
+
+gain_quad, gain_persist = gain("linear_quad"), gain("persistence")
+sev_days = d_sc["forest"]["alert_days"]
+assert sev_days == sev_te
+assert all(s["hits"] < sev_days / 2 for k, s in d_sc.items() if k != "persistence")
+hits_lo = min(s["hits"] for k, s in d_sc.items() if k != "persistence")
+hits_hi = max(s["hits"] for k, s in d_sc.items() if k != "persistence")
+assert max(d_sc, key=lambda k: d_sc[k]["hits"]) == "persistence"
+assert d_sc["persistence"]["hits"] >= sev_days / 2
+# Months of the forecast target day t + 1, as for `win` below.
+dev_months = delhi.dates(ddf.index[dv_d] + 1).month
+dev_smog = int(np.isin(dev_months, [11, 12, 1]).sum())
+dev_feb = int((dev_months == 2).sum())
+assert dev_feb <= 2 and dev_smog >= 50
+assert max(d_sc, key=lambda k: d_sc[k]["false_alarms"]) == "persistence"
+sev_mask = dref["y"].to_numpy() >= delhi.ALERT
+sev_obs = float(np.median(dref["y"].to_numpy()[sev_mask]))
+sev_rf = float(np.median(dref["pred"].to_numpy()[sev_mask]))
+d_cover = {k: float(((dpick(k, "test")["q10"] <= dpick(k, "test")["y"])
+                     & (dpick(k, "test")["y"] <= dpick(k, "test")["q90"])).mean())
+           for k in ["chronos_pm25", "chronos_weather"]}
+win = np.isin(delhi.dates(dref["day"].to_numpy() + 1).month, [11, 12, 1, 2])
+err2 = (dref["pred"].to_numpy() - dref["y"].to_numpy()) ** 2
+assert err2[win].sum() / err2.sum() > 0.5  # winter carries most of the squared error
+win_rmse = modern.rmse(dref["pred"][win], dref["y"][win])
+rest_rmse = modern.rmse(dref["pred"][~win], dref["y"][~win])
+d_tuned = dpick("forest_tuned", "test")["params"].iloc[0]
+d_boost = dpick("boosting", "test")["params"].iloc[0]
+assert all(e in d_boost for e in ["learning_rate=0.03", "max_leaf_nodes=16", "min_samples_leaf=20"])
+r_today = float(np.corrcoef(dref["pred"], ddf["pm25_lag0"].loc[dref["day"]])[0, 1])
+r_next = float(np.corrcoef(dref["pred"], dref["y"])[0, 1])
+assert r_today > r_next
+md(pd.DataFrame(rows_d))
+```
+
+- **The 1976 tie breaks.** On `{python} n_ted` test days the untuned forest scores `{python} f"{d_rng['forest'][0]:.1f}"`–`{python} f"{d_rng['forest'][1]:.1f}"` against `{python} f"{d_lo['linear_quad']:.1f}"` for the selected quadratic regression, and the interval on the difference lies wholly above zero on all five seeds of the forest; its lowest lower end is `{python} f"{quad_low:+.2f}"`. The same holds for the lasso and persistence. Chronos-2 is worse than the forest on `{python} worse_on["chronos_pm25"]` seeds of five on PM2.5 alone and on `{python} worse_on["chronos_weather"]` with the weather; on the other seeds the interval's lower end lies between `{python} ch_neg_lo` and `{python} ch_neg_hi`.
+- **The gap is small.** Over its five seeds the forest's error is `{python} gain_quad` below the 1970s route's and `{python} gain_persist` below persistence's. Ten years resolve a difference that one autumn could not; they do not make it large.
+- **The three tree ensembles tie.** Boosting (`{python} f"{d_rng['boosting'][0]:.1f}"`–`{python} f"{d_rng['boosting'][1]:.1f}"`) and the tuned forest (`{python} f"{d_rng['forest_tuned'][0]:.1f}"`–`{python} f"{d_rng['forest_tuned'][1]:.1f}"`, settled on `{python} d_tuned`) are inside the noise of the untuned forest on at least four seeds of five. Tuning again bought nothing.
+- **The dev year agrees with the test years this time.** Persistence is worst on both. Boosting is best on November 2022 – October 2023, and on the test years it is one of the three tree ensembles that tie for best. Gaps leave the dev year's `{python} n_dvd` usable days with `{python} dev_feb` in February, but `{python} dev_smog` of them fall in November–January, three of the four winter months that carry most of the test error; @sec-ozone-modern's dev months were summer only.
+- **Chronos-2 matches the 1970s route without being fitted to this record.** It scores `{python} f"{d_lo['chronos_pm25']:.1f}"` on PM2.5 alone against `{python} f"{d_lo['linear_quad']:.1f}"` for the selected regression, a difference inside the noise (`{python} f"{ch_quad[0]:+.1f}"` to `{python} f"{ch_quad[1]:+.1f}"`), and `{python} f"{d_lo['chronos_weather']:.1f}"` with the weather added: the covariates did not help it. Its pretraining data could hold this monitor's earlier years, but the last `{python} n_late` test days, November 2025 to October 2026, came after its release, and on them it scores `{python} f"{late_rmse['chronos_pm25']:.1f}"` against the regression's `{python} f"{late_rmse['linear_quad']:.1f}"`. Its nominal 80% intervals held the next day's PM2.5 on `{python} f"{d_cover['chronos_pm25']:.0%}"` and `{python} f"{d_cover['chronos_weather']:.0%}"` of test days.
+- **Winter carries the error.** For the forest, RMSE is `{python} f"{win_rmse:.0f}"` on forecasts of November–February days and `{python} f"{rest_rmse:.0f}"` on the rest of the year.
+- **The failure has changed sides.** The test forecasts include `{python} sev_days` Severe days, enough to see a pattern. The trained models and Chronos-2 catch `{python} hits_lo` to `{python} hits_hi` of them, fewer than half. On Severe days the median observation is `{python} f"{sev_obs:.0f}"` and the forest's median forecast `{python} f"{sev_rf:.0f}"`: a forecast built to minimise squared error is pulled toward typical days. Persistence catches the most, and issues the most false alarms. Breiman's project failed on false alarms; at a threshold of 250 these models fail on misses, and lowering the threshold trades one for the other.
+
+```{python}
+#| label: fig-delhi
+#| fig-cap: "Top: daily mean PM2.5 at the US Embassy, New Delhi, November 2016 – October 2026, with the dev year and the test years shaded; gaps are days without a 24-hour mean. Bottom: next-day PM2.5 in the winter of 2024–25 against the forest (seed 0) and Chronos-2 on PM2.5 alone, with Chronos-2's 80% interval. The dashed line is the Severe threshold of 250 µg/m³."
+#| fig-alt: "Two-panel chart. The ten-year record peaks every November to January, above 600 micrograms per cubic metre at the highest, and falls below 50 in the monsoon. In the winter of 2024 to 2025 both forecasts follow the rise and fall of the smog episodes but fall short of the highest days, and the Chronos-2 interval widens on the peaks."
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7.5, 5.2), height_ratios=[1, 1.15])
+full = dd.set_index("date")["pm25"].asfreq("D")
+ax1.plot(full.index, full.to_numpy(), color=INK, lw=0.6)
+ax1.set_ylim(top=full.max() * 1.12)  # room for the split labels above the highest day
+for span_lo, span_hi, lab in [(delhi.DEV_START, delhi.TEST_START, "dev"),
+                    (delhi.TEST_START, pd.Timestamp("2026-10-31"), "test")]:
+    ax1.axvspan(span_lo, span_hi, color=RULE, alpha=0.5 if lab == "dev" else 0.9, lw=0)
+    ax1.text(span_lo + (span_hi - span_lo) / 2, 0.97, lab, ha="center", va="top", color=MUTED,
+             transform=ax1.get_xaxis_transform())
+ax1.axhline(delhi.ALERT, color=MUTED, ls="--", lw=0.8)
+ax1.set_ylabel("PM2.5, µg/m³")
+ax1.xaxis.set_major_locator(mdates.YearLocator())
+ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+
+wt = dref["day"].to_numpy()
+tgt = pd.Series(delhi.dates(wt + 1))
+sel = ((tgt >= "2024-11-01") & (tgt < "2025-03-01")).to_numpy()
+ch = dpick("chronos_pm25", "test")
+# Plot on a daily grid, so a missing day breaks each line rather than joining across it.
+grid = pd.date_range("2024-11-01", "2025-02-28", freq="D")
+def on_grid(v):
+    return pd.Series(np.asarray(v)[sel], index=tgt[sel].to_numpy()).reindex(grid)
+ax2.fill_between(grid, on_grid(ch["q10"]), on_grid(ch["q90"]), color=AMBER, alpha=0.18, lw=0)
+ax2.plot(grid, on_grid(dref["y"]), color=INK, lw=1.4, label="observed")
+ax2.plot(grid, on_grid(dref["pred"]), color=PURPLE, lw=1.2, label="random forest")
+ax2.plot(grid, on_grid(ch["pred"]), color=AMBER, lw=1.2, label="Chronos-2, PM2.5 only")
+ax2.axhline(delhi.ALERT, color=MUTED, ls="--", lw=0.8)
+ax2.set_ylabel("next-day PM2.5, µg/m³")
+ax2.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=3)
+ax2.xaxis.set_major_locator(mdates.MonthLocator())
+ax2.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+fig.tight_layout()
+plt.show()
+```
+
+The forecasts in the lower panel rise and fall with each smog episode a day late and stop short of its peak. Over the test years the forest's forecast correlates `{python} f"{r_today:.2f}"` with today's PM2.5 and `{python} f"{r_next:.2f}"` with tomorrow's, the one it is meant to predict.
+
+With ten years of data the forest's advantage over a selected regression becomes measurable, and it is a few percent.
+
 ## Conclusions are about the model {#sec-model-not-nature}
 
 Section 5 of the paper states the objection to data models in two lines (p. 202):
@@ -455,7 +663,10 @@ Two limits matter for the rest of the series.
 - **The ozone stand-in is one year at one station.** The test months differ in season from the training months, and the alert comparison rests on `{python} alert_te` alert days.
 - **The linear route is a re-enactment.** Breiman describes the 1970s procedure in one paragraph; the selection criterion, the candidate sets and the stopping rule here are choices, made before seeing the test months.
 - **The dev months are `{python} n_dev` day pairs from one season.** Settings chosen on them are a guess about autumn made from summer. The grids and the split were set once and not revised after the test scores were seen. One model was dropped after them: an equal average of the tuned forest, boosting and Chronos-2 with meteorology, which scores `{python} f"{avg_rmse:.2f}"` on the test months, within the forest's and boosting's range.
-- **Chronos-2's forecasts are read from a file.** `src/chronos_forecast.py` writes them with its own pinned venv (`src/requirements-chronos.txt`) and a pinned model revision, because the series' shared venv has no torch; the render does not run the model. Its pretraining corpus was not checked for this 1976 record.
+- **Chronos-2's forecasts are read from a file.** `src/chronos_forecast.py` writes them with its own pinned venv (`src/requirements-chronos.txt`) and a pinned model revision, because the series' shared venv has no torch; the render does not run the model. Its pretraining corpus was not checked for this 1976 record or for the Delhi monitor; Chronos-2 was released in October 2025, so the Delhi test years before then may be in it, and @sec-delhi-result reports the later days separately.
+- **The Delhi weather is a reanalysis.** ERA5 for day $t$ is a reconstruction made after the fact, at a grid point about 13 km from the monitor; a forecaster on day $t$ would have the station readings instead. Boundary-layer height, the variable most like the 1976 inversion base, is left out because the archive lacks it for half of 2024.
+- **The Delhi run reuses the ozone grids.** They were sized for the 1976 record's training months, and on Delhi's `{python} f"{n_trd + n_dvd:,}"` training and dev day pairs boosting settled at three edges of its grid (`{python} d_boost`). A wider grid might tune boosting further; the tie among the tree ensembles is a result for these grids.
+- **The Delhi record has holes.** `{python} f"{1 - n_pm / n_days:.0%}"` of days have no 24-hour mean, mostly in runs, and a forecast needs four complete days in a row, so `{python} f"{len(ddf):,}"` of `{python} f"{n_days - 3:,}"` possible day pairs are usable. The alert threshold is applied to a point forecast; @sec-delhi-result does not tune it.
 - **LightGBM itself was not run.** Its macOS wheel needs a system OpenMP library; scikit-learn's histogram boosting uses the same binning idea.
 - **The goodness-of-fit design is ours.** The paper does not describe its simulation. The product term was fixed before any result; the sine term was chosen after the first result was seen, which the text labels.
 - **The forest and OLS are compared on one random split per replicate.** The median ratio over 200 replicates is stable; a single replicate's ratio is not.
@@ -467,10 +678,11 @@ Two limits matter for the rest of the series.
 | Experiment | Paper's data | Data used here | Paper's result | Our result | Notes |
 |---|---|---|---|---|---|
 | Ozone forecast (§3.1) | 7 years, 450+ variables, LA Basin | 1976 LA record (`mlbench::Ozone`), 30 candidate predictors | selected regression; false-alarm rate too high | forest RMSE `{python} f"{rf_lo:.2f}"`–`{python} f"{rf_hi:.2f}"` vs selected regression `{python} f"{rmse['quad']:.2f}"`; all methods issued false alarms; lasso, boosting and Chronos-2 within noise of the forest | stand-in; original data not public |
+| Next-day air-quality forecast, long record (§3.1 design) | 7 years, 450+ variables, LA Basin | 10 years of New Delhi PM2.5 (US Embassy) and ERA5 weather, 30 candidate predictors | selected regression; false-alarm rate too high | forest RMSE `{python} f"{d_rng['forest'][0]:.1f}"`–`{python} f"{d_rng['forest'][1]:.1f}"` vs selected regression `{python} f"{d_lo['linear_quad']:.1f}"` µg/m³, separated on all five seeds; boosting ties the forest; Chronos-2 level with the regression; every model but persistence missed more than half the Severe days | different city and pollutant; same design |
 | Chlorine (§3.2) | 30,000 mass spectra | none | tree on 1,500 questions, 95% accuracy | not attempted | data not public; not simulated |
 | Goodness of fit (§5.2) | 7-D simulation, setup not given | 7 real meteorological columns, simulated response | tests did not reject until nonlinearity extreme | product term: tests reject before the forest gains; sine term: tests miss what the forest gains | outcome depends on the shape of the nonlinearity |
 
-: Part 1's rows of the series reproduction table. [Part 5](../two-cultures-pushback-and-causality/) collects all five parts. {#tbl-status}
+: Part 1's rows of the series reproduction table. [Part 5](../two-cultures-pushback-and-causality/) collects all five parts; the long-record row is in Part 1 only. {#tbl-status}
 
 :::
 
@@ -493,16 +705,22 @@ status.export(
 ## References {#sec-references}
 
 - Ansari, A. F., Shchur, O., Küken, J., et al. (2025). [Chronos-2: from univariate to universal forecasting](https://arxiv.org/abs/2510.15821). arXiv:2510.15821. Run here as `amazon/chronos-2`, revision `29ec376`.
+- AirNow. [AirNow](https://www.airnow.gov/), which publishes the US Department of State's embassy and consulate monitors. The New Delhi monitor is read here through OpenAQ.
 - Bickel, P. J., Ritov, Y. & Stoker, T. M. (2006). [Tailor-made tests for goodness of fit to semiparametric hypotheses](https://doi.org/10.1214/009053606000000137). *Annals of Statistics* 34(2), 721–741. Cited by Breiman as a 2001 manuscript.
 - Breiman, L. (2001). [Statistical modeling: the two cultures (with comments and a rejoinder)](https://doi.org/10.1214/ss/1009213726). *Statistical Science* 16(3), 199–231.
 - Breiman, L. (2001). [Random forests](https://doi.org/10.1023/A:1010933404324). *Machine Learning* 45, 5–32.
 - Breiman, L. & Friedman, J. H. (1985). [Estimating optimal transformations for multiple regression and correlation](https://doi.org/10.1080/01621459.1985.10478157). *Journal of the American Statistical Association* 80(391), 580–598. The source of the 1976 ozone data.
 - Breiman, L., Friedman, J. H., Olshen, R. A. & Stone, C. J. (1984). *Classification and Regression Trees*. Wadsworth.
+- Central Pollution Control Board (2014). *National Air Quality Index*. Ministry of Environment, Forests and Climate Change, Government of India. The PM2.5 band "Severe" is a 24-hour mean of 250+ µg/m³.
+- Commission for Air Quality Management in NCR and Adjoining Areas. [Graded Response Action Plan](https://caqm.nic.in/).
 - Faraway, J. *faraway: Functions and Datasets for Books by Julian Faraway*, R package 1.0.9 (`ozone`).
 - Friedman, J. H. (2001). [Greedy function approximation: a gradient boosting machine](https://doi.org/10.1214/aos/1013203451). *Annals of Statistics* 29(5), 1189–1232.
+- Hersbach, H., Bell, B., Berrisford, P., et al. (2020). [The ERA5 global reanalysis](https://doi.org/10.1002/qj.3803). *Quarterly Journal of the Royal Meteorological Society* 146(730), 1999–2049.
 - Ke, G., Meng, Q., Finley, T., Wang, T., Chen, W., Ma, W., Ye, Q. & Liu, T.-Y. (2017). [LightGBM: a highly efficient gradient boosting decision tree](https://papers.nips.cc/paper_files/paper/2017/hash/6449f44a102fde848669bdd9eb6b76fa-Abstract.html). *Advances in Neural Information Processing Systems* 30.
 - Leisch, F. & Dimitriadou, E. *mlbench: Machine Learning Benchmark Problems*, R package 2.1-11 (`Ozone`).
 - Mosteller, F. & Tukey, J. W. (1977). *Data Analysis and Regression*. Addison-Wesley.
+- OpenAQ. [Open air quality data archive](https://docs.openaq.org/), location 8118, "US Diplomatic Post: New Delhi".
+- Open-Meteo. [Historical weather API](https://open-meteo.com/en/docs/historical-weather-api) (Zippenfenig 2023, [doi:10.5281/zenodo.7970649](https://doi.org/10.5281/zenodo.7970649)). ERA5 data, CC BY 4.0.
 - Ramsey, J. B. (1969). [Tests for specification errors in classical linear least-squares regression analysis](https://doi.org/10.1111/j.2517-6161.1969.tb00796.x). *Journal of the Royal Statistical Society B* 31(2), 350–371.
 - Stone, M. (1974). Cross-validatory choice and assessment of statistical predictions. *Journal of the Royal Statistical Society B* 36(2), 111–147.
 - Tibshirani, R. (1996). [Regression shrinkage and selection via the lasso](https://doi.org/10.1111/j.2517-6161.1996.tb02080.x). *Journal of the Royal Statistical Society B* 58(1), 267–288.

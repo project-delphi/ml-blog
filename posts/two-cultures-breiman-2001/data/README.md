@@ -6,8 +6,8 @@ a header row (gzip `mtime` set to 0, so a rebuild is byte-identical). Columns ke
 source's order. Missing-value codes (`?` in UCI files, `NA` in R) are empty cells. Where
 the source ships a train/test split, it is kept as two files.
 
-Access date for every source: **2026-11-18**. The SHA-256 values are for the files as
-downloaded, before any conversion. Converted with pandas and pyreadr by `../src/convert_raw.py`, which reads only the downloads (kept outside the repo) and writes `raw/`. Nothing was
+Access date for sections 1–7: **2026-11-18**; section 8 gives its own. The SHA-256 values are for the files as
+downloaded, before any conversion. Sections 1–7 were converted with pandas and pyreadr by `../src/convert_raw.py`, which reads only the downloads (kept outside the repo) and writes `raw/`; section 8's files come from `../src/fetch_delhi.py`. Nothing was
 imputed, recoded, deduplicated or reordered unless the section says so.
 
 ## Summary
@@ -32,8 +32,10 @@ imputed, recoded, deduplicated or reordered unless the section says so.
 | `default_credit.csv.gz` | 30,000 × 25 | 2 (0: 23,364, 1: 6,636) | 0 | 979,797 | UCI 350 |
 | `lalonde_nsw.csv.gz` | 445 × 11 | `treat` 1: 185, 0: 260 | 0 | 4,820 | Dehejia (NBER) |
 | `lalonde_psid.csv.gz` | 2,490 × 11 | `treat` 0: 2,490 | 0 | 25,423 | Dehejia (NBER) |
+| `delhi_pm25_daily.csv.gz` | 3,652 × 4 | regression (`pm25`) | 1,490 (745 days without a daily mean) | 26,727 | US Embassy New Delhi via OpenAQ |
+| `delhi_era5_daily.csv.gz` | 3,652 × 15 | (predictors) | 543 (`blh_*`, 181 days) | 131,971 | ERA5 via Open-Meteo |
 
-All of `raw/` together, documentation included, is about 5.2 MB.
+All of `raw/` together, documentation and section 8's files included, is 4,940,278 bytes (about 4.9 MB).
 
 **Mapping to Breiman's Table 1.** The column counts there are covariates only. To get
 them, drop `Sample_code_number` and `Class` from Cancer (9 covariates), `Id` and `Type`
@@ -358,3 +360,63 @@ the Wayback Machine.
   185, 260 and 2,490 rows.
 - **Experimental benchmark:** mean re78 is 6,349.14 for the treated and 4,554.80 for the
   controls, a difference of **$1,794.34**. The `.txt` files give 1,794.34 as well.
+
+## 8. New Delhi PM2.5 and weather, November 2016 to October 2026
+
+Unlike sections 1–7, these two files are written by a script in the repo,
+`../src/fetch_delhi.py`, which downloads the hourly sources into a directory outside
+the repo and writes the daily files here. Access date **2026-11-19**. One row per local
+(India Standard Time) calendar day, 2016-11-01 to 2026-10-31.
+
+### `delhi_pm25_daily.csv.gz`
+
+- Source: the US Embassy monitor in New Delhi (28.63576 N, 77.22445 E), reported to
+  AirNow by the US Department of State, as archived by OpenAQ: location 8118,
+  "US Diplomatic Post: New Delhi", sensor 23534, one gzip CSV per day under
+  `s3://openaq-data-archive/records/csv.gz/locationid=8118/` (public bucket, no key).
+  OpenAQ's archive of this monitor starts on 2016-11-09; AirNow's own files reach back
+  further but `dosairnowdata.org` did not resolve on the access date.
+- Terms: OpenAQ passes through the original source's terms and asks for attribution to
+  both the original provider and OpenAQ (<https://docs.openaq.org/docs/data-policy>).
+  AirNow describes embassy data as provisional, not fully verified or validated.
+- Section 8's SHA-256 values are of the CSVs `fetch_delhi.py` writes from the downloads (pandas 3.1.1), not of the raw responses, so a different pandas, an OpenAQ backfill or ERA5's late revisions can change them while the daily files stay the same.
+- SHA-256 of the concatenated hourly download (`openaq_8118_hourly_2016-11-01_to_2026-10-31.csv`, 79,677 rows,
+  stamped 2016-11-09 23:00 to 2026-11-01 00:00; the script cuts the download at the last
+  day, so a later run gives the same file): `481df96f2278d128245c1419131f0ca406982e847dcb0d3dc31fce381390e95b`.
+- Hourly cleaning: 6,157 hours coded `-999`, 191 other negative values and 22 zeros are
+  missing; 321 hours at exactly 1985 µg/m³ are the instrument's fault code (they come in
+  runs, next to ordinary readings) and are missing too. OpenAQ stamps each hour at its
+  end (a day's file runs 01:00 to the next 00:00), so an hour counts on the day it
+  started. July–November 2023 carries half-hour stamps as well. They get the same
+  one-hour shift and are averaged with the hour they land in, so a stamp from 00:30 to
+  00:59 counts on the previous day. The archive does not say which half hour these
+  stamps cover.
+- Columns: `date`, `pm25` (24-hour mean, µg/m³), `pm25_max` (highest hour),
+  `n_hours`. A day with fewer than 18 valid hours has no mean (366 days), and 379 days
+  have no valid hour at all: 745 days, 20% of the record, without `pm25`. The longest
+  gap is 10 May to 21 September 2022 (135 days).
+
+### `delhi_era5_daily.csv.gz`
+
+- Source: ERA5 reanalysis (Hersbach et al. 2020), hourly, from the Open-Meteo historical
+  archive API (`https://archive-api.open-meteo.com/v1/archive`, `models=era5`,
+  `timezone=Asia/Kolkata`) at the monitor's coordinates. The nearest ERA5 grid point,
+  which the API returns, is 28.75 N, 77.25 E, about 13 km north of the monitor.
+  Open-Meteo's data are CC BY 4.0; ERA5 is Copernicus Climate Change Service data.
+- SHA-256 of the hourly download (`era5_era5_ef4413f6_hourly_2016-11-01_to_2026-10-31.csv`):
+  `5f83a80fa0d23912a991aa4e4212d327e7bdab84f53b13e80211ff26520deb47`. The request runs
+  one day either side of the span (2016-10-31 to 2026-11-01).
+- Day boundaries: instantaneous values (temperature, humidity, pressure, wind,
+  boundary-layer height) are labelled at their hour and grouped by that hour's date.
+  Precipitation and shortwave radiation are totals or means over the hour ending at the
+  label, so they are shifted back an hour first, as PM2.5 is.
+- Columns (daily aggregates of 24 local hours): `temp_mean`, `temp_max`, `temp_min` (°C, 2 m);
+  `rh_mean` (%); `dewpoint_mean` (°C); `pressure_mean` (surface, hPa); `precip_sum` (mm);
+  `wind_speed_mean` (km/h, 10 m); `wind_u_mean`, `wind_v_mean` (km/h, the mean of the
+  hourly wind vectors; u > 0 blows toward the east, v > 0 toward the north);
+  `radiation_sum` (shortwave, kWh/m²); `blh_mean`, `blh_max`, `blh_min` (boundary-layer
+  height, m).
+- Missing: boundary-layer height is null in the API for every hour from 2024-01-02 to
+  2024-06-30 (181 days) under `era5` and `era5_seamless` alike, and the archive serves no
+  pressure-level fields to rebuild it from. Part 1 therefore does not use the `blh_*`
+  columns. Every other column is complete.
