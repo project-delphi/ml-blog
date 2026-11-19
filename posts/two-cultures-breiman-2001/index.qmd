@@ -398,12 +398,16 @@ for key, label in dnames.items():
 
 trees = ["forest", "forest_tuned", "boosting"]
 others = [k for k in dnames if k not in trees]
-# Seeds of the forest against which each other model's interval lies wholly above zero.
-worse_on = {k: sum(modern.block_bootstrap(dpick(k, "test")["pred"],
-                                          dpick("forest", "test", s)["pred"], dref["y"])[0] > 0
-                   for s in modern.SEEDS) for k in others}
+# Lower ends of each other model's interval against the forest, one per forest seed.
+lows = {k: [modern.block_bootstrap(dpick(k, "test")["pred"],
+                                   dpick("forest", "test", s)["pred"], dref["y"])[0]
+            for s in modern.SEEDS] for k in others}
+worse_on = {k: sum(lo > 0 for lo in v) for k, v in lows.items()}
 assert all(worse_on[k] == 5 for k in ["persistence", "linear_quad", "lasso"]), worse_on
-assert 3 <= worse_on["chronos_weather"] <= worse_on["chronos_pm25"] <= 4, worse_on
+assert all(1 <= worse_on[k] < 5 for k in ["chronos_pm25", "chronos_weather"]), worse_on
+quad_low = min(lows["linear_quad"])
+ch_neg = [lo for k in ["chronos_pm25", "chronos_weather"] for lo in lows[k] if lo <= 0]
+ch_neg_lo, ch_neg_hi = (f"{x:+.2f}".replace("-0.00", "0.00") for x in (min(ch_neg), max(ch_neg)))
 assert all(d_ci[k][0] > 0 for k in others)
 # The tuned forest and boosting tie with the forest on at least four seeds of five.
 for k in ["forest_tuned", "boosting"]:
@@ -414,12 +418,23 @@ for k in ["forest_tuned", "boosting"]:
 d_lo = {k: v[0] for k, v in d_rng.items()}
 assert max(d_lo, key=d_lo.get) == "persistence"
 assert max(d_lo[k] for k in trees) < min(d_lo[k] for k in others)
-assert abs(d_lo["chronos_pm25"] - d_lo["linear_quad"]) < 0.5
+# Chronos-2 on PM2.5 alone against the selected regression: inside the noise.
+ch_quad = modern.block_bootstrap(dpick("chronos_pm25", "test")["pred"],
+                                 dpick("linear_quad", "test")["pred"], dref["y"])
+assert ch_quad[0] < 0 < ch_quad[1], ch_quad
 assert d_lo["chronos_weather"] > d_lo["chronos_pm25"]
 d_dev_order = sorted(d_dev, key=d_dev.get)
 assert d_dev_order[0] == "boosting" and d_dev_order[-1] == "persistence"
-gain_quad = 1 - d_lo["forest"] / d_lo["linear_quad"]
-gain_persist = 1 - d_lo["forest"] / d_lo["persistence"]
+# The forest's gain, as a range over its five seeds.
+
+
+def gain(base):
+    lo, hi = 1 - d_rng["forest"][1] / d_lo[base], 1 - d_rng["forest"][0] / d_lo[base]
+    a, b = round(100 * lo), round(100 * hi)
+    return f"{a}%" if a == b else f"{a}–{b}%"
+
+
+gain_quad, gain_persist = gain("linear_quad"), gain("persistence")
 sev_days = d_sc["forest"]["alert_days"]
 assert sev_days == sev_te
 assert all(s["hits"] < sev_days / 2 for k, s in d_sc.items() if k != "persistence")
@@ -443,25 +458,27 @@ assert r_today > r_next
 md(pd.DataFrame(rows_d))
 ```
 
-- **The 1976 tie breaks.** On `{python} n_ted` test days the untuned forest scores `{python} f"{d_rng['forest'][0]:.1f}"`–`{python} f"{d_rng['forest'][1]:.1f}"` against `{python} f"{d_lo['linear_quad']:.1f}"` for the selected quadratic regression, and the interval on the difference lies wholly above zero on all five seeds of the forest, narrowly on some. The same holds for the lasso and persistence. Chronos-2 is worse than the forest on `{python} worse_on["chronos_pm25"]` seeds of five on PM2.5 alone and on `{python} worse_on["chronos_weather"]` with the weather; on the others its interval just reaches zero.
-- **The gap is small.** The forest's error is `{python} f"{gain_quad:.0%}"` below the 1970s route's and `{python} f"{gain_persist:.0%}"` below persistence's. Ten years resolve a difference that one autumn could not; they do not make it large.
+- **The 1976 tie breaks.** On `{python} n_ted` test days the untuned forest scores `{python} f"{d_rng['forest'][0]:.1f}"`–`{python} f"{d_rng['forest'][1]:.1f}"` against `{python} f"{d_lo['linear_quad']:.1f}"` for the selected quadratic regression, and the interval on the difference lies wholly above zero on all five seeds of the forest; its lowest lower end is `{python} f"{quad_low:+.2f}"`. The same holds for the lasso and persistence. Chronos-2 is worse than the forest on `{python} worse_on["chronos_pm25"]` seeds of five on PM2.5 alone and on `{python} worse_on["chronos_weather"]` with the weather; on the other seeds the interval's lower end lies between `{python} ch_neg_lo` and `{python} ch_neg_hi`.
+- **The gap is small.** Over its five seeds the forest's error is `{python} gain_quad` below the 1970s route's and `{python} gain_persist` below persistence's. Ten years resolve a difference that one autumn could not; they do not make it large.
 - **The three tree ensembles tie.** Boosting (`{python} f"{d_rng['boosting'][0]:.1f}"`–`{python} f"{d_rng['boosting'][1]:.1f}"`) and the tuned forest (`{python} f"{d_rng['forest_tuned'][0]:.1f}"`–`{python} f"{d_rng['forest_tuned'][1]:.1f}"`, settled on `{python} d_tuned`) are inside the noise of the untuned forest on at least four seeds of five. Tuning again bought nothing.
-- **The dev year agrees with the test years this time.** Boosting is best on November 2022 – October 2023 and persistence worst, as on the test years. A dev set that spans a full year samples every season the test set holds; @sec-ozone-modern's summer dev months did not.
-- **Chronos-2 matches the 1970s route, with no training on this record.** It scores `{python} f"{d_lo['chronos_pm25']:.1f}"` on PM2.5 alone, level with the selected regression, and `{python} f"{d_lo['chronos_weather']:.1f}"` with the weather added: the covariates did not help it. Its nominal 80% intervals held the next day's PM2.5 on `{python} f"{d_cover['chronos_pm25']:.0%}"` and `{python} f"{d_cover['chronos_weather']:.0%}"` of test days.
+- **The dev year agrees with the test years this time.** Persistence is worst on both. Boosting is best on November 2022 – October 2023, and on the test years it is one of the three tree ensembles that tie for best. A dev set that spans a full year samples every season the test set holds; @sec-ozone-modern's summer dev months did not.
+- **Chronos-2 matches the 1970s route, with no training on this record.** It scores `{python} f"{d_lo['chronos_pm25']:.1f}"` on PM2.5 alone against `{python} f"{d_lo['linear_quad']:.1f}"` for the selected regression, a difference inside the noise (`{python} f"{ch_quad[0]:+.1f}"` to `{python} f"{ch_quad[1]:+.1f}"`), and `{python} f"{d_lo['chronos_weather']:.1f}"` with the weather added: the covariates did not help it. Its nominal 80% intervals held the next day's PM2.5 on `{python} f"{d_cover['chronos_pm25']:.0%}"` and `{python} f"{d_cover['chronos_weather']:.0%}"` of test days.
 - **Winter carries the error.** For the forest, RMSE is `{python} f"{win_rmse:.0f}"` on forecasts of November–February days and `{python} f"{rest_rmse:.0f}"` on the rest of the year.
 - **The failure has changed sides.** The test years hold `{python} sev_days` Severe days, enough to see a pattern. The trained models and Chronos-2 catch `{python} hits_lo` to `{python} hits_hi` of them, fewer than half. On Severe days the median observation is `{python} f"{sev_obs:.0f}"` and the forest's median forecast `{python} f"{sev_rf:.0f}"`: a forecast built to minimise squared error is pulled toward typical days. Persistence catches the most, and issues the most false alarms. Breiman's project failed on false alarms; at a threshold of 250 these models fail on misses, and lowering the threshold trades one for the other.
 
 ```{python}
 #| label: fig-delhi
 #| fig-cap: "Top: daily mean PM2.5 at the US Embassy, New Delhi, November 2016 – October 2026, with the dev year and the test years shaded; gaps are days without a 24-hour mean. Bottom: next-day PM2.5 in the winter of 2024–25 against the forest (seed 0) and Chronos-2 on PM2.5 alone, with Chronos-2's 80% interval. The dashed line is the Severe threshold of 250 µg/m³."
-#| fig-alt: "Two-panel chart. The ten-year record peaks every November to January, at up to about 650 micrograms per cubic metre, and falls below 50 in the monsoon. In the winter of 2024 to 2025 both forecasts follow the rise and fall of the smog episodes but fall short of the highest days, and the Chronos-2 interval widens on the peaks."
+#| fig-alt: "Two-panel chart. The ten-year record peaks every November to January, above 600 micrograms per cubic metre at the highest, and falls below 50 in the monsoon. In the winter of 2024 to 2025 both forecasts follow the rise and fall of the smog episodes but fall short of the highest days, and the Chronos-2 interval widens on the peaks."
 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7.5, 5.2), height_ratios=[1, 1.15])
 full = dd.set_index("date")["pm25"].asfreq("D")
 ax1.plot(full.index, full.to_numpy(), color=INK, lw=0.6)
+ax1.set_ylim(top=full.max() * 1.12)  # room for the split labels above the highest day
 for lo, hi, lab in [(delhi.DEV_START, delhi.TEST_START, "dev"),
                     (delhi.TEST_START, pd.Timestamp("2026-10-31"), "test")]:
     ax1.axvspan(lo, hi, color=RULE, alpha=0.5 if lab == "dev" else 0.9, lw=0)
-    ax1.text(lo + (hi - lo) / 2, 640, lab, ha="center", va="top", color=MUTED)
+    ax1.text(lo + (hi - lo) / 2, 0.97, lab, ha="center", va="top", color=MUTED,
+             transform=ax1.get_xaxis_transform())
 ax1.axhline(delhi.ALERT, color=MUTED, ls="--", lw=0.8)
 ax1.set_ylabel("PM2.5, µg/m³")
 ax1.xaxis.set_major_locator(mdates.YearLocator())

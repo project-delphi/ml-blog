@@ -33,9 +33,9 @@ WEATHER = [
 ]
 BASE = ["pm25"] + WEATHER
 LAGS = (0, 1, 2)
-ALERT = 250  # India's National AQI: a 24-hour PM2.5 mean above 250 µg/m³ is "Severe"
-CACHE_TAG = "delhi_v1"  # the cache.frame name for run(); bump it when run() changes
-CHRONOS_FILE = Path("cache") / "chronos2_delhi_v1.parquet"
+ALERT = 250  # India's National AQI "Severe" band for a 24-hour PM2.5 mean (250+ µg/m³)
+CACHE_TAG = "delhi_v2"  # the cache.frame name for run(); bump it when run() changes
+CHRONOS_FILE = Path("cache") / "chronos2_delhi_v2.parquet"
 
 
 def daily() -> pd.DataFrame:

@@ -15,7 +15,7 @@ from its first day to day t (missing days left as NaN, which Chronos-2 masks) an
 predicts day t + 1. The point forecast is the median of the predicted
 distribution. Rows are the dev and test forecast days of `twocultures.modern`
 (ozone, written to cache/chronos2_v1.parquet) or `twocultures.delhi` (PM2.5,
-cache/chronos2_delhi_v1.parquet).
+cache/chronos2_delhi_v2.parquet).
 """
 
 import sys

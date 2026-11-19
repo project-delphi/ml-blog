@@ -15,8 +15,9 @@ Sources, both open and keyless:
   Open-Meteo historical archive API (`models=era5`).
 
 Writes `data/raw/delhi_pm25_daily.csv.gz` and `data/raw/delhi_era5_daily.csv.gz`,
-one row per local (India Standard Time) calendar day, 1 November 2016 (when OpenAQ's archive of
-the monitor starts) to 31 October 2026, and prints the SHA-256 of both hourly downloads for `data/README.md`.
+one row per local (India Standard Time) calendar day, 1 November 2016 to 31 October
+2026 (OpenAQ's archive of the monitor starts on 9 November 2016, so the first eight
+days have no readings), and prints the SHA-256 of both hourly downloads for `data/README.md`.
 """
 
 import gzip
@@ -85,8 +86,15 @@ def _get(key: str, tries: int = 6) -> bytes:
 def pm25_hourly(out: Path) -> pd.DataFrame:
     path = out / f"openaq_{LOCATION}_hourly.csv"
     if not path.exists():
-        # One more year either side, so the local days at the edges are complete.
-        keys = [k for y in range(2015, 2027) for k in _keys(y)]
+        # A day's file runs 01:00 to the next 00:00, so END's file holds its last hour.
+        # Cutting at END keeps the download, and its SHA-256, fixed after END.
+        last = END.replace("-", "")
+        keys = [
+            k
+            for y in range(2016, int(END[:4]) + 1)
+            for k in _keys(y)
+            if re.search(r"-(\d{8})\.csv\.gz$", k).group(1) <= last
+        ]
         with ThreadPoolExecutor(6) as ex:
             parts = list(ex.map(_get, keys))
         frames = [pd.read_csv(io.BytesIO(gzip.decompress(b))) for b in parts]
@@ -97,13 +105,16 @@ def pm25_hourly(out: Path) -> pd.DataFrame:
 def era5_hourly(out: Path) -> pd.DataFrame:
     path = out / "era5_hourly.csv"
     if not path.exists():
+        # One day either side: an accumulated value is labelled at the end of its hour,
+        # so the first and last days need a neighbour's 00:00 or 23:00 label.
+        day = pd.Timedelta(days=1)
         r = requests.get(
             ERA5,
             params={
                 "latitude": LAT,
                 "longitude": LON,
-                "start_date": START,
-                "end_date": END,
+                "start_date": (pd.Timestamp(START) - day).strftime("%Y-%m-%d"),
+                "end_date": (pd.Timestamp(END) + day).strftime("%Y-%m-%d"),
                 "hourly": ",".join(HOURLY),
                 "models": "era5",
                 "timezone": "Asia/Kolkata",
@@ -119,6 +130,9 @@ def era5_hourly(out: Path) -> pd.DataFrame:
 
 def pm25_daily(h: pd.DataFrame) -> pd.DataFrame:
     h = h[h["parameter"] == "pm25"].copy()
+    assert (h["datetime"].str[19:] == "+05:30").all(), (
+        "expected India Standard Time stamps"
+    )
     # OpenAQ stamps each hour at its end (a local day's file runs 01:00 to 00:00),
     # so an hour is counted on the day it started.
     t = pd.to_datetime(h["datetime"].str[:19]) - pd.Timedelta(hours=1)
@@ -127,7 +141,9 @@ def pm25_daily(h: pd.DataFrame) -> pd.DataFrame:
     # The feed codes a missing hour as -999 (or a small negative number) and an
     # instrument fault as 1985, often for several hours in a row.
     h = h[(h["value"] > 0) & (h["value"] != FAULT)]
-    # July-November 2023 also carries half-hour stamps; average within the hour.
+    # July-November 2023 also carries half-hour stamps. Each is shifted back an hour
+    # too and averaged with the hour it falls in; for stamps from 00:30 to 00:59 that
+    # moves the reading to the previous day.
     h = h.groupby(["date", "hour"], as_index=False)["value"].mean()
     d = h.groupby("date")["value"].agg(pm25="mean", pm25_max="max", n_hours="size")
     d.loc[d["n_hours"] < MIN_HOURS, ["pm25", "pm25_max"]] = np.nan
@@ -139,12 +155,17 @@ def pm25_daily(h: pd.DataFrame) -> pd.DataFrame:
 
 def era5_daily(h: pd.DataFrame) -> pd.DataFrame:
     t = pd.to_datetime(h["time"])
-    h = h.assign(date=t.dt.normalize())
+    # Instantaneous values are labelled at their hour; precipitation and radiation are
+    # totals over the hour that ends at the label, so they count on the day that hour
+    # started, as PM2.5 does.
+    h = h.assign(
+        date=t.dt.normalize(), date_acc=(t - pd.Timedelta(hours=1)).dt.normalize()
+    )
     rad = np.deg2rad(h["wind_direction_10m"])
     # Wind blowing from the north-west (Punjab, Haryana) has u > 0, v < 0.
     h["wind_u"] = -h["wind_speed_10m"] * np.sin(rad)
     h["wind_v"] = -h["wind_speed_10m"] * np.cos(rad)
-    g = h.groupby("date")
+    g, ga = h.groupby("date"), h.groupby("date_acc")
     d = pd.DataFrame(
         {
             "temp_mean": g["temperature_2m"].mean(),
@@ -153,18 +174,21 @@ def era5_daily(h: pd.DataFrame) -> pd.DataFrame:
             "rh_mean": g["relative_humidity_2m"].mean(),
             "dewpoint_mean": g["dew_point_2m"].mean(),
             "pressure_mean": g["surface_pressure"].mean(),
-            "precip_sum": g["precipitation"].sum(),
+            "precip_sum": ga["precipitation"].sum(),
             "wind_speed_mean": g["wind_speed_10m"].mean(),
             "wind_u_mean": g["wind_u"].mean(),
             "wind_v_mean": g["wind_v"].mean(),
-            "radiation_sum": g["shortwave_radiation"].sum() / 1000,  # kWh/m²
+            "radiation_sum": ga["shortwave_radiation"].sum() / 1000,  # kWh/m²
             "blh_mean": g["boundary_layer_height"].mean(),
             "blh_max": g["boundary_layer_height"].max(),
             "blh_min": g["boundary_layer_height"].min(),
         }
     )
-    assert (g.size() == 24).all()
-    return d.round(3).rename_axis("date").reset_index()
+    days = pd.date_range(START, END, freq="D")
+    assert (g.size().reindex(days) == 24).all() and (
+        ga.size().reindex(days) == 24
+    ).all()
+    return d.loc[days].round(3).rename_axis("date").reset_index()
 
 
 def _write(df: pd.DataFrame, name: str) -> None:

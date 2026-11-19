@@ -1,6 +1,6 @@
 """Fill this post's cache/ ahead of a render (run from the post directory).
 
-The Chronos-2 forecasts (cache/chronos2_v1.parquet, cache/chronos2_delhi_v1.parquet)
+The Chronos-2 forecasts (cache/chronos2_v1.parquet, cache/chronos2_delhi_v2.parquet)
 are not filled here: they need torch, which this venv lacks. See src/chronos_forecast.py.
 """
 

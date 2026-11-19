@@ -379,14 +379,17 @@ the repo and writes the daily files here. Access date **2026-11-19**. One row pe
 - Terms: OpenAQ passes through the original source's terms and asks for attribution to
   both the original provider and OpenAQ (<https://docs.openaq.org/docs/data-policy>).
   AirNow describes embassy data as provisional, not fully verified or validated.
-- SHA-256 of the concatenated hourly download (`openaq_8118_hourly.csv`, 80,009 rows,
-  2016-11-09 to 2026-11-16): `18488578877b2ce4624d19675d7dd642de28496e4d5e6d17bb3990127f3f262d`.
+- SHA-256 of the concatenated hourly download (`openaq_8118_hourly.csv`, 79,677 rows,
+  stamped 2016-11-09 23:00 to 2026-11-01 00:00; the script cuts the download at the last
+  day, so a later run gives the same file): `481df96f2278d128245c1419131f0ca406982e847dcb0d3dc31fce381390e95b`.
 - Hourly cleaning: 6,157 hours coded `-999`, 191 other negative values and 22 zeros are
   missing; 321 hours at exactly 1985 µg/m³ are the instrument's fault code (they come in
   runs, next to ordinary readings) and are missing too. OpenAQ stamps each hour at its
   end (a day's file runs 01:00 to the next 00:00), so an hour counts on the day it
-  started. July–November 2023 carries half-hour stamps as well; values are averaged
-  within the hour.
+  started. July–November 2023 carries half-hour stamps as well. They get the same
+  one-hour shift and are averaged with the hour they land in, so a stamp from 00:30 to
+  00:59 counts on the previous day. The archive does not say which half hour these
+  stamps cover.
 - Columns: `date`, `pm25` (24-hour mean, µg/m³), `pm25_max` (highest hour),
   `n_hours`. A day with fewer than 18 valid hours has no mean (366 days), and 379 days
   have no valid hour at all: 745 days, 20% of the record, without `pm25`. The longest
@@ -400,7 +403,12 @@ the repo and writes the daily files here. Access date **2026-11-19**. One row pe
   which the API returns, is 28.75 N, 77.25 E, about 13 km north of the monitor.
   Open-Meteo's data are CC BY 4.0; ERA5 is Copernicus Climate Change Service data.
 - SHA-256 of the hourly download (`era5_hourly.csv`):
-  `ee8b00b52ff6dd87a84951357f659c84ac0745be1727018bbc7379416353536c`.
+  `5f83a80fa0d23912a991aa4e4212d327e7bdab84f53b13e80211ff26520deb47`. The request runs
+  one day either side of the span (2016-10-31 to 2026-11-01).
+- Day boundaries: instantaneous values (temperature, humidity, pressure, wind,
+  boundary-layer height) are labelled at their hour and grouped by that hour's date.
+  Precipitation and shortwave radiation are totals or means over the hour ending at the
+  label, so they are shifted back an hour first, as PM2.5 is.
 - Columns (daily aggregates of 24 local hours): `temp_mean`, `temp_max`, `temp_min` (°C, 2 m);
   `rh_mean` (%); `dewpoint_mean` (°C); `pressure_mean` (surface, hPa); `precip_sum` (mm);
   `wind_speed_mean` (km/h, 10 m); `wind_u_mean`, `wind_v_mean` (km/h, the mean of the
