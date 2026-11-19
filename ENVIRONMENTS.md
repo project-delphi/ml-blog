@@ -178,6 +178,12 @@ Four things are not obvious:
 
 Re-render all five posts when you bump this venv.
 
+Part 1's Chronos-2 forecasts need torch, which stays out of this venv so that adding
+it is not a bump of all five. `src/chronos_forecast.py` runs in its own
+`.venv-two-cultures-chronos`, with no kernel, built from `src/requirements-chronos.txt`.
+It writes the committed `cache/chronos2_v1.parquet`, which the post only reads. The
+recipe is in the script's docstring.
+
 ## The AlphaTensor posts run no Python and share one model
 
 `alphatensor-matmul-cube`, `alphatensor-seven-multiplications` and
