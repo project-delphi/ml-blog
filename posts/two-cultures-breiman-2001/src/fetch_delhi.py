@@ -1,0 +1,192 @@
+"""Download ten years of New Delhi PM2.5 and weather, and write the daily files.
+
+Run from the post directory with the series venv, naming a download directory
+outside the repo (the hourly downloads are kept there, not committed):
+
+    cd posts/two-cultures-breiman-2001
+    ../../.venv-two-cultures/bin/python src/fetch_delhi.py ~/Downloads/delhi-raw
+
+Sources, both open and keyless:
+
+- PM2.5: the US Embassy monitor in New Delhi (AirNow's "US Diplomatic Post:
+  New Delhi"), hourly, as archived by OpenAQ in its public S3 bucket
+  (location 8118, one gzip CSV per day).
+- Weather: ERA5 reanalysis at the monitor's coordinates, hourly, from the
+  Open-Meteo historical archive API (`models=era5`).
+
+Writes `data/raw/delhi_pm25_daily.csv.gz` and `data/raw/delhi_era5_daily.csv.gz`,
+one row per local (India Standard Time) calendar day, 1 November 2016 (when OpenAQ's archive of
+the monitor starts) to 31 October 2026, and prints the SHA-256 of both hourly downloads for `data/README.md`.
+"""
+
+import gzip
+import hashlib
+import io
+import re
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import requests
+
+if not Path("index.qmd").exists() or not Path("data/raw").is_dir():
+    sys.exit("run from posts/two-cultures-breiman-2001 (it writes data/raw/)")
+
+LOCATION, LAT, LON = 8118, 28.63576, 77.22445
+START, END = "2016-11-01", "2026-10-31"
+BUCKET = "https://openaq-data-archive.s3.amazonaws.com"
+ERA5 = "https://archive-api.open-meteo.com/v1/archive"
+HOURLY = [
+    "temperature_2m",
+    "relative_humidity_2m",
+    "dew_point_2m",
+    "surface_pressure",
+    "precipitation",
+    "wind_speed_10m",
+    "wind_direction_10m",
+    "shortwave_radiation",
+    "boundary_layer_height",
+]
+MIN_HOURS = 18  # a day's mean needs 75% of its hours, the usual completeness rule
+FAULT = 1985.0  # the monitor's error code, not a reading
+
+
+def _keys(year: int) -> list[str]:
+    prefix = f"records/csv.gz/locationid={LOCATION}/year={year}/"
+    keys, token = [], None
+    while True:
+        params = {"list-type": "2", "prefix": prefix}
+        if token:
+            params["continuation-token"] = token
+        r = requests.get(BUCKET, params=params, timeout=60)
+        r.raise_for_status()
+        keys += re.findall(r"<Key>([^<]+)</Key>", r.text)
+        m = re.search(r"<NextContinuationToken>([^<]+)</NextContinuationToken>", r.text)
+        if not m:
+            return keys
+        token = m.group(1)
+
+
+def _get(key: str, tries: int = 6) -> bytes:
+    for i in range(tries):
+        try:
+            r = requests.get(f"{BUCKET}/{key}", timeout=60)
+            r.raise_for_status()
+            return r.content
+        except requests.RequestException:
+            if i == tries - 1:
+                raise
+            time.sleep(2**i)
+
+
+def pm25_hourly(out: Path) -> pd.DataFrame:
+    path = out / f"openaq_{LOCATION}_hourly.csv"
+    if not path.exists():
+        # One more year either side, so the local days at the edges are complete.
+        keys = [k for y in range(2015, 2027) for k in _keys(y)]
+        with ThreadPoolExecutor(6) as ex:
+            parts = list(ex.map(_get, keys))
+        frames = [pd.read_csv(io.BytesIO(gzip.decompress(b))) for b in parts]
+        pd.concat(frames, ignore_index=True).to_csv(path, index=False)
+    return pd.read_csv(path)
+
+
+def era5_hourly(out: Path) -> pd.DataFrame:
+    path = out / "era5_hourly.csv"
+    if not path.exists():
+        r = requests.get(
+            ERA5,
+            params={
+                "latitude": LAT,
+                "longitude": LON,
+                "start_date": START,
+                "end_date": END,
+                "hourly": ",".join(HOURLY),
+                "models": "era5",
+                "timezone": "Asia/Kolkata",
+            },
+            timeout=600,
+        )
+        r.raise_for_status()
+        j = r.json()
+        print(f"ERA5 grid point {j['latitude']}, {j['longitude']}")
+        pd.DataFrame(j["hourly"]).to_csv(path, index=False)
+    return pd.read_csv(path)
+
+
+def pm25_daily(h: pd.DataFrame) -> pd.DataFrame:
+    h = h[h["parameter"] == "pm25"].copy()
+    # OpenAQ stamps each hour at its end (a local day's file runs 01:00 to 00:00),
+    # so an hour is counted on the day it started.
+    t = pd.to_datetime(h["datetime"].str[:19]) - pd.Timedelta(hours=1)
+    h["date"] = t.dt.normalize()
+    h["hour"] = t.dt.hour
+    # The feed codes a missing hour as -999 (or a small negative number) and an
+    # instrument fault as 1985, often for several hours in a row.
+    h = h[(h["value"] > 0) & (h["value"] != FAULT)]
+    # July-November 2023 also carries half-hour stamps; average within the hour.
+    h = h.groupby(["date", "hour"], as_index=False)["value"].mean()
+    d = h.groupby("date")["value"].agg(pm25="mean", pm25_max="max", n_hours="size")
+    d.loc[d["n_hours"] < MIN_HOURS, ["pm25", "pm25_max"]] = np.nan
+    days = pd.date_range(START, END, freq="D")
+    d = d.reindex(days)
+    d["n_hours"] = d["n_hours"].fillna(0).astype(int)
+    return d.rename_axis("date").reset_index()
+
+
+def era5_daily(h: pd.DataFrame) -> pd.DataFrame:
+    t = pd.to_datetime(h["time"])
+    h = h.assign(date=t.dt.normalize())
+    rad = np.deg2rad(h["wind_direction_10m"])
+    # Wind blowing from the north-west (Punjab, Haryana) has u > 0, v < 0.
+    h["wind_u"] = -h["wind_speed_10m"] * np.sin(rad)
+    h["wind_v"] = -h["wind_speed_10m"] * np.cos(rad)
+    g = h.groupby("date")
+    d = pd.DataFrame(
+        {
+            "temp_mean": g["temperature_2m"].mean(),
+            "temp_max": g["temperature_2m"].max(),
+            "temp_min": g["temperature_2m"].min(),
+            "rh_mean": g["relative_humidity_2m"].mean(),
+            "dewpoint_mean": g["dew_point_2m"].mean(),
+            "pressure_mean": g["surface_pressure"].mean(),
+            "precip_sum": g["precipitation"].sum(),
+            "wind_speed_mean": g["wind_speed_10m"].mean(),
+            "wind_u_mean": g["wind_u"].mean(),
+            "wind_v_mean": g["wind_v"].mean(),
+            "radiation_sum": g["shortwave_radiation"].sum() / 1000,  # kWh/m²
+            "blh_mean": g["boundary_layer_height"].mean(),
+            "blh_max": g["boundary_layer_height"].max(),
+            "blh_min": g["boundary_layer_height"].min(),
+        }
+    )
+    assert (g.size() == 24).all()
+    return d.round(3).rename_axis("date").reset_index()
+
+
+def _write(df: pd.DataFrame, name: str) -> None:
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz:
+        gz.write(df.to_csv(index=False, date_format="%Y-%m-%d").encode())
+    Path("data/raw", name).write_bytes(buf.getvalue())
+    print(f"{name}: {len(df)} rows, {len(buf.getvalue()):,} bytes")
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+if __name__ == "__main__":
+    out = Path(sys.argv[1]).expanduser()
+    out.mkdir(parents=True, exist_ok=True)
+    pm = pm25_daily(pm25_hourly(out))
+    wx = era5_daily(era5_hourly(out))
+    _write(pm, "delhi_pm25_daily.csv.gz")
+    _write(wx, "delhi_era5_daily.csv.gz")
+    for f in sorted(out.glob("*.csv")):
+        print(f"{f.name}  sha256 {_sha(f)}")
+    yr = pm.assign(y=pm["date"].dt.year).groupby("y")["pm25"]
+    print(pd.DataFrame({"days": yr.count(), "mean": yr.mean().round(0)}))

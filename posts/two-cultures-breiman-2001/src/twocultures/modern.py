@@ -105,14 +105,21 @@ def rmse(pred, y) -> float:
 
 
 def run() -> pd.DataFrame:
+    """Dev and test predictions on the 1976 design (see `fit_all`)."""
+    df = ozone.design()
+    return fit_all(df, *masks(df), persist="ozone_lag0", key="doy")
+
+
+def fit_all(df, tr, dv, te, persist, key) -> pd.DataFrame:
     """Dev and test predictions, one row per (model, seed, split, day t).
 
-    Dev predictions come from fits on January-June, test predictions from
-    refits on January-August. `params` records the chosen settings.
+    `df` is a next-day design with a `target` column; `tr`, `dv` and `te` are
+    boolean row masks, and `persist` is the column holding today's value.
+    Dev predictions come from fits on `tr`, test predictions from refits on
+    `tr | dv`. `params` records the chosen settings; `key` names the column
+    that carries the design's index.
     """
-    df = ozone.design()
     X, y = df.drop(columns="target"), df["target"].to_numpy()
-    tr, dv, te = masks(df)
     fit = tr | dv
     out = []
 
@@ -123,14 +130,14 @@ def run() -> pd.DataFrame:
                     "model": model,
                     "seed": seed,
                     "split": split,
-                    "doy": df.index[mask],
+                    key: df.index[mask],
                     "pred": pred,
                     "params": params,
                 }
             )
         )
 
-    lag0 = X["ozone_lag0"].to_numpy()
+    lag0 = X[persist].to_numpy()
     add("persistence", 0, "dev", dv, lag0[dv])
     add("persistence", 0, "test", te, lag0[te])
     add(

@@ -32,6 +32,8 @@ imputed, recoded, deduplicated or reordered unless the section says so.
 | `default_credit.csv.gz` | 30,000 × 25 | 2 (0: 23,364, 1: 6,636) | 0 | 979,797 | UCI 350 |
 | `lalonde_nsw.csv.gz` | 445 × 11 | `treat` 1: 185, 0: 260 | 0 | 4,820 | Dehejia (NBER) |
 | `lalonde_psid.csv.gz` | 2,490 × 11 | `treat` 0: 2,490 | 0 | 25,423 | Dehejia (NBER) |
+| `delhi_pm25_daily.csv.gz` | 3,652 × 4 | regression (`pm25`) | 745 days without a daily mean | 26,727 | US Embassy New Delhi via OpenAQ |
+| `delhi_era5_daily.csv.gz` | 3,652 × 15 | (predictors) | 543 (`blh_*`, 181 days) | 131,952 | ERA5 via Open-Meteo |
 
 All of `raw/` together, documentation included, is about 5.2 MB.
 
@@ -358,3 +360,54 @@ the Wayback Machine.
   185, 260 and 2,490 rows.
 - **Experimental benchmark:** mean re78 is 6,349.14 for the treated and 4,554.80 for the
   controls, a difference of **$1,794.34**. The `.txt` files give 1,794.34 as well.
+
+## 8. New Delhi PM2.5 and weather, November 2016 to October 2026
+
+Unlike sections 1–7, these two files are written by a script in the repo,
+`../src/fetch_delhi.py`, which downloads the hourly sources into a directory outside
+the repo and writes the daily files here. Access date **2026-11-19**. One row per local
+(India Standard Time) calendar day, 2016-11-01 to 2026-10-31.
+
+### `delhi_pm25_daily.csv.gz`
+
+- Source: the US Embassy monitor in New Delhi (28.63576 N, 77.22445 E), reported to
+  AirNow by the US Department of State, as archived by OpenAQ: location 8118,
+  "US Diplomatic Post: New Delhi", sensor 23534, one gzip CSV per day under
+  `s3://openaq-data-archive/records/csv.gz/locationid=8118/` (public bucket, no key).
+  OpenAQ's archive of this monitor starts on 2016-11-09; AirNow's own files reach back
+  further but `dosairnowdata.org` did not resolve on the access date.
+- Terms: OpenAQ passes through the original source's terms and asks for attribution to
+  both the original provider and OpenAQ (<https://docs.openaq.org/docs/data-policy>).
+  AirNow describes embassy data as provisional, not fully verified or validated.
+- SHA-256 of the concatenated hourly download (`openaq_8118_hourly.csv`, 80,009 rows,
+  2016-11-09 to 2026-11-16): `18488578877b2ce4624d19675d7dd642de28496e4d5e6d17bb3990127f3f262d`.
+- Hourly cleaning: 6,157 hours coded `-999`, 191 other negative values and 22 zeros are
+  missing; 321 hours at exactly 1985 µg/m³ are the instrument's fault code (they come in
+  runs, next to ordinary readings) and are missing too. OpenAQ stamps each hour at its
+  end (a day's file runs 01:00 to the next 00:00), so an hour counts on the day it
+  started. July–November 2023 carries half-hour stamps as well; values are averaged
+  within the hour.
+- Columns: `date`, `pm25` (24-hour mean, µg/m³), `pm25_max` (highest hour),
+  `n_hours`. A day with fewer than 18 valid hours has no mean (366 days), and 379 days
+  have no valid hour at all: 745 days, 20% of the record, without `pm25`. The longest
+  gap is 10 May to 21 September 2022 (135 days).
+
+### `delhi_era5_daily.csv.gz`
+
+- Source: ERA5 reanalysis (Hersbach et al. 2020), hourly, from the Open-Meteo historical
+  archive API (`https://archive-api.open-meteo.com/v1/archive`, `models=era5`,
+  `timezone=Asia/Kolkata`) at the monitor's coordinates. The nearest ERA5 grid point,
+  which the API returns, is 28.75 N, 77.25 E, about 13 km north of the monitor.
+  Open-Meteo's data are CC BY 4.0; ERA5 is Copernicus Climate Change Service data.
+- SHA-256 of the hourly download (`era5_hourly.csv`):
+  `ee8b00b52ff6dd87a84951357f659c84ac0745be1727018bbc7379416353536c`.
+- Columns (daily aggregates of 24 local hours): `temp_mean`, `temp_max`, `temp_min` (°C, 2 m);
+  `rh_mean` (%); `dewpoint_mean` (°C); `pressure_mean` (surface, hPa); `precip_sum` (mm);
+  `wind_speed_mean` (km/h, 10 m); `wind_u_mean`, `wind_v_mean` (km/h, the mean of the
+  hourly wind vectors; u > 0 blows toward the east, v > 0 toward the north);
+  `radiation_sum` (shortwave, kWh/m²); `blh_mean`, `blh_max`, `blh_min` (boundary-layer
+  height, m).
+- Missing: boundary-layer height is null in the API for every hour from 2024-01-02 to
+  2024-06-30 (181 days) under `era5` and `era5_seamless` alike, and the archive serves no
+  pressure-level fields to rebuild it from. Part 1 therefore does not use the `blh_*`
+  columns. Every other column is complete.

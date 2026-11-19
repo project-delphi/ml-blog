@@ -101,9 +101,9 @@ def forest_route(Xtr, ytr, Xte, seed=0):
     return rf.predict(Xte), rf
 
 
-def scores(pred, y) -> dict:
+def scores(pred, y, alert=ALERT) -> dict:
     """Error and alert-decision summaries on the test months."""
-    alert_pred, alert_true = pred >= ALERT, y >= ALERT
+    alert_pred, alert_true = pred >= alert, y >= alert
     issued = int(alert_pred.sum())
     return {
         "rmse": float(np.sqrt(np.mean((pred - y) ** 2))),
