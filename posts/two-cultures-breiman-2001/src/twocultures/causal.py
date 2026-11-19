@@ -115,7 +115,12 @@ def lalonde(seeds=(0, 1, 2, 3, 4)):
         rf = RandomForestRegressor(
             n_estimators=500, min_samples_leaf=5, random_state=s, n_jobs=-1
         )
-        r2.append(float(cross_val_score(rf, np.c_[d, X], y, cv=5, scoring="r2").mean()))
+        # Shuffled folds: obs lists every treated man first, so plain KFold would hold
+        # them all out together and score the forest on a group it never saw.
+        cv = KFold(5, shuffle=True, random_state=s)
+        r2.append(
+            float(cross_val_score(rf, np.c_[d, X], y, cv=cv, scoring="r2").mean())
+        )
         sl.append(s_learner(rf, y, d, X))
         reg = RandomForestRegressor(
             n_estimators=300, min_samples_leaf=5, random_state=s, n_jobs=-1

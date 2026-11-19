@@ -42,9 +42,9 @@ if (typeof WK !== "undefined") WK.mount("widget-subsets", function (root, WK) {
     title: "Five-variable regressions within a tolerance of the best",
     badge: "1976 LA ozone",
     note: "All " + D.n_subsets.toLocaleString("en") + " five-variable least-squares fits " +
-      "of next-day ozone on 30 candidate predictors, trained January–August 1976. Left: the " +
-      "spread of training RSS as a multiple of the best; the shaded part is within the " +
-      "tolerance. Right: the share of those qualifying models that use each variable. " +
+      "of next-day ozone on 30 candidate predictors, trained on forecasts made January–August 1976. Left: the " +
+      "spread of training RSS as a multiple of the best; shaded bins hold the models within " +
+      "the tolerance. Right: the share of those qualifying models that use each variable. " +
       "Lag 0 is day t, lag 1 the day before. Test MSE is on September–December."
   });
   var s = WK.slider({ label: "Tolerance above the lowest training RSS", min: 0.005, max: 0.10,
@@ -81,7 +81,7 @@ if (typeof WK !== "undefined") WK.mount("widget-subsets", function (root, WK) {
       if (!c) return;
       svg.appendChild(WK.h("rect", { x: x(lo), width: Math.max(1, x(hi) - x(lo) - 0.5),
         y: y(Math.log10(c + 1)), height: B0 - y(Math.log10(c + 1)),
-        fill: hi <= 1 + tol + 1e-9 ? "c1" : "rule" }));
+        fill: lo < 1 + tol - 1e-9 ? "c1" : "rule" }));  // the bin holds qualifying models
     });
     svg.appendChild(WK.h("line", { x1: x(1 + tol), x2: x(1 + tol), y1: T0, y2: B0,
       stroke: "accent", "stroke-width": 1.5 }));
