@@ -1,0 +1,385 @@
+---
+title: "The Two Cultures, Part 1: Two Ways to Fill a Black Box"
+subtitle: "Breiman's 2001 argument, his ozone project re-run on the 1976 Los Angeles record, and when a goodness-of-fit test sees what a forest can use"
+description: "Leo Breiman's Statistical Modeling: The Two Cultures (2001) said statistics validated its models by the wrong test. The paper's two goals and two cultures, the consulting projects behind them, the ozone forecast re-run on public 1976 data, and a goodness-of-fit simulation on real meteorology whose verdict depends on the shape of the nonlinearity."
+author: "Ravi Kalia"
+date: "2026-11-18T10:00:00"
+categories: [Statistics, Machine Learning, Reading]
+image: "./cover.png"
+tags: [Breiman, two cultures, data modeling, algorithmic modeling, random forests, goodness of fit, RESET test, ozone, prediction, reproduction]
+jupyter: two-cultures-blog
+resources:
+  - widgets.js
+  - widget-data/data.js
+  - requirements.txt
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    number-sections: true
+execute:
+  warning: false
+---
+
+![The Two Cultures, Part 1: Two Ways to Fill a Black Box](./cover.png)
+
+Leo Breiman's *Statistical Modeling: The Two Cultures* (2001) argued that statistics was checking its models with the wrong test, and this series re-runs as much of the paper's evidence as public data allow.
+
+Anyone who has fitted a regression knows the routine. Fit the model, read $R^2$, glance at a residual plot, and if nothing looks alarming, read the coefficients as facts about the world: this variable matters, that one does not. Breiman's complaint was that nothing in the routine checks the assumption the reading depends on, that the fitted equation works the way nature does. His alternative was blunt: hold some data back and see whether the model predicts it. A quarter of a century later the paper is still the usual citation for the split between statistics and machine learning, and its claims can now be tested with tools he did not have.
+
+This is the first of five parts.
+
+1. **Two ways to fill a black box** (this part): the paper's two goals and two cultures, the consulting projects behind them, and the question of how a model should be checked.
+2. [**Rashomon**](../two-cultures-rashomon/): many different models fit about equally well.
+3. [**Occam and Bellman**](../two-cultures-occam-and-bellman/): forests against single trees on Breiman's ten benchmark sets, and whether more features help.
+4. [**Information from a black box**](../two-cultures-black-box-information/): the hepatitis, liver and lymphoma analyses, and what variable importance can and cannot say.
+5. [**The pushback, and what prediction cannot tell you**](../two-cultures-pushback-and-causality/): Cox, Efron, Hoadley, Parzen, Breiman's reply, causality, and the full reproduction table.
+
+This part covers two ideas:
+
+- **Two cultures.** A *data model* assumes the mechanism inside the box and estimates its parameters; an *algorithmic model* treats the mechanism as unknown and looks for a function that predicts.
+- **Two kinds of check.** A goodness-of-fit test asks whether the data contradict the assumed model; a held-out test asks whether the model predicts new cases. The second section of experiments asks when these two checks disagree.
+
+```{python}
+#| label: setup
+#| echo: false
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path("src").resolve()))
+
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from twocultures import cache, gof, ozone
+from twocultures.style import AMBER, BLUE, INK, MUTED, PURPLE, RULE, TEAL, md, setup
+
+setup()
+```
+
+## The paper {#sec-paper}
+
+*Statistical Science* published the paper in August 2001 (volume 16, number 3, pages 199–231) with four invited comments and a rejoinder. All page numbers in this series are journal pages.
+
+- **Author.** Breiman spent seven years as an academic probabilist, then thirteen as a freelance consultant, and joined the Berkeley statistics department in 1980 (p. 200). He co-wrote the CART book (1984) and introduced bagging (1996) and random forests (2001).
+- **Discussants.** D. R. Cox, Brad Efron, Bruce Hoadley and Emanuel Parzen. [Part 5](../two-cultures-pushback-and-causality/) sets out each comment.
+- **Structure.** Sections 3–7 explain how his view formed and what he saw wrong with data models. Sections 8–10 give three lessons from machine learning, named after a film, a friar and a mathematician: Rashomon, Occam and Bellman. Section 11 claims an algorithmic model can say *more* about the mechanism than a data model can.
+
+## Two goals, two cultures {#sec-cultures}
+
+Breiman starts from a picture. Inputs $x$ go into a box, responses $y$ come out, and nature does something inside (p. 199).
+
+```{mermaid}
+%%| fig-cap: "Breiman's starting picture (p. 199): the data come from a box whose inside is nature's business."
+flowchart LR
+  X["x: inputs"] --> N["nature"] --> Y["y: responses"]
+```
+
+The analyst can want two things from the box (p. 199):
+
+1. **Prediction**: what $y$ will be for future inputs.
+2. **Information**: how nature associates $y$ with $x$.
+
+The two cultures differ in what they put inside the box.
+
+::: {.table-responsive}
+
+| | Data modeling culture | Algorithmic modeling culture |
+|---|---|---|
+| Inside the box | an assumed stochastic model, e.g. $y = f(x, \text{noise}, \text{parameters})$ | unknown and possibly unknowable |
+| Typical fillings | linear regression, logistic regression, the Cox model | decision trees, neural networks, later forests and SVMs |
+| Fitted object | parameter estimates, read as facts about nature | a function $f(x)$ that predicts $y$ |
+| Validation | yes–no goodness-of-fit tests and residual checks | predictive accuracy on data not used to fit |
+| Assumption in the theory | the model is true, up to parameters | the data are i.i.d. draws from some distribution |
+| Breiman's head count | 98% of all statisticians | 2% of statisticians, many people in other fields |
+
+: The two cultures as Breiman describes them (pp. 199, 205). The head counts are his estimates. {#tbl-cultures}
+
+:::
+
+The head count drew the most direct responses. Cox called the paper's picture of mainstream statistics partly "a caricature" (p. 216). Efron said the prediction culture at Stanford alone was larger than 2% (p. 219). Breiman replied that the dispute was over the word "mainstream": count the people running canned regression packages, not the people writing journal papers, and his version wins by at least 100 to 1 (p. 228).
+
+## Where the view came from {#sec-projects}
+
+Breiman says his views formed on consulting projects (p. 200). He describes two in detail.
+
+### Ozone, Los Angeles, mid-1970s {#sec-ozone-history}
+
+- **Problem.** Smog alerts were issued in the morning, too late to change commuting; the EPA funded an effort to forecast ozone 12 hours ahead (p. 200).
+- **Data.** Over 450 meteorological variables, hourly and daily, from stations as far away as Oregon and Arizona, for seven years, with predictors reaching several days back (p. 201).
+- **Validation.** First five years to train, last two to test (p. 201).
+- **Method.** Large linear regressions with variable selection, then quadratic terms and interactions of the retained variables, then selection again (p. 201).
+- **Outcome.** A failure: the false-alarm rate was too high. Breiman regretted not being able to revisit it with modern tools (p. 201).
+
+### Chlorine from mass spectra {#sec-chlorine}
+
+- **Problem.** Predict whether a compound contains chlorine from its mass spectrum, to triage the EPA's toxicity screening (p. 201).
+- **Data.** Known structures and spectra for 30,000 compounds, split 25,000 / 5,000 at random (p. 201).
+- **Method.** Linear and quadratic discriminant analysis struggled because a spectrum's length varies with molecular weight. A decision tree over 1,500 yes–no questions, designed with chemists' knowledge of chlorine signatures, reached 95% accuracy on both classes (p. 201).
+
+The chlorine data were never released, so that project is described here and not reproduced.
+
+### What he took away {#sec-perceptions}
+
+Breiman lists five lessons (p. 201):
+
+1. Focus on finding a good solution.
+2. Live with the data before modeling.
+3. Search for a model that solves the problem, algorithmic or data.
+4. Predictive accuracy on test sets is the criterion of a good model.
+5. Computers are indispensable.
+
+Item 4 is the one the rest of the paper defends.
+
+## Data: the 1976 Los Angeles ozone record {#sec-data}
+
+The project's seven-year, 450-variable database is not public. The closest public record is one year of the same kind of data from the same basin, which Breiman and Friedman (1985) used to introduce their ACE transformation method.
+
+- **Source.** `mlbench::Ozone` (366 days of 1976, missing values kept) and `faraway::ozone` (330 complete days), both copied from the R packages' data files. Download dates, licences and checksums are in the series' [`data/README.md`](https://github.com/project-delphi/ml-blog/tree/main/posts/two-cultures-breiman-2001/data).
+- **Variables.** The daily maximum one-hour-average ozone reading, and eight meteorological readings: 500 millibar pressure height at Vandenberg AFB, wind speed and humidity at LAX, temperature at Sandburg, inversion base height and temperature at LAX, the LAX–Daggett pressure gradient, and visibility at LAX. `mlbench` also has a second temperature, at El Monte, missing on 139 days and left out here. Neither package documents the ozone units or station clearly (`faraway` says ppm, which cannot be right for readings from 1 to 38), so ozone is quoted in the data's own units.
+- **Who collected it and why.** Routine air-quality and weather monitoring in the Basin, collected for the smog alerts and weather forecasting the ozone project served.
+- **What this post asks of it.** Whether a forest predicts next-day ozone better than the selected linear regressions of the 1970s project, under a time-ordered split.
+- **Cost of a wrong answer.** A missed alert leaves children on playgrounds on a smog day; a false alarm keeps government workers home for nothing (p. 200). Breiman's project failed on false alarms.
+- **Why these methods.** They are the two the paper compares: the project's own procedure, and the forest he wished he had had.
+- **What it is not.** One year against seven, nine variables against 450, one station against dozens. It is a stand-in.
+
+Two quirks decided which copy to use. `faraway::ozone` labels each row with a `doy` field, but it repeats at month boundaries (two rows each for days 61, 121, 181, …) and runs to 390, so it cannot pair a day with the next one. `mlbench::Ozone` carries month and day of month, so the next-day design uses it, keeping only rows where all the needed days are present.
+
+```{python}
+#| label: ozone-design
+df = ozone.design()
+Xtr, ytr, Xte, yte = ozone.split(df)
+n_pairs, n_tr, n_te = len(df), len(ytr), len(yte)
+alert_tr, alert_te = int((ytr >= ozone.ALERT).sum()), int((yte >= ozone.ALERT).sum())
+```
+
+## The ozone project, re-run {#sec-ozone}
+
+The design follows the project's description as closely as nine variables allow.
+
+- **Target.** Day $t+1$'s maximum ozone.
+- **Alert.** A forecast of 20 or more counts as an alert. The training months reach 20 on `{python} f"{alert_tr / n_tr:.0%}"` of days. Because the units are undocumented this is a relative threshold, not the legal alert level.
+- **Predictors.** Days $t$, $t-1$ and $t-2$ of the eight meteorological readings and of ozone itself (27 columns), plus season (sine and cosine of day of year) and whether day $t+1$ is a weekend: 30 candidates. The project included pollutant readings and days back, so ozone and its lags are fair inputs.
+- **Split.** Train on January–August (`{python} n_tr` day pairs), test on September–December (`{python} n_te`). The project's split was also by time, but its five training years covered every season; here the test months are autumn and winter, which the training months only partly cover.
+- **Linear route.** Forward selection on the 30 columns; then squares and pairwise products of the retained columns, and forward selection again. Each step's size is chosen by five-fold time-ordered cross-validation inside the training months.
+- **Forest route.** A random forest of 500 regression trees, one third of the columns tried at each split (Breiman's default for regression), no tuning, five seeds.
+- **Baseline.** Persistence: tomorrow's ozone equals today's.
+
+```{python}
+#| label: tbl-ozone
+#| tbl-cap: "Next-day ozone, September–December 1976, in the data's units. An alert is a forecast of 20 or more."
+lin = ozone.linear_route(Xtr, ytr, Xte)
+rf_preds = [ozone.forest_route(Xtr, ytr, Xte, seed=s)[0] for s in range(5)]
+persist = Xte["ozone_lag0"].to_numpy()
+
+rows = [("Persistence (today's ozone)", ozone.scores(persist, yte)),
+        ("Linear, selected", ozone.scores(lin["stage1_pred"], yte)),
+        ("Linear, selected + squares and products", ozone.scores(lin["stage2_pred"], yte))]
+rf_scores = [ozone.scores(p, yte) for p in rf_preds]
+rf_rmse = [s["rmse"] for s in rf_scores]
+rows.append(("Random forest, seed 0", rf_scores[0]))
+tab = pd.DataFrame([{"Model": name, "Test RMSE": f"{s['rmse']:.2f}",
+                     "Test R²": f"{s['r2']:.2f}", "Alerts issued": s["alerts_issued"],
+                     "Hits": s["hits"], "False alarms": s["false_alarms"]}
+                    for name, s in rows])
+rmse = dict(zip(["persist", "linear", "quad"], [s["rmse"] for _, s in rows[:3]]))
+n_terms1, n_terms2 = len(lin["stage1_terms"]), len(lin["stage2_terms"])
+rf_lo, rf_hi = min(rf_rmse), max(rf_rmse)
+md(tab)
+```
+
+
+- The first selection kept `{python} n_terms1` of the 30 columns; the second kept `{python} n_terms2` terms, most of them products.
+- The forest's test RMSE is `{python} f"{rf_lo:.2f}"` to `{python} f"{rf_hi:.2f}"` over five seeds, against `{python} f"{rmse['quad']:.2f}"` for the selected quadratic regression and `{python} f"{rmse['linear']:.2f}"` for the selected linear one. The forest is better, by less than the gap between either and persistence (`{python} f"{rmse['persist']:.2f}"`).
+- The alert columns rest on `{python} alert_te` alert days, too few to rank the methods. Every method issued false alarms, which is how the project failed.
+
+```{python}
+#| label: fig-ozone
+#| fig-cap: "Next-day ozone in the test months against the forest (seed 0) and the selected quadratic regression. The dashed line is the alert threshold of 20."
+#| fig-alt: "Line chart of daily maximum ozone from September to December 1976 with two forecast lines; both forecasts follow the autumn decline and fall short of the highest peaks in September and October."
+# Rows are indexed by day t; the target is day t + 1 (day of year d is 1 Jan + d - 1).
+days = pd.to_datetime("1976-01-01") + pd.to_timedelta(Xte.index.to_numpy(), unit="D")
+fig, ax = plt.subplots(figsize=(7.5, 3.2))
+ax.plot(days, yte, color=INK, lw=1.4, label="observed")
+ax.plot(days, rf_preds[0], color=PURPLE, lw=1.2, label="random forest")
+ax.plot(days, lin["stage2_pred"], color=AMBER, lw=1.2, label="selected regression")
+ax.axhline(ozone.ALERT, color=MUTED, ls="--", lw=0.8)
+ax.set_ylabel("next-day max ozone")
+ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=3)
+ax.xaxis.set_major_locator(mdates.MonthLocator())
+ax.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
+fig.tight_layout()
+plt.show()
+```
+
+Both forecasts track the autumn decline and both fall short of the highest peaks in September and October. A forest is no cure for a short, single-year record.
+
+## Conclusions are about the model {#sec-model-not-nature}
+
+Section 5 of the paper states the objection to data models in two lines (p. 202):
+
+- Conclusions drawn from a fitted model are about the model's mechanism, not nature's.
+- If the model emulates nature poorly, the conclusions may be wrong.
+
+Nobody disputes either line. The dispute is over whether the standard checks catch a poor emulation. Breiman argued they do not: goodness-of-fit tests and residual plots give a yes–no answer, they lose power as dimension grows, and they are invalid once the model has been tinkered with on the same data (p. 203). He cited William Cleveland, one of the inventors of residual analysis, as saying it cannot find lack of fit beyond four or five dimensions (p. 203).
+
+## Goodness-of-fit tests against held-out error {#sec-gof}
+
+### Breiman's claim {#sec-gof-claim}
+
+Breiman reports one experiment (p. 203): a simulated regression in seven dimensions with a controlled amount of nonlinearity, in which standard goodness-of-fit tests did not reject linearity until the nonlinearity was extreme. He gives no sample size, no form of nonlinearity and no names of tests. He also cites Bickel, Ritov and Stoker, then unpublished (published 2006), for the theory: a test has little power unless the direction of the alternative is specified, so omnibus tests have little power.
+
+### Design {#sec-gof-design}
+
+The experiment here asks a two-sided question: does the test reject *before* a flexible model gains anything out of sample, or only after?
+
+- **Predictors.** Seven standardised meteorological columns of `faraway::ozone` (330 days): `vh`, `wind`, `humidity`, `temp`, `ibh`, `dpg`, `vis`. They are real data, so their correlations are those of the basin's weather, not of a convenient simulation.
+- **Response (simulated).** $y = \sqrt{1-\eta}\,L + \sqrt{\eta}\,G + \varepsilon$, where $L$ is a fixed linear combination of the seven columns, $G$ a nonlinear term, both scaled to unit variance, and $\varepsilon \sim N(0, 0.5)$. The share $\eta$ of signal variance that is nonlinear runs from 0 to 0.8.
+- **Nonlinear term, fixed in advance.** $G = \max(0, \text{temp}) \cdot \max(0, -\text{ibh})$: ozone builds when it is hot *and* the inversion base is low.
+- **Tests on the OLS fit, at 5%.**
+  - *RESET* (Ramsey): do squares and cubes of the fitted values improve the fit?
+  - *Quadratic F test*: do all 35 squares and pairwise products of the inputs improve it? This is the omnibus test.
+  - *Rainbow* (Utts): does a fit to the central half of the data predict the rest worse than chance allows?
+- **Held-out comparison.** On a random two-thirds of the rows fit OLS and a random forest; score both on the remaining third. A ratio of forest to OLS test MSE below 1 means the forest predicts better.
+- **Replicates.** 200 noise draws per level of $\eta$.
+
+```{python}
+#| label: gof-run
+res = cache.frame("gof_v1", lambda: gof.run(reps=200))
+res["ratio"] = res["mse_rf"] / res["mse_ols"]
+summ = res.groupby(["shape", "eta"]).agg(
+    reset=("p_reset", lambda p: (p < 0.05).mean()),
+    quad=("p_quad", lambda p: (p < 0.05).mean()),
+    rainbow=("p_rainbow", lambda p: (p < 0.05).mean()),
+    ratio=("ratio", "median"),
+).reset_index()
+
+
+def at(shape, eta, col):
+    return float(summ[(summ["shape"] == shape) & np.isclose(summ["eta"], eta)][col].iloc[0])
+
+
+def first_eta(shape, cond):
+    s = summ[summ["shape"] == shape]
+    hit = s[cond(s)]
+    return float(hit["eta"].min()) if len(hit) else float("nan")
+
+
+reg_break_even = first_eta("regime", lambda s: s["ratio"] < 1)
+wig_break_even = first_eta("wiggle", lambda s: s["ratio"] < 1)
+wig_max_reject = float(summ[summ["shape"] == "wiggle"][["reset", "quad", "rainbow"]].max().max())
+```
+
+### Result for the design fixed in advance {#sec-gof-regime}
+
+The result runs against Breiman's claim.
+
+- At $\eta = 0.1$, RESET rejects linearity in `{python} f"{at('regime', 0.1, 'reset'):.0%}"` of replicates and the quadratic F test in `{python} f"{at('regime', 0.1, 'quad'):.0%}"`. The forest's test error is then `{python} f"{at('regime', 0.1, 'ratio'):.2f}"` times OLS's: it is *worse*.
+- The forest first beats OLS at η = `{python} f"{reg_break_even:.1f}"`, where both directed tests reject in every replicate.
+- The rainbow test never rises above its 5% false-alarm rate: its notion of misfit, curvature at the edges of the data, does not match this one.
+
+On this design a statistician who ran RESET would learn of the nonlinearity well before a forest could use it.
+
+### A second shape, chosen afterwards {#sec-gof-wiggle}
+
+Bickel, Ritov and Stoker's point suggests why: the product term lies close to the squares-and-products directions that RESET and the quadratic test look in. A second nonlinear term was chosen *after* seeing the first result, to look for the case Breiman describes: $G = \sin(3 \cdot \text{temp})$, a wiggle that no low-order polynomial points at.
+
+- No test rejects in more than `{python} f"{wig_max_reject:.0%}"` of replicates at any $\eta$ up to 0.8.
+- The forest beats OLS from η = `{python} f"{wig_break_even:.1f}"`, and at $\eta = 0.5$ its test error is `{python} f"{at('wiggle', 0.5, 'ratio'):.2f}"` times OLS's.
+
+This is Breiman's case: a linear fit that passes every test the analyst ran, with a test error half as large again as that of a model that assumed nothing.
+
+```{python}
+#| label: fig-gof
+#| fig-cap: "Goodness-of-fit power against held-out gain, 200 replicates per point. Top: share of replicates in which each test rejects linearity at 5%. Bottom: median ratio of forest to OLS test MSE; below the line the forest predicts better. Left: the product term fixed in advance. Right: the sine term chosen afterwards."
+#| fig-alt: "Four-panel chart. For the product term, RESET and the quadratic test reach full power by eta 0.2 while the forest only beats OLS from eta 0.3. For the sine term, all tests stay below about 20 percent power while the forest's error falls to half of OLS's."
+fig, axes = plt.subplots(2, 2, figsize=(7.5, 4.8), sharex=True, sharey="row")
+titles = {"regime": "hot × low inversion (fixed in advance)", "wiggle": "sin(3 × temp) (chosen afterwards)"}
+for j, shape in enumerate(gof.SHAPES):
+    s = summ[summ["shape"] == shape]
+    ax = axes[0, j]
+    for col, c, lab in [("reset", PURPLE, "RESET"), ("quad", TEAL, "quadratic F"), ("rainbow", AMBER, "rainbow")]:
+        ax.plot(s["eta"], s[col], color=c, marker="o", ms=3, label=lab)
+    ax.axhline(0.05, color=MUTED, ls=":", lw=0.8)
+    ax.set_title(titles[shape])
+    ax.set_ylim(-0.02, 1.02)
+    ax = axes[1, j]
+    ax.plot(s["eta"], s["ratio"], color=BLUE, marker="o", ms=3)
+    ax.axhline(1, color=MUTED, ls="--", lw=0.8)
+    ax.set_xlabel("nonlinear share of signal, η")
+axes[0, 0].set_ylabel("rejects linearity")
+axes[1, 0].set_ylabel("forest MSE ÷ OLS MSE")
+axes[0, 0].legend(loc="center right")
+fig.tight_layout()
+plt.show()
+```
+
+The widget shows one replicate's residual plot next to the power curves.
+
+::: {#widget-gof}
+:::
+
+```{=html}
+<script src="widget-data/data.js"></script>
+<script src="widgets.js"></script>
+```
+
+1. With the product term, drag $\eta$ to 0.10. RESET's tile reads `{python} f"{at('regime', 0.1, 'reset'):.0%}"` and the ratio tile `{python} f"{at('regime', 0.1, 'ratio'):.2f}"`: the test sees a nonlinearity that the forest cannot yet use.
+2. Switch to the sine term and drag $\eta$ to 0.50. The ratio tile reads `{python} f"{at('wiggle', 0.5, 'ratio'):.2f}"`, and the three rejection tiles stay under 20%. The residuals against fitted values show no pattern.
+3. Drag $\eta$ to 0.80 on the sine term. The OLS fit has lost most of its signal, the forest's error is half of OLS's, and the residual plot still looks like noise.
+
+### What this shows {#sec-gof-reading}
+
+- Whether a goodness-of-fit test notices a nonlinearity depends on whether it looks in that direction. That is Bickel, Ritov and Stoker's result, not a defect of one test.
+- An analyst does not know in advance which direction nature chose. A held-out comparison does not need to know.
+- The sine term would show at once in a plot of residuals against `temp`, one of seven such plots. A residual check works when the analyst knows where to look. With 450 variables, as in the ozone project, there are too many places to look.
+
+## Predictive accuracy as the test {#sec-accuracy}
+
+Breiman's remedy (p. 204) is to compare nature's box with the model's box directly: put the same $x$ into both and see how close the outputs are, using a test set or cross-validation so the comparison is not flattered by fitting. He cites Stone (1974) and Mosteller and Tukey (1977) as early advocates, and notes how rarely *JASA* papers reported predictive accuracy.
+
+Two limits matter for the rest of the series.
+
+- **Accuracy is measured on the population the test set came from.** Hoadley's comment (Part 5) points out that a test sample is a sample of the present, not the future (pp. 221–222).
+- **Accuracy says nothing about interventions.** Cox's comment asks what would happen if medical X-ray use fell by 10% (p. 216), and no held-out set contains the answer. Breiman agreed (p. 227). [Part 5](../two-cultures-pushback-and-causality/) takes this up.
+
+## Constraints {#sec-constraints}
+
+- **The ozone stand-in is one year at one station.** The test months differ in season from the training months, and the alert comparison rests on `{python} alert_te` alert days.
+- **The linear route is a re-enactment.** Breiman describes the 1970s procedure in one paragraph; the selection criterion, the candidate sets and the stopping rule here are choices, made before seeing the test months.
+- **The goodness-of-fit design is ours.** The paper does not describe its simulation. The product term was fixed before any result; the sine term was chosen after the first result was seen, which the text labels.
+- **The forest and OLS are compared on one random split per replicate.** The median ratio over 200 replicates is stable; a single replicate's ratio is not.
+
+## Reproduction status {#sec-status}
+
+::: {.table-responsive}
+
+| Experiment | Paper's data | Data used here | Paper's result | Our result | Notes |
+|---|---|---|---|---|---|
+| Ozone forecast (§3.1) | 7 years, 450+ variables, LA Basin | 1976 LA record (`mlbench::Ozone`), 30 candidate predictors | selected regression; false-alarm rate too high | forest RMSE `{python} f"{rf_lo:.2f}"`–`{python} f"{rf_hi:.2f}"` vs selected regression `{python} f"{rmse['quad']:.2f}"`; all methods issued false alarms | stand-in; original data not public |
+| Chlorine (§3.2) | 30,000 mass spectra | none | tree on 1,500 questions, 95% accuracy | not attempted | data not public; not simulated |
+| Goodness of fit (§5.2) | 7-D simulation, setup not given | 7 real meteorological columns, simulated response | tests did not reject until nonlinearity extreme | product term: tests reject before the forest gains; sine term: tests miss what the forest gains | outcome depends on the shape of the nonlinearity |
+
+: Part 1's rows of the series reproduction table. [Part 5](../two-cultures-pushback-and-causality/) collects all five parts. {#tbl-status}
+
+:::
+
+Model. Inside. Or. Outside. Tests. See. Only. Where. They. Look.
+
+## References {#sec-references}
+
+- Bickel, P. J., Ritov, Y. & Stoker, T. M. (2006). [Tailor-made tests for goodness of fit to semiparametric hypotheses](https://doi.org/10.1214/009053606000000137). *Annals of Statistics* 34(2), 721–741. Cited by Breiman as a 2001 manuscript.
+- Breiman, L. (2001). [Statistical modeling: the two cultures (with comments and a rejoinder)](https://doi.org/10.1214/ss/1009213726). *Statistical Science* 16(3), 199–231.
+- Breiman, L. (2001). [Random forests](https://doi.org/10.1023/A:1010933404324). *Machine Learning* 45, 5–32.
+- Breiman, L. & Friedman, J. H. (1985). [Estimating optimal transformations for multiple regression and correlation](https://doi.org/10.1080/01621459.1985.10478157). *Journal of the American Statistical Association* 80(391), 580–598. The source of the 1976 ozone data.
+- Breiman, L., Friedman, J. H., Olshen, R. A. & Stone, C. J. (1984). *Classification and Regression Trees*. Wadsworth.
+- Faraway, J. *faraway: Functions and Datasets for Books by Julian Faraway*, R package 1.0.9 (`ozone`).
+- Leisch, F. & Dimitriadou, E. *mlbench: Machine Learning Benchmark Problems*, R package 2.1-11 (`Ozone`).
+- Mosteller, F. & Tukey, J. W. (1977). *Data Analysis and Regression*. Addison-Wesley.
+- Ramsey, J. B. (1969). [Tests for specification errors in classical linear least-squares regression analysis](https://doi.org/10.1111/j.2517-6161.1969.tb00796.x). *Journal of the Royal Statistical Society B* 31(2), 350–371.
+- Stone, M. (1974). Cross-validatory choice and assessment of statistical predictions. *Journal of the Royal Statistical Society B* 36(2), 111–147.
+- Utts, J. M. (1982). [The rainbow test for lack of fit in regression](https://doi.org/10.1080/03610928208828423). *Communications in Statistics: Theory and Methods* 11(24), 2801–2815.
+- [The Two Cultures, Part 2: Rashomon](../two-cultures-rashomon/) — many equally good models.
+- [The Two Cultures, Part 5: The pushback](../two-cultures-pushback-and-causality/) — the discussants, causality, and the full reproduction table.
