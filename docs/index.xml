@@ -7674,7 +7674,7 @@ Table&nbsp;1: The two cultures as Breiman describes them (pp.&nbsp;199, 205). Th
 <li><strong>Who collected it and why.</strong> Routine air-quality and weather monitoring in the Basin, collected for the smog alerts and weather forecasting the ozone project served.</li>
 <li><strong>What this post asks of it.</strong> Whether a forest predicts next-day ozone better than the selected linear regressions of the 1970s project, under a time-ordered split.</li>
 <li><strong>Cost of a wrong answer.</strong> A missed alert leaves children on playgrounds on a smog day; a false alarm keeps government workers home for nothing (p.&nbsp;200). Breiman’s project failed on false alarms.</li>
-<li><strong>Why these methods.</strong> They are the two the paper compares: the project’s own procedure, and the forest he wished he had had.</li>
+<li><strong>Why these methods.</strong> They are the two the paper compares: the project’s own procedure, and the forest he wished he had had. Section&nbsp;5.1 adds three the paper does not run: the lasso, gradient boosting and a pretrained forecasting model.</li>
 <li><strong>What it is not.</strong> One year against seven, nine variables against 450, one station against dozens. It is a stand-in.</li>
 </ul>
 <p>Two quirks decided which copy to use. <code>faraway::ozone</code> labels each row with a <code>doy</code> field, but it repeats at month boundaries (two rows each for days 61, 121, 181, …) and runs to 390, so it cannot pair a day with the next one. <code>mlbench::Ozone</code> carries month and day of month, so the next-day design uses it, keeping only rows where all the needed days are present.</p>
@@ -7956,7 +7956,7 @@ Table&nbsp;2: Next-day ozone forecast from days in September–December 1976, in
 </div>
 <ul>
 <li>The first selection kept 12 of the 30 columns; the second kept 13 terms, most of them products.</li>
-<li>The forest’s test RMSE is 4.94 to 5.00 over five seeds, against 5.14 for the selected quadratic regression and 5.28 for the selected linear one. The forest is better, by less than the gap between either and persistence (6.06).</li>
+<li>The forest’s test RMSE is 4.94 to 5.00 over five seeds, against 5.14 for the selected quadratic regression and 5.28 for the selected linear one. The forest is better on these days, by less than the gap between either and persistence (6.06). Section&nbsp;5.1 finds the margin over the quadratic regression inside the noise of 93 test days.</li>
 <li>The alert columns rest on 7 alert days, too few to rank the methods. Every method issued false alarms, which is how the project failed.</li>
 </ul>
 <div id="cell-fig-ozone" class="cell" data-execution_count="4">
@@ -8072,6 +8072,843 @@ Figure&nbsp;1: Next-day ozone in the test months against the forest (seed 0) and
 </div>
 </div>
 <p>Both forecasts track the autumn decline and both fall short of the highest peaks in September and October. A forest is no cure for a short, single-year record.</p>
+<section id="sec-ozone-modern" class="level3" data-number="5.1">
+<h3 data-number="5.1" class="anchored" data-anchor-id="sec-ozone-modern"><span class="header-section-number">5.1</span> Models the paper does not run</h3>
+<p>In 2001 the forest was the newest tool in the comparison. Three kinds of model that the paper does not run are now standard first tries for a forecast like this one. The lasso and gradient boosting were published within five years of the paper, Chronos-2 in 2025.</p>
+<ul>
+<li><strong>Lasso</strong> (Tibshirani 1996): a linear regression on all 30 candidates whose coefficients are shrunk toward zero, many of them to zero. It selects variables in one fit, where the 1970s route searched.</li>
+<li><strong>Gradient boosting</strong> (Friedman 2001): a sum of small trees, each fitted to the errors left by the trees before it. The version here is scikit-learn’s <code>HistGradientBoostingRegressor</code>, which bins every input before searching for splits, the method LightGBM made standard (Ke et al.&nbsp;2017).</li>
+<li><strong>Chronos-2</strong> (Ansari et al.&nbsp;2025): a transformer pretrained on a large collection of time series, which forecasts a new series from its own history with no training on it. It runs twice: on the ozone record alone, and with the eight meteorological series as covariates and the next day’s weekend flag as a known future input. A forecast made on day <img src="https://latex.codecogs.com/png.latex?t"> sees every day from 1 January to day <img src="https://latex.codecogs.com/png.latex?t">, gaps included; the trained models choose their inputs from days <img src="https://latex.codecogs.com/png.latex?t">, <img src="https://latex.codecogs.com/png.latex?t-1"> and <img src="https://latex.codecogs.com/png.latex?t-2">.</li>
+</ul>
+<p>Tuning needs data that the test months do not touch, so the training months are split again by forecast day.</p>
+<div id="ozone-modern-split" class="cell" data-execution_count="5">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode cell-code" id="cb4" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">from</span> twocultures <span class="im" style="color: #00769E;
+background-color: null;
+font-style: inherit;">import</span> modern</span>
+<span id="cb4-2"></span>
+<span id="cb4-3">tr_m, dv_m, _ <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> modern.masks(df)</span>
+<span id="cb4-4">n_trm, n_dev <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">int</span>(tr_m.<span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">sum</span>()), <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">int</span>(dv_m.<span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">sum</span>())</span></code></pre></div>
+</details>
+</div>
+<ul>
+<li><strong>Train.</strong> Pairs made January–June (151 day pairs).</li>
+<li><strong>Dev.</strong> Pairs made July–August (38). The lasso’s penalty, the forest’s split and leaf settings, and boosting’s learning rate, tree size, leaf size, penalty and number of trees are each chosen by dev RMSE from a fixed grid (<code>twocultures/modern.py</code>).</li>
+<li><strong>Test.</strong> September–December, as before. Every tuned model is refit on January–August before it is scored.</li>
+<li><strong>Chronos-2 is not tuned or trained</strong>, so its dev score is a report, not a choice.</li>
+<li><strong>Uncertainty.</strong> The forest, the tuned forest and boosting run with five seeds. The interval on each model’s test RMSE minus the untuned forest’s is a 95% circular moving-block bootstrap: 4,000 resamples of runs of seven consecutive test forecasts, a precaution in case errors persist from one day to the next. Days with missing data are already out of the design, so a run can span more than a week.</li>
+</ul>
+<div class="cell" data-execution_count="6">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode cell-code" id="cb5" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1">mod <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> pd.concat([cache.frame(modern.CACHE_TAG, modern.run), modern.chronos()],</span>
+<span id="cb5-2">                ignore_index<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="va" style="color: #111111;
+background-color: null;
+font-style: inherit;">True</span>)</span>
+<span id="cb5-3">mod[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"y"</span>] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> df[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"target"</span>].loc[mod[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"doy"</span>]].to_numpy()</span>
+<span id="cb5-4"></span>
+<span id="cb5-5"></span>
+<span id="cb5-6"><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">def</span> pick(model, split, seed<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>):</span>
+<span id="cb5-7">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">return</span> mod[(mod[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"model"</span>] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> model) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&amp;</span> (mod[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"split"</span>] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> split) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&amp;</span> (mod[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"seed"</span>] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> seed)]</span>
+<span id="cb5-8"></span>
+<span id="cb5-9"></span>
+<span id="cb5-10"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># The forest and the selected regression here are the rows of the first table.</span></span>
+<span id="cb5-11"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">assert</span> np.allclose(pick(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"forest"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"test"</span>)[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"pred"</span>], rf_preds[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>])</span>
+<span id="cb5-12"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">assert</span> np.allclose(pick(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"linear_quad"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"test"</span>)[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"pred"</span>], lin[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"stage2_pred"</span>])</span>
+<span id="cb5-13"></span>
+<span id="cb5-14">names <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> {<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"persistence"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"Persistence (today's ozone)"</span>,</span>
+<span id="cb5-15">         <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"linear_quad"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"Linear, selected + squares and products"</span>,</span>
+<span id="cb5-16">         <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"forest"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"Random forest, untuned"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"lasso"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"Lasso"</span>,</span>
+<span id="cb5-17">         <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"forest_tuned"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"Random forest, tuned"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"boosting"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"Gradient boosting"</span>,</span>
+<span id="cb5-18">         <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"chronos_ozone"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"Chronos-2, ozone only"</span>,</span>
+<span id="cb5-19">         <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"chronos_weather"</span>: <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"Chronos-2, ozone + meteorology"</span>}</span>
+<span id="cb5-20">ref <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> pick(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"forest"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"test"</span>)</span>
+<span id="cb5-21">dev_rmse, test_rng, ci, rows_m <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> {}, {}, {}, []</span>
+<span id="cb5-22"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> key, label <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> names.items():</span>
+<span id="cb5-23">    d, t <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> pick(key, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"dev"</span>), pick(key, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"test"</span>)</span>
+<span id="cb5-24">    <span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># The bootstrap pairs rows by position, so every model must cover the same days in order.</span></span>
+<span id="cb5-25">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">assert</span> (t[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"doy"</span>].to_numpy() <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> ref[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"doy"</span>].to_numpy()).<span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">all</span>()</span>
+<span id="cb5-26">    dev_rmse[key] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> modern.rmse(d[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"pred"</span>], d[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"y"</span>])</span>
+<span id="cb5-27">    seeds <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">sorted</span>(mod.loc[mod[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"model"</span>] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> key, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"seed"</span>].unique())</span>
+<span id="cb5-28">    r <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> [modern.rmse(g[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"pred"</span>], g[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"y"</span>]) <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> g <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> (pick(key, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"test"</span>, s) <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> s <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> seeds)]</span>
+<span id="cb5-29">    test_rng[key] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> (<span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">min</span>(r), <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">max</span>(r))</span>
+<span id="cb5-30">    ci[key] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> modern.block_bootstrap(t[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"pred"</span>], ref[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"pred"</span>], t[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"y"</span>])</span>
+<span id="cb5-31">    s <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> ozone.scores(t[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"pred"</span>].to_numpy(), t[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"y"</span>].to_numpy())</span>
+<span id="cb5-32">    rows_m.append({</span>
+<span id="cb5-33">        <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"Model"</span>: label, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"Dev RMSE"</span>: <span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"</span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>dev_rmse[key]<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">:.2f}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"</span>,</span>
+<span id="cb5-34">        <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"Test RMSE"</span>: (<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"</span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>r[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>]<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">:.2f}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"</span> <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">if</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">len</span>(r) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span> <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">else</span> <span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"</span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span><span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">min</span>(r)<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">:.2f}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">–</span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span><span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">max</span>(r)<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">:.2f}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"</span>),</span>
+<span id="cb5-35">        <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"Test − forest, 95</span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">% i</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">nterval"</span>: (<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"—"</span> <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">if</span> key <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"forest"</span></span>
+<span id="cb5-36">                                         <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">else</span> <span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"</span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>ci[key][<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>]<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">:+.2f}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;"> to </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>ci[key][<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>]<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">:+.2f}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"</span>),</span>
+<span id="cb5-37">        <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"Alerts issued"</span>: s[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"alerts_issued"</span>], <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"Hits"</span>: s[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"hits"</span>],</span>
+<span id="cb5-38">        <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"False alarms"</span>: s[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"false_alarms"</span>]})</span>
+<span id="cb5-39"></span>
+<span id="cb5-40">dev_order <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">sorted</span>(dev_rmse, key<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>dev_rmse.get)</span>
+<span id="cb5-41">trained <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> [<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"linear_quad"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"forest"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"lasso"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"forest_tuned"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"boosting"</span>]</span>
+<span id="cb5-42">worse_than_forest <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> [k <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> k <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> names <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">if</span> k <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">!=</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"forest"</span> <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">and</span> ci[k][<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&gt;</span> <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>]</span>
+<span id="cb5-43"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">assert</span> worse_than_forest <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> [<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"persistence"</span>]</span>
+<span id="cb5-44"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">assert</span> <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">not</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">any</span>(ci[k][<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&lt;</span> <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span> <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> k <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> names <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">if</span> k <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">!=</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"forest"</span>)</span>
+<span id="cb5-45"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># The same verdict seed by seed: each seeded model against the forest of that seed.</span></span>
+<span id="cb5-46"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> k <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> [<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"forest_tuned"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"boosting"</span>]:</span>
+<span id="cb5-47">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> s <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> modern.SEEDS:</span>
+<span id="cb5-48">        a, b <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> pick(k, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"test"</span>, s), pick(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"forest"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"test"</span>, s)</span>
+<span id="cb5-49">        lo_s, hi_s <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> modern.block_bootstrap(a[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"pred"</span>], b[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"pred"</span>], a[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"y"</span>])</span>
+<span id="cb5-50">        <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">assert</span> lo_s <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&lt;</span> <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span> <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&lt;</span> hi_s, (k, s, lo_s, hi_s)</span>
+<span id="cb5-51"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">assert</span> dev_order[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"persistence"</span> <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">and</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">set</span>(dev_order[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>:<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">3</span>]) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> {<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"chronos_ozone"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"chronos_weather"</span>}</span>
+<span id="cb5-52">lo <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> {k: v[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>] <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> k, v <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> test_rng.items()}</span>
+<span id="cb5-53"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">assert</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">min</span>(lo, key<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>lo.get) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"boosting"</span> <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">and</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">max</span>(lo, key<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>lo.get) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"persistence"</span></span>
+<span id="cb5-54"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">assert</span> lo[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"forest"</span>] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&lt;</span> lo[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"lasso"</span>] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&lt;</span> lo[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"linear_quad"</span>]</span>
+<span id="cb5-55"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">assert</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">min</span>(lo[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"chronos_ozone"</span>], lo[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"chronos_weather"</span>]) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&gt;</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">max</span>(lo[k] <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> k <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> trained)</span>
+<span id="cb5-56">tuned_mf <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> pick(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"forest_tuned"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"test"</span>)[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"params"</span>].iloc[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>]</span>
+<span id="cb5-57"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">assert</span> tuned_mf.startswith(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"max_features=1.0,"</span>)</span>
+<span id="cb5-58"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">assert</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">all</span>(r[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"False alarms"</span>] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&gt;</span> <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span> <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> r <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> rows_m)</span>
+<span id="cb5-59">cover <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> {k: <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">float</span>(((pick(k, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"test"</span>)[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"q10"</span>] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&lt;=</span> pick(k, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"test"</span>)[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"y"</span>])</span>
+<span id="cb5-60">                   <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&amp;</span> (pick(k, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"test"</span>)[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"y"</span>] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&lt;=</span> pick(k, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"test"</span>)[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"q90"</span>])).mean())</span>
+<span id="cb5-61">         <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> k <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> [<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"chronos_ozone"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"chronos_weather"</span>]}</span>
+<span id="cb5-62"><span class="co" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;"># The equal average dropped from the table (see Constraints); seed 0 of each part.</span></span>
+<span id="cb5-63">avg <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> np.mean([pick(k, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"test"</span>)[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"pred"</span>].to_numpy()</span>
+<span id="cb5-64">               <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> k <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> [<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"forest_tuned"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"boosting"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"chronos_weather"</span>]], axis<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>)</span>
+<span id="cb5-65">avg_rmse <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> modern.rmse(avg, ref[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"y"</span>])</span>
+<span id="cb5-66"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">assert</span> test_rng[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"boosting"</span>][<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&lt;=</span> avg_rmse <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">&lt;=</span> test_rng[<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"forest"</span>][<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>]</span>
+<span id="cb5-67">md(pd.DataFrame(rows_m))</span></code></pre></div>
+</details>
+<div id="tbl-ozone-modern" class="cell quarto-float quarto-figure quarto-figure-center anchored" data-execution_count="6">
+<figure class="quarto-float quarto-float-tbl figure">
+<figcaption class="quarto-float-caption-top quarto-float-caption quarto-float-tbl" id="tbl-ozone-modern-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Table&nbsp;3: Next-day ozone, tuned on July–August and scored on September–December, in the data’s units. Test RMSE is the range over five seeds for the seeded models. The interval is on test RMSE minus the untuned forest’s; below zero means better than the forest. Dev RMSE, the interval and the alert columns are for seed 0.
+</figcaption>
+<div aria-describedby="tbl-ozone-modern-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<div class="cell-output cell-output-display cell-output-markdown" data-execution_count="6">
+<table class="do-not-create-environment cell caption-top table table-sm table-striped small">
+<colgroup>
+<col style="width: 29%">
+<col style="width: 8%">
+<col style="width: 9%">
+<col style="width: 22%">
+<col style="width: 12%">
+<col style="width: 5%">
+<col style="width: 11%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">Model</th>
+<th style="text-align: left;">Dev RMSE</th>
+<th style="text-align: left;">Test RMSE</th>
+<th style="text-align: left;">Test − forest, 95% interval</th>
+<th style="text-align: left;">Alerts issued</th>
+<th style="text-align: left;">Hits</th>
+<th style="text-align: left;">False alarms</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">Persistence (today’s ozone)</td>
+<td style="text-align: left;">5.61</td>
+<td style="text-align: left;">6.06</td>
+<td style="text-align: left;">+0.45 to +1.76</td>
+<td style="text-align: left;">8</td>
+<td style="text-align: left;">2</td>
+<td style="text-align: left;">6</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Linear, selected + squares and products</td>
+<td style="text-align: left;">6.44</td>
+<td style="text-align: left;">5.14</td>
+<td style="text-align: left;">-0.15 to +0.56</td>
+<td style="text-align: left;">6</td>
+<td style="text-align: left;">0</td>
+<td style="text-align: left;">6</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Random forest, untuned</td>
+<td style="text-align: left;">6.42</td>
+<td style="text-align: left;">4.94–5.00</td>
+<td style="text-align: left;">—</td>
+<td style="text-align: left;">9</td>
+<td style="text-align: left;">3</td>
+<td style="text-align: left;">6</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Lasso</td>
+<td style="text-align: left;">6.37</td>
+<td style="text-align: left;">5.07</td>
+<td style="text-align: left;">-0.15 to +0.45</td>
+<td style="text-align: left;">6</td>
+<td style="text-align: left;">2</td>
+<td style="text-align: left;">4</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Random forest, tuned</td>
+<td style="text-align: left;">6.35</td>
+<td style="text-align: left;">4.97–5.05</td>
+<td style="text-align: left;">-0.14 to +0.24</td>
+<td style="text-align: left;">10</td>
+<td style="text-align: left;">3</td>
+<td style="text-align: left;">7</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Gradient boosting</td>
+<td style="text-align: left;">6.55</td>
+<td style="text-align: left;">4.67–4.93</td>
+<td style="text-align: left;">-0.34 to +0.38</td>
+<td style="text-align: left;">10</td>
+<td style="text-align: left;">4</td>
+<td style="text-align: left;">6</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Chronos-2, ozone only</td>
+<td style="text-align: left;">5.91</td>
+<td style="text-align: left;">5.46</td>
+<td style="text-align: left;">-0.13 to +1.16</td>
+<td style="text-align: left;">8</td>
+<td style="text-align: left;">2</td>
+<td style="text-align: left;">6</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Chronos-2, ozone + meteorology</td>
+<td style="text-align: left;">5.97</td>
+<td style="text-align: left;">5.30</td>
+<td style="text-align: left;">-0.26 to +0.97</td>
+<td style="text-align: left;">7</td>
+<td style="text-align: left;">2</td>
+<td style="text-align: left;">5</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</figure>
+</div>
+</div>
+<ul>
+<li><strong>No model separates from the untuned forest on the test months.</strong> Only persistence’s interval lies wholly above zero; every other interval includes zero, and for the tuned forest and boosting it does so on all five seeds. Boosting has the lowest error in the table, 4.67–4.93 over five seeds, against 4.94–5.00 for the forest.</li>
+<li><strong>The lasso does as well as the 1970s search, in one fit.</strong> It scores 5.07, between the forest and the selected quadratic regression (5.14).</li>
+<li><strong>Tuning bought nothing.</strong> The tuned forest settled on max_features=1.0, min_samples_leaf=1 and scored 4.97–5.05. With <code>max_features=1.0</code> it tries every column at every split, which makes it bagged trees rather than a forest.</li>
+<li><strong>The dev months rank the models almost in reverse.</strong> On July–August persistence is best (5.61), the two Chronos-2 runs come next, and every trained model is worse than all three. On the test months persistence is last. A dev set drawn from summer is a poor sample of autumn, the same limit Hoadley raises against test sets in Section&nbsp;8.</li>
+<li><strong>Chronos-2, with no training on this record, lands between persistence and the trained models.</strong> It brings the error from 6.06 to 5.46 on ozone alone and to 5.30 with the meteorology. It is also the only model here that gives a forecast interval: its nominal 80% intervals held the next day’s ozone on 77% of test days on ozone alone and 67% with the meteorology.</li>
+<li><strong>Alerts still cannot rank them.</strong> The test months hold 7 alert days, and every model issued false alarms.</li>
+</ul>
+<p>On 93 autumn days the gap between a selected regression and a model that assumes nothing cannot be resolved, and the models now standard for the job do not resolve it either.</p>
+</section>
 </section>
 <section id="sec-model-not-nature" class="level2" data-number="6">
 <h2 data-number="6" class="anchored" data-anchor-id="sec-model-not-nature"><span class="header-section-number">6</span> Conclusions are about the model</h2>
@@ -8104,10 +8941,10 @@ Figure&nbsp;1: Next-day ozone in the test months against the forest (seed 0) and
 <li><strong>Held-out comparison.</strong> On a random two-thirds of the rows fit OLS and a random forest; score both on the remaining third. A ratio of forest to OLS test MSE below 1 means the forest predicts better.</li>
 <li><strong>Replicates.</strong> 200 noise draws per level of <img src="https://latex.codecogs.com/png.latex?%5Ceta">.</li>
 </ul>
-<div id="gof-run" class="cell" data-execution_count="5">
+<div id="gof-run" class="cell" data-execution_count="7">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="sourceCode cell-code" id="cb4" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1">res <span class="op" style="color: #5E5E5E;
+<div class="sourceCode cell-code" id="cb6" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1">res <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> cache.frame(<span class="st" style="color: #20794D;
 background-color: null;
@@ -8119,7 +8956,7 @@ background-color: null;
 font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">200</span>))</span>
-<span id="cb4-2">res[<span class="st" style="color: #20794D;
+<span id="cb6-2">res[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"ratio"</span>] <span class="op" style="color: #5E5E5E;
 background-color: null;
@@ -8130,14 +8967,14 @@ background-color: null;
 font-style: inherit;">/</span> res[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"mse_ols"</span>]</span>
-<span id="cb4-3">summ <span class="op" style="color: #5E5E5E;
+<span id="cb6-3">summ <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> res.groupby([<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"shape"</span>, <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"eta"</span>]).agg(</span>
-<span id="cb4-4">    reset<span class="op" style="color: #5E5E5E;
+<span id="cb6-4">    reset<span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span>(<span class="st" style="color: #20794D;
 background-color: null;
@@ -8149,7 +8986,7 @@ background-color: null;
 font-style: inherit;">&lt;</span> <span class="fl" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">0.05</span>).mean()),</span>
-<span id="cb4-5">    quad<span class="op" style="color: #5E5E5E;
+<span id="cb6-5">    quad<span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span>(<span class="st" style="color: #20794D;
 background-color: null;
@@ -8161,7 +8998,7 @@ background-color: null;
 font-style: inherit;">&lt;</span> <span class="fl" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">0.05</span>).mean()),</span>
-<span id="cb4-6">    rainbow<span class="op" style="color: #5E5E5E;
+<span id="cb6-6">    rainbow<span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span>(<span class="st" style="color: #20794D;
 background-color: null;
@@ -8173,21 +9010,21 @@ background-color: null;
 font-style: inherit;">&lt;</span> <span class="fl" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">0.05</span>).mean()),</span>
-<span id="cb4-7">    ratio<span class="op" style="color: #5E5E5E;
+<span id="cb6-7">    ratio<span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span>(<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"ratio"</span>, <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"median"</span>),</span>
-<span id="cb4-8">).reset_index()</span>
-<span id="cb4-9"></span>
-<span id="cb4-10"></span>
-<span id="cb4-11"><span class="kw" style="color: #003B4F;
+<span id="cb6-8">).reset_index()</span>
+<span id="cb6-9"></span>
+<span id="cb6-10"></span>
+<span id="cb6-11"><span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">def</span> at(shape, eta, col):</span>
-<span id="cb4-12">    <span class="cf" style="color: #003B4F;
+<span id="cb6-12">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">return</span> <span class="bu" style="color: null;
@@ -8203,23 +9040,23 @@ background-color: null;
 font-style: inherit;">"eta"</span>], eta)][col].iloc[<span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">0</span>])</span>
-<span id="cb4-13"></span>
-<span id="cb4-14"></span>
-<span id="cb4-15"><span class="kw" style="color: #003B4F;
+<span id="cb6-13"></span>
+<span id="cb6-14"></span>
+<span id="cb6-15"><span class="kw" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">def</span> first_eta(shape, cond):</span>
-<span id="cb4-16">    s <span class="op" style="color: #5E5E5E;
+<span id="cb6-16">    s <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> summ[summ[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"shape"</span>] <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">==</span> shape]</span>
-<span id="cb4-17">    hit <span class="op" style="color: #5E5E5E;
+<span id="cb6-17">    hit <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> s[cond(s)]</span>
-<span id="cb4-18">    <span class="cf" style="color: #003B4F;
+<span id="cb6-18">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">return</span> <span class="bu" style="color: null;
@@ -8241,9 +9078,9 @@ background-color: null;
 font-style: inherit;">float</span>(<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"nan"</span>)</span>
-<span id="cb4-19"></span>
-<span id="cb4-20"></span>
-<span id="cb4-21">reg_break_even <span class="op" style="color: #5E5E5E;
+<span id="cb6-19"></span>
+<span id="cb6-20"></span>
+<span id="cb6-21">reg_break_even <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> first_eta(<span class="st" style="color: #20794D;
 background-color: null;
@@ -8257,7 +9094,7 @@ background-color: null;
 font-style: inherit;">&lt;</span> <span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">1</span>)</span>
-<span id="cb4-22">wig_break_even <span class="op" style="color: #5E5E5E;
+<span id="cb6-22">wig_break_even <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> first_eta(<span class="st" style="color: #20794D;
 background-color: null;
@@ -8271,7 +9108,7 @@ background-color: null;
 font-style: inherit;">&lt;</span> <span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">1</span>)</span>
-<span id="cb4-23">wig_max_reject <span class="op" style="color: #5E5E5E;
+<span id="cb6-23">wig_max_reject <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> <span class="bu" style="color: null;
 background-color: null;
@@ -8313,10 +9150,10 @@ font-style: inherit;">max</span>())</span></code></pre></div>
 <li>The forest beats OLS from η = 0.2, and at <img src="https://latex.codecogs.com/png.latex?%5Ceta%20=%200.5"> its test error is 0.68 times OLS’s.</li>
 </ul>
 <p>This is Breiman’s case: a linear fit that passes every test the analyst ran, with a test error half as large again as that of a model that assumed nothing.</p>
-<div id="cell-fig-gof" class="cell" data-execution_count="6">
+<div id="cell-fig-gof" class="cell" data-execution_count="8">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="sourceCode cell-code" id="cb5" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1">fig, axes <span class="op" style="color: #5E5E5E;
+<div class="sourceCode cell-code" id="cb7" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1">fig, axes <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> plt.subplots(<span class="dv" style="color: #AD0000;
 background-color: null;
@@ -8337,7 +9174,7 @@ background-color: null;
 font-style: inherit;">=</span><span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"row"</span>)</span>
-<span id="cb5-2">titles <span class="op" style="color: #5E5E5E;
+<span id="cb7-2">titles <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> {<span class="st" style="color: #20794D;
 background-color: null;
@@ -8348,7 +9185,7 @@ background-color: null;
 font-style: inherit;">"wiggle"</span>: <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"sin(3 × temp) (chosen afterwards)"</span>}</span>
-<span id="cb5-3"><span class="cf" style="color: #003B4F;
+<span id="cb7-3"><span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">for</span> j, shape <span class="kw" style="color: #003B4F;
@@ -8357,19 +9194,19 @@ font-weight: bold;
 font-style: inherit;">in</span> <span class="bu" style="color: null;
 background-color: null;
 font-style: inherit;">enumerate</span>(gof.SHAPES):</span>
-<span id="cb5-4">    s <span class="op" style="color: #5E5E5E;
+<span id="cb7-4">    s <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> summ[summ[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"shape"</span>] <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">==</span> shape]</span>
-<span id="cb5-5">    ax <span class="op" style="color: #5E5E5E;
+<span id="cb7-5">    ax <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> axes[<span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">0</span>, j]</span>
-<span id="cb5-6">    <span class="cf" style="color: #003B4F;
+<span id="cb7-6">    <span class="cf" style="color: #003B4F;
 background-color: null;
 font-weight: bold;
 font-style: inherit;">for</span> col, c, lab <span class="kw" style="color: #003B4F;
@@ -8388,7 +9225,7 @@ background-color: null;
 font-style: inherit;">"rainbow"</span>, AMBER, <span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"rainbow"</span>)]:</span>
-<span id="cb5-7">        ax.plot(s[<span class="st" style="color: #20794D;
+<span id="cb7-7">        ax.plot(s[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"eta"</span>], s[col], color<span class="op" style="color: #5E5E5E;
 background-color: null;
@@ -8403,7 +9240,7 @@ background-color: null;
 font-style: inherit;">3</span>, label<span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span>lab)</span>
-<span id="cb5-8">    ax.axhline(<span class="fl" style="color: #AD0000;
+<span id="cb7-8">    ax.axhline(<span class="fl" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">0.05</span>, color<span class="op" style="color: #5E5E5E;
 background-color: null;
@@ -8416,20 +9253,20 @@ background-color: null;
 font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">0.8</span>)</span>
-<span id="cb5-9">    ax.set_title(titles[shape])</span>
-<span id="cb5-10">    ax.set_ylim(<span class="op" style="color: #5E5E5E;
+<span id="cb7-9">    ax.set_title(titles[shape])</span>
+<span id="cb7-10">    ax.set_ylim(<span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">-</span><span class="fl" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">0.02</span>, <span class="fl" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">1.02</span>)</span>
-<span id="cb5-11">    ax <span class="op" style="color: #5E5E5E;
+<span id="cb7-11">    ax <span class="op" style="color: #5E5E5E;
 background-color: null;
 font-style: inherit;">=</span> axes[<span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">1</span>, j]</span>
-<span id="cb5-12">    ax.plot(s[<span class="st" style="color: #20794D;
+<span id="cb7-12">    ax.plot(s[<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"eta"</span>], s[<span class="st" style="color: #20794D;
 background-color: null;
@@ -8444,7 +9281,7 @@ background-color: null;
 font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">3</span>)</span>
-<span id="cb5-13">    ax.axhline(<span class="dv" style="color: #AD0000;
+<span id="cb7-13">    ax.axhline(<span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">1</span>, color<span class="op" style="color: #5E5E5E;
 background-color: null;
@@ -8457,24 +9294,24 @@ background-color: null;
 font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">0.8</span>)</span>
-<span id="cb5-14">    ax.set_xlabel(<span class="st" style="color: #20794D;
+<span id="cb7-14">    ax.set_xlabel(<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"nonlinear share of signal, η"</span>)</span>
-<span id="cb5-15">axes[<span class="dv" style="color: #AD0000;
+<span id="cb7-15">axes[<span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">0</span>, <span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">0</span>].set_ylabel(<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"rejects linearity"</span>)</span>
-<span id="cb5-16">axes[<span class="dv" style="color: #AD0000;
+<span id="cb7-16">axes[<span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">1</span>, <span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">0</span>].set_ylabel(<span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"forest MSE ÷ OLS MSE"</span>)</span>
-<span id="cb5-17">axes[<span class="dv" style="color: #AD0000;
+<span id="cb7-17">axes[<span class="dv" style="color: #AD0000;
 background-color: null;
 font-style: inherit;">0</span>, <span class="dv" style="color: #AD0000;
 background-color: null;
@@ -8483,8 +9320,8 @@ background-color: null;
 font-style: inherit;">=</span><span class="st" style="color: #20794D;
 background-color: null;
 font-style: inherit;">"center right"</span>)</span>
-<span id="cb5-18">fig.tight_layout()</span>
-<span id="cb5-19">plt.show()</span></code></pre></div>
+<span id="cb7-18">fig.tight_layout()</span>
+<span id="cb7-19">plt.show()</span></code></pre></div>
 </details>
 <div class="cell-output cell-output-display">
 <div id="fig-gof" class="quarto-float quarto-figure quarto-figure-center anchored" alt="Four-panel chart. For the product term, RESET and the quadratic test reach full power by eta 0.2 while the forest only beats OLS from eta 0.3. For the sine term, no test exceeds about 25 percent power while the forest's error falls to half of OLS's.">
@@ -8534,6 +9371,9 @@ Figure&nbsp;2: Goodness-of-fit power against held-out gain, 200 replicates per p
 <ul>
 <li><strong>The ozone stand-in is one year at one station.</strong> The test months differ in season from the training months, and the alert comparison rests on 7 alert days.</li>
 <li><strong>The linear route is a re-enactment.</strong> Breiman describes the 1970s procedure in one paragraph; the selection criterion, the candidate sets and the stopping rule here are choices, made before seeing the test months.</li>
+<li><strong>The dev months are 38 day pairs from one season.</strong> Settings chosen on them are a guess about autumn made from summer. The grids and the split were set once and not revised after the test scores were seen. One model was dropped after them: an equal average of the tuned forest, boosting and Chronos-2 with meteorology, which scores 4.92 on the test months, within the forest’s and boosting’s range.</li>
+<li><strong>Chronos-2’s forecasts are read from a file.</strong> <code>src/chronos_forecast.py</code> writes them with its own pinned venv (<code>src/requirements-chronos.txt</code>) and a pinned model revision, because the series’ shared venv has no torch; the render does not run the model. Its pretraining corpus was not checked for this 1976 record.</li>
+<li><strong>LightGBM itself was not run.</strong> Its macOS wheel needs a system OpenMP library; scikit-learn’s histogram boosting uses the same binning idea.</li>
 <li><strong>The goodness-of-fit design is ours.</strong> The paper does not describe its simulation. The product term was fixed before any result; the sine term was chosen after the first result was seen, which the text labels.</li>
 <li><strong>The forest and OLS are compared on one random split per replicate.</strong> The median ratio over 200 replicates is stable; a single replicate’s ratio is not.</li>
 </ul>
@@ -8544,7 +9384,7 @@ Figure&nbsp;2: Goodness-of-fit power against held-out gain, 200 replicates per p
 <div id="tbl-status" class="quarto-float quarto-figure quarto-figure-center anchored">
 <figure class="quarto-float quarto-float-tbl figure">
 <figcaption class="quarto-float-caption-top quarto-float-caption quarto-float-tbl" id="tbl-status-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
-Table&nbsp;3: Part 1’s rows of the series reproduction table. <a href="../two-cultures-pushback-and-causality/">Part 5</a> collects all five parts.
+Table&nbsp;4: Part 1’s rows of the series reproduction table. <a href="../two-cultures-pushback-and-causality/">Part 5</a> collects all five parts.
 </figcaption>
 <div aria-describedby="tbl-status-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
 <table class="caption-top table">
@@ -8572,7 +9412,7 @@ Table&nbsp;3: Part 1’s rows of the series reproduction table. <a href="../two-
 <td>7 years, 450+ variables, LA Basin</td>
 <td>1976 LA record (<code>mlbench::Ozone</code>), 30 candidate predictors</td>
 <td>selected regression; false-alarm rate too high</td>
-<td>forest RMSE 4.94–5.00 vs selected regression 5.14; all methods issued false alarms</td>
+<td>forest RMSE 4.94–5.00 vs selected regression 5.14; all methods issued false alarms; lasso, boosting and Chronos-2 within noise of the forest</td>
 <td>stand-in; original data not public</td>
 </tr>
 <tr class="even">
@@ -8602,16 +9442,20 @@ Table&nbsp;3: Part 1’s rows of the series reproduction table. <a href="../two-
 <section id="sec-references" class="level2" data-number="11">
 <h2 data-number="11" class="anchored" data-anchor-id="sec-references"><span class="header-section-number">11</span> References</h2>
 <ul>
+<li>Ansari, A. F., Shchur, O., Küken, J., et al.&nbsp;(2025). <a href="https://arxiv.org/abs/2510.15821">Chronos-2: from univariate to universal forecasting</a>. arXiv:2510.15821. Run here as <code>amazon/chronos-2</code>, revision <code>29ec376</code>.</li>
 <li>Bickel, P. J., Ritov, Y. &amp; Stoker, T. M. (2006). <a href="https://doi.org/10.1214/009053606000000137">Tailor-made tests for goodness of fit to semiparametric hypotheses</a>. <em>Annals of Statistics</em> 34(2), 721–741. Cited by Breiman as a 2001 manuscript.</li>
 <li>Breiman, L. (2001). <a href="https://doi.org/10.1214/ss/1009213726">Statistical modeling: the two cultures (with comments and a rejoinder)</a>. <em>Statistical Science</em> 16(3), 199–231.</li>
 <li>Breiman, L. (2001). <a href="https://doi.org/10.1023/A:1010933404324">Random forests</a>. <em>Machine Learning</em> 45, 5–32.</li>
 <li>Breiman, L. &amp; Friedman, J. H. (1985). <a href="https://doi.org/10.1080/01621459.1985.10478157">Estimating optimal transformations for multiple regression and correlation</a>. <em>Journal of the American Statistical Association</em> 80(391), 580–598. The source of the 1976 ozone data.</li>
 <li>Breiman, L., Friedman, J. H., Olshen, R. A. &amp; Stone, C. J. (1984). <em>Classification and Regression Trees</em>. Wadsworth.</li>
 <li>Faraway, J. <em>faraway: Functions and Datasets for Books by Julian Faraway</em>, R package 1.0.9 (<code>ozone</code>).</li>
+<li>Friedman, J. H. (2001). <a href="https://doi.org/10.1214/aos/1013203451">Greedy function approximation: a gradient boosting machine</a>. <em>Annals of Statistics</em> 29(5), 1189–1232.</li>
+<li>Ke, G., Meng, Q., Finley, T., Wang, T., Chen, W., Ma, W., Ye, Q. &amp; Liu, T.-Y. (2017). <a href="https://papers.nips.cc/paper_files/paper/2017/hash/6449f44a102fde848669bdd9eb6b76fa-Abstract.html">LightGBM: a highly efficient gradient boosting decision tree</a>. <em>Advances in Neural Information Processing Systems</em> 30.</li>
 <li>Leisch, F. &amp; Dimitriadou, E. <em>mlbench: Machine Learning Benchmark Problems</em>, R package 2.1-11 (<code>Ozone</code>).</li>
 <li>Mosteller, F. &amp; Tukey, J. W. (1977). <em>Data Analysis and Regression</em>. Addison-Wesley.</li>
 <li>Ramsey, J. B. (1969). <a href="https://doi.org/10.1111/j.2517-6161.1969.tb00796.x">Tests for specification errors in classical linear least-squares regression analysis</a>. <em>Journal of the Royal Statistical Society B</em> 31(2), 350–371.</li>
 <li>Stone, M. (1974). Cross-validatory choice and assessment of statistical predictions. <em>Journal of the Royal Statistical Society B</em> 36(2), 111–147.</li>
+<li>Tibshirani, R. (1996). <a href="https://doi.org/10.1111/j.2517-6161.1996.tb02080.x">Regression shrinkage and selection via the lasso</a>. <em>Journal of the Royal Statistical Society B</em> 58(1), 267–288.</li>
 <li>Utts, J. M. (1982). <a href="https://doi.org/10.1080/03610928208828423">The rainbow test for lack of fit in regression</a>. <em>Communications in Statistics: Theory and Methods</em> 11(24), 2801–2815.</li>
 <li><a href="../two-cultures-rashomon/">The Two Cultures, Part 2: Rashomon</a> — many equally good models.</li>
 <li><a href="../two-cultures-pushback-and-causality/">The Two Cultures, Part 5: The pushback</a> — the discussants, causality, and the full reproduction table.</li>
