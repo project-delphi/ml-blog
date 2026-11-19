@@ -25,6 +25,9 @@ from . import ozone
 
 DEV_DOY = 183  # 1 July 1976 (a leap year)
 SEEDS = range(5)
+CACHE_TAG = (
+    "ozone_modern_v2"  # the cache.frame name for run(); bump it when run() changes
+)
 CHRONOS_FILE = Path("cache") / "chronos2_v1.parquet"
 
 
@@ -191,12 +194,16 @@ def chronos() -> pd.DataFrame:
 
 
 def block_bootstrap(pred, ref, y, block=7, reps=4000, seed=0):
-    """95% interval for RMSE(pred) - RMSE(ref) on the test days, moving blocks of `block` days."""
+    """95% interval for RMSE(pred) - RMSE(ref) on the test days.
+
+    Circular moving blocks of `block` consecutive rows, so the first and last
+    days are drawn as often as the middle ones.
+    """
     pred, ref, y = (np.asarray(a, float) for a in (pred, ref, y))
     n = len(y)
     rng = np.random.default_rng(seed)
-    starts = rng.integers(0, n - block + 1, size=(reps, -(-n // block)))
-    idx = (starts[:, :, None] + np.arange(block)).reshape(reps, -1)[:, :n]
+    starts = rng.integers(0, n, size=(reps, -(-n // block)))
+    idx = ((starts[:, :, None] + np.arange(block)) % n).reshape(reps, -1)[:, :n]
     d = np.sqrt(((pred[idx] - y[idx]) ** 2).mean(1)) - np.sqrt(
         ((ref[idx] - y[idx]) ** 2).mean(1)
     )

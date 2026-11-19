@@ -14,5 +14,5 @@ from twocultures import cache, gof, modern  # noqa: E402
 if __name__ == "__main__":
     df = cache.frame("gof_v1", lambda: gof.run(reps=200))
     print(df.groupby(["shape", "eta"])[["p_reset", "mse_rf", "mse_ols"]].median())
-    mod = cache.frame("ozone_modern_v1", modern.run)
+    mod = cache.frame(modern.CACHE_TAG, modern.run)
     print(mod.groupby(["model", "split"]).size())
