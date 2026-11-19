@@ -144,6 +144,40 @@ Re-render both posts when you bump this venv. Their widgets load `model.js` and
 `node posts/<slug>/src/check_model.js` after touching `model.js`, since the prose
 quotes its numbers.
 
+## The Two Cultures posts share one venv, one data folder and one module
+
+The five parts of the Breiman series (`two-cultures-breiman-2001`, `-rashomon`,
+`-occam-and-bellman`, `-black-box-information`, `-pushback-and-causality`) pin the
+kernel **`two-cultures-blog`** over `.venv-two-cultures`. Every data set lives in Part 1's
+`data/raw/` (provenance in its `data/README.md`), and every experiment lives in Part 1's
+`src/twocultures/` package, which each post imports from `../two-cultures-breiman-2001/src`.
+
+```bash
+uv venv .venv-two-cultures --python 3.12
+uv pip install --python .venv-two-cultures/bin/python \
+  numpy pandas scipy scikit-learn statsmodels matplotlib tabulate pyarrow \
+  ipykernel jupyter nbclient nbformat pyyaml
+.venv-two-cultures/bin/python -m ipykernel install --user --name two-cultures-blog
+```
+
+Four things are not obvious:
+
+- **Expensive results are cached in each post's `cache/`** (parquet or JSON, committed), by
+  `twocultures.cache`. A render reads a cached file whenever it exists, so changing an
+  experiment means bumping its version tag in the post (`table2_small_v1` → `_v2`) or
+  deleting the file. Part 3's `src/warm_cache.py` fills its slowest caches ahead of a
+  render (Table 2, the SVMs and the credit models take about ten minutes).
+- **Quarto hashes `index.qmd` alone**, so an edit to `src/twocultures/` re-executes nothing.
+  Re-render every post that imports the changed function, or a stale cache keeps serving.
+- **Widget data are exported from the caches** by each post's `src/export_widget_data.py`,
+  run from the post directory before the render that copies them.
+- **Part 5's reproduction table reads what Parts 1–4 last wrote.** Each of those posts
+  ends with a hidden cell that writes `cache/status.json` (`twocultures.status`), and
+  Part 5 loads the four files. Freeze never re-executes Part 5 because a sibling
+  changed, so after re-rendering any of Parts 1–4, re-render Part 5 as well.
+
+Re-render all five posts when you bump this venv.
+
 ## The AlphaTensor posts run no Python and share one model
 
 `alphatensor-matmul-cube`, `alphatensor-seven-multiplications` and
