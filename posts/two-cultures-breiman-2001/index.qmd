@@ -142,7 +142,7 @@ The project's seven-year, 450-variable database is not public. The closest publi
 - **Who collected it and why.** Routine air-quality and weather monitoring in the Basin, collected for the smog alerts and weather forecasting the ozone project served.
 - **What this post asks of it.** Whether a forest predicts next-day ozone better than the selected linear regressions of the 1970s project, under a time-ordered split.
 - **Cost of a wrong answer.** A missed alert leaves children on playgrounds on a smog day; a false alarm keeps government workers home for nothing (p. 200). Breiman's project failed on false alarms.
-- **Why these methods.** They are the two the paper compares: the project's own procedure, and the forest he wished he had had. @sec-ozone-modern adds three that came later: the lasso, gradient boosting and a pretrained forecasting model.
+- **Why these methods.** They are the two the paper compares: the project's own procedure, and the forest he wished he had had. @sec-ozone-modern adds three the paper does not run: the lasso, gradient boosting and a pretrained forecasting model.
 - **What it is not.** One year against seven, nine variables against 450, one station against dozens. It is a stand-in.
 
 Two quirks decided which copy to use. `faraway::ozone` labels each row with a `doy` field, but it repeats at month boundaries (two rows each for days 61, 121, 181, …) and runs to 390, so it cannot pair a day with the next one. `mlbench::Ozone` carries month and day of month, so the next-day design uses it, keeping only rows where all the needed days are present.
@@ -216,9 +216,9 @@ plt.show()
 
 Both forecasts track the autumn decline and both fall short of the highest peaks in September and October. A forest is no cure for a short, single-year record.
 
-### Models from after the paper {#sec-ozone-modern}
+### Models the paper does not run {#sec-ozone-modern}
 
-In 2001 the forest was the newest tool in the comparison. Three later kinds of model are now standard first tries for a forecast like this one.
+In 2001 the forest was the newest tool in the comparison. Three kinds of model that the paper does not run are now standard first tries for a forecast like this one. The lasso and gradient boosting were published within five years of the paper, Chronos-2 in 2025.
 
 - **Lasso** (Tibshirani 1996): a linear regression on all 30 candidates whose coefficients are shrunk toward zero, many of them to zero. It selects variables in one fit, where the 1970s route searched.
 - **Gradient boosting** (Friedman 2001): a sum of small trees, each fitted to the errors left by the trees before it. The version here is scikit-learn's `HistGradientBoostingRegressor`, which bins every input before searching for splits, the method LightGBM made standard (Ke et al. 2017).
@@ -238,12 +238,12 @@ n_trm, n_dev = int(tr_m.sum()), int(dv_m.sum())
 - **Dev.** Pairs made July–August (`{python} n_dev`). The lasso's penalty, the forest's split and leaf settings, and boosting's learning rate, tree size, leaf size, penalty and number of trees are each chosen by dev RMSE from a fixed grid (`twocultures/modern.py`).
 - **Test.** September–December, as before. Every tuned model is refit on January–August before it is scored.
 - **Chronos-2 is not tuned or trained**, so its dev score is a report, not a choice.
-- **Uncertainty.** The forest, the tuned forest and boosting run with five seeds. The interval on each model's test RMSE minus the untuned forest's is a 95% moving-block bootstrap: 4,000 resamples of runs of seven consecutive forecasts, so that a smoggy week is resampled together.
+- **Uncertainty.** The forest, the tuned forest and boosting run with five seeds. The interval on each model's test RMSE minus the untuned forest's is a 95% moving-block bootstrap: 4,000 resamples of runs of seven consecutive test forecasts, a precaution in case errors persist from one day to the next. Days with missing data are already out of the design, so a run can span more than a week.
 
 ```{python}
 #| label: tbl-ozone-modern
 #| tbl-cap: "Next-day ozone, tuned on July–August and scored on September–December, in the data's units. Test RMSE is the range over five seeds for the seeded models. The interval is on test RMSE minus the untuned forest's; below zero means better than the forest. Dev RMSE, the interval and the alert columns are for seed 0."
-mod = pd.concat([cache.frame("ozone_modern_v1", modern.run), modern.chronos()],
+mod = pd.concat([cache.frame("ozone_modern_v2", modern.run), modern.chronos()],
                 ignore_index=True)
 mod["y"] = df["target"].loc[mod["doy"]].to_numpy()
 
@@ -266,6 +266,8 @@ ref = pick("forest", "test")
 dev_rmse, test_rng, ci, rows_m = {}, {}, {}, []
 for key, label in names.items():
     d, t = pick(key, "dev"), pick(key, "test")
+    # The bootstrap pairs rows by position, so every model must cover the same days in order.
+    assert (t["doy"].to_numpy() == ref["doy"].to_numpy()).all()
     dev_rmse[key] = modern.rmse(d["pred"], d["y"])
     seeds = sorted(mod.loc[mod["model"] == key, "seed"].unique())
     r = [modern.rmse(g["pred"], g["y"]) for g in (pick(key, "test", s) for s in seeds)]
@@ -291,7 +293,8 @@ assert min(lo, key=lo.get) == "boosting" and max(lo, key=lo.get) == "persistence
 assert lo["forest"] < lo["lasso"] < lo["linear_quad"]
 assert min(lo["chronos_ozone"], lo["chronos_weather"]) > max(lo[k] for k in trained)
 tuned_mf = pick("forest_tuned", "test")["params"].iloc[0]
-assert tuned_mf.startswith("max_features=1,")
+assert tuned_mf.startswith("max_features=1.0,")
+assert all(r["False alarms"] > 0 for r in rows_m)
 cover = {k: float(((pick(k, "test")["q10"] <= pick(k, "test")["y"])
                    & (pick(k, "test")["y"] <= pick(k, "test")["q90"])).mean())
          for k in ["chronos_ozone", "chronos_weather"]}
@@ -305,12 +308,12 @@ md(pd.DataFrame(rows_m))
 
 - **No model separates from the untuned forest on the test months.** Only persistence's interval lies wholly above zero; every other interval includes zero. Boosting has the lowest error in the table, `{python} f"{test_rng['boosting'][0]:.2f}"`–`{python} f"{test_rng['boosting'][1]:.2f}"` over five seeds, against `{python} f"{test_rng['forest'][0]:.2f}"`–`{python} f"{test_rng['forest'][1]:.2f}"` for the forest.
 - **The lasso does as well as the 1970s search, in one fit.** It scores `{python} f"{test_rng['lasso'][0]:.2f}"`, between the forest and the selected quadratic regression (`{python} f"{test_rng['linear_quad'][0]:.2f}"`).
-- **Tuning bought nothing.** The tuned forest settled on `{python} tuned_mf` and scored `{python} f"{test_rng['forest_tuned'][0]:.2f}"`–`{python} f"{test_rng['forest_tuned'][1]:.2f}"`. With `max_features` at 1 it tries every column at every split, which makes it bagged trees rather than a forest.
+- **Tuning bought nothing.** The tuned forest settled on `{python} tuned_mf` and scored `{python} f"{test_rng['forest_tuned'][0]:.2f}"`–`{python} f"{test_rng['forest_tuned'][1]:.2f}"`. With `max_features=1.0` it tries every column at every split, which makes it bagged trees rather than a forest.
 - **The dev months rank the models almost in reverse.** On July–August persistence is best (`{python} f"{dev_rmse['persistence']:.2f}"`), the two Chronos-2 runs come next, and every trained model is worse than all three. On the test months persistence is last. A dev set drawn from summer is a poor sample of autumn, the same limit Hoadley raises against test sets in @sec-accuracy.
 - **Chronos-2, with no training on this record, lands between persistence and the trained models.** It brings the error from `{python} f"{rmse['persist']:.2f}"` to `{python} f"{test_rng['chronos_ozone'][0]:.2f}"` on ozone alone and to `{python} f"{test_rng['chronos_weather'][0]:.2f}"` with the meteorology. It is also the only model here that gives a forecast interval: its nominal 80% intervals held the next day's ozone on `{python} f"{cover['chronos_ozone']:.0%}"` of test days on ozone alone and `{python} f"{cover['chronos_weather']:.0%}"` with the meteorology.
 - **Alerts still cannot rank them.** The test months hold `{python} alert_te` alert days, and every model issued false alarms.
 
-On `{python} n_te` autumn days the gap between a selected regression and a model that assumes nothing cannot be resolved, and the models of the following 25 years do not resolve it either.
+On `{python} n_te` autumn days the gap between a selected regression and a model that assumes nothing cannot be resolved, and the models now standard for the job do not resolve it either.
 
 ## Conclusions are about the model {#sec-model-not-nature}
 

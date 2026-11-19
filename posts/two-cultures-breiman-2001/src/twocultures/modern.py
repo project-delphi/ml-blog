@@ -32,6 +32,14 @@ def _grid(**kw):
     return [dict(zip(kw, v)) for v in product(*kw.values())]
 
 
+def _fmt(v) -> str:
+    """A setting as text; floats keep a decimal point, since sklearn reads max_features=1 as one column."""
+    if isinstance(v, int):
+        return str(v)
+    s = f"{float(v):.3g}"
+    return s if any(c in s for c in ".e") else s + ".0"
+
+
 def lasso(alpha, seed=0):
     return make_pipeline(StandardScaler(), Lasso(alpha=alpha, max_iter=50_000))
 
@@ -151,7 +159,7 @@ def run() -> pd.DataFrame:
             rmse(make(**p).fit(X[tr], y[tr]).predict(X[dv]), y[dv]) for p in grid
         ]
         best = grid[int(np.argmin(dev_rmse))]
-        label = ", ".join(f"{k}={v:.3g}" for k, v in best.items())
+        label = ", ".join(f"{k}={_fmt(v)}" for k, v in best.items())
         for s in SEEDS if seeded else [0]:
             add(
                 name,
