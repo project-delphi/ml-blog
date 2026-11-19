@@ -6,7 +6,7 @@ WK.mount("widget-dd", function (root, WK) {
   if (!D) throw new Error("widget data missing");
   var key = "minnorm", k = 0;
   var widths = D.series.minnorm.width;
-  k = widths.indexOf(334) >= 0 ? widths.indexOf(334) : 0;
+  k = Math.max(0, widths.indexOf(D.start_width));  // the classical minimum
   var f = WK.frame({
     title: "More features than examples",
     badge: "USPS digits",

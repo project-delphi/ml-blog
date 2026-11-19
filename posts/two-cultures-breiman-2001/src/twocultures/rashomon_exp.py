@@ -127,7 +127,6 @@ def net_restarts(reps=100, hidden=3, alpha=0.01):
     sc = StandardScaler().fit(A)
     A, B = sc.transform(A), sc.transform(B)
     my, sy = ytr.mean(), ytr.std()
-    grid = np.array(np.meshgrid(*[np.linspace(-2, 2, 9)] * 3)).reshape(3, -1).T
 
     def one(r):
         m = MLPRegressor(
@@ -146,13 +145,11 @@ def net_restarts(reps=100, hidden=3, alpha=0.01):
             "rep": r,
             "train_mse": float(np.mean((tr - ytr) ** 2)),
             "test_mse": float(np.mean((te - yte) ** 2)),
-            "grid": (m.predict(grid) * sy + my).tolist(),
             "fit_train": tr.tolist(),
             "pd_temp": _pd(m, A, 0, sy, my),
         }
 
-    rows = Parallel(n_jobs=-1)(delayed(one)(r) for r in range(reps))
-    return rows, grid
+    return Parallel(n_jobs=-1)(delayed(one)(r) for r in range(reps))
 
 
 def _pd(m, A, j, sy, my, n=21):

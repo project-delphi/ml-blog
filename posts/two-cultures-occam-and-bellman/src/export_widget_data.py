@@ -27,6 +27,11 @@ def main() -> None:
         )
         out["series"][key] = {c: [round(float(v), 4) for v in g[c]] for c in g.columns}
         out["seeds"] = int(df["seed"].nunique())
+        if key == "minnorm":
+            # The slider opens at the classical minimum, as the post's `dd` cell
+            # defines it: the lowest mean test error with fewer features than digits.
+            classic = g[g["width"] < out["n_train"]]
+            out["start_width"] = int(classic.loc[classic["test"].idxmin(), "width"])
     Path("widget-data").mkdir(exist_ok=True)
     Path("widget-data/data.js").write_text(
         "window.WK_DATA = Object.assign(window.WK_DATA || {}, "

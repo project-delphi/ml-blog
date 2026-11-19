@@ -38,6 +38,11 @@ class PrunedTree(BaseEstimator, ClassifierMixin):
         mids = np.concatenate([[0.0], mids[mids > 0]])
         if len(mids) > self.max_alphas:
             mids = mids[np.linspace(0, len(mids) - 1, self.max_alphas).astype(int)]
+        # The last path alpha prunes to the root alone. Midpoints stop short of
+        # it, so add it, after thinning so that no other candidate moves: the
+        # majority-class stump must be selectable when it is within one SE.
+        if len(alphas) and alphas[-1] > mids[-1]:
+            mids = np.append(mids, alphas[-1])
         _, counts = np.unique(y, return_counts=True)
         k = int(min(self.folds, counts.min())) if counts.min() >= 2 else 2
         cv = StratifiedKFold(k, shuffle=True, random_state=self.random_state)

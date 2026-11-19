@@ -95,6 +95,8 @@ best = int(np.argmin(ratio))
 best_test = int(np.argmin(test))
 w3 = ratio <= 1.03
 t3_lo, t3_hi = float(test[w3].min()), float(test[w3].max())
+inc3 = np.array([np.isin(fits["idx"][w3], [j]).any(1).mean() for j in range(len(names))])
+always3 = [names[j] for j in np.flatnonzero(inc3 == 1)]
 rank_of_best_on_test = int((test < test[best]).sum()) + 1
 ```
 
@@ -188,31 +190,36 @@ A meteorologist reading one picture would learn something different from one rea
 ```{python}
 #| label: trees
 tree_rows, tree_info = (lambda o: (o["rows"], o["info"]))(cache.obj(
-    "trees_v1", lambda: dict(zip(["rows", "info"], rashomon_exp.tree_perturbations(reps=100)))))
+    "trees_v2", lambda: dict(zip(["rows", "info"], rashomon_exp.tree_perturbations(reps=100)))))
 tr = pd.DataFrame([{k: v for k, v in r.items() if k != "structure"} for r in tree_rows])
 pert = tr[tr["rep"] > 0]
 root_counts = pert["root"].value_counts()
 sig_counts = pert["signature"].value_counts()
 base_err = float(tr.loc[tr["rep"] == 0, "test_error"].iloc[0])
 err_lo, err_hi = float(pert["test_error"].min()), float(pert["test_error"].max())
-err_q = pert["test_error"].quantile([0.1, 0.9])
 n_sig = int(pert["signature"].nunique())
+n_stump = int(root_counts.get("leaf", 0))
+split = pert[pert["root"] != "leaf"]
+base_rate = tree_info["test_deaths"] / tree_info["n_test"]
+split_lo, split_hi = float(split["test_error"].min()), float(split["test_error"].max())
 ```
 
 ### Result {#sec-trees-result}
 
-- **Root split.** The tree fitted to the full training set splits first on ascites. Over the 100 perturbed fits the root is ascites `{python} int(root_counts.get("ASCITES", 0))` times and albumin `{python} int(root_counts.get("ALBUMIN", 0))` times; the rest go to bilirubin or prothrombin time.
-- **Structure.** The top two levels take `{python} n_sig` different forms.
-- **Test error.** `{python} f"{base_err:.1%}"` for the unperturbed tree; `{python} f"{err_lo:.1%}"` to `{python} f"{err_hi:.1%}"` over the perturbed ones, with 80% between `{python} f"{err_q[0.1]:.1%}"` and `{python} f"{err_q[0.9]:.1%}"`. On 46 test patients one misclassification is 2.2 points, so most of this spread is a patient or two either way.
+- **No split at all.** The tree fitted to the full training set splits first on ascites. In `{python} n_stump` of the 100 perturbed fits the one-standard-error rule prunes the tree back to its root: on about 106 patients, predicting that everyone lives is within one standard error of the best cross-validated tree.
+- **Root split, when there is one.** Ascites `{python} int(root_counts.get("ASCITES", 0))` times and albumin `{python} int(root_counts.get("ALBUMIN", 0))` times; the rest go to bilirubin or prothrombin time.
+- **Structure.** Counting the root-only tree, the top two levels take `{python} n_sig` different forms.
+- **Test error.** `{python} f"{base_err:.1%}"` for the unperturbed tree. The root-only trees all score `{python} f"{base_rate:.1%}"`, the share of the 46 test patients who died; trees with a split range from `{python} f"{split_lo:.1%}"` to `{python} f"{split_hi:.1%}"`. On 46 test patients one misclassification is 2.2 points: the best tree with a split gets `{python} round((base_rate - split_lo) * tree_info["n_test"])` more patients right than predicting survival for everyone, and the worst gets `{python} round((split_hi - base_rate) * tree_info["n_test"])` fewer.
 
 ```{python}
 #| label: fig-trees
-#| fig-cap: "Pruned CART on hepatitis after removing 3 of 109 training patients, 100 times. Left: the split variables of the top two levels (root first, then left and right child; 'leaf' means no further split). Right: test error on the 46 held-out patients for each form."
-#| fig-alt: "Left, a bar chart in which a one-split tree on ascites is most common, followed by trees rooted on albumin. Right, dot plots showing that the different tree forms have overlapping test errors between about 15 and 24 percent."
+#| fig-cap: "Pruned CART on hepatitis after removing 3 of 109 training patients, 100 times. Left: the split variables of the top two levels (root first, then left and right child; 'leaf' means no further split, and 'root only' a tree with no split at all). Right: test error on the 46 held-out patients for each form."
+#| fig-alt: "Left, a bar chart in which the root-only tree with no split is most common, followed by a one-split tree on ascites and trees rooted on albumin. Right, dot plots: every root-only tree scores about 22 percent, and the trees with splits spread between about 15 and 24 percent."
 top = sig_counts.index[:7]
 fig, axes = plt.subplots(1, 2, figsize=(7.5, 3.0), gridspec_kw={"width_ratios": [1.3, 1]})
 ax = axes[0]
-labels = [s.replace("SPLEEN_PALPABLE", "SPLEEN").replace(" / ", " │ ") for s in top]
+labels = ["root only" if s == "leaf" else s.replace("SPLEEN_PALPABLE", "SPLEEN").replace(" / ", " │ ")
+          for s in top]
 ax.barh(range(len(top))[::-1], sig_counts[top].to_numpy(), color=PURPLE)
 ax.set_yticks(range(len(top))[::-1], labels, fontsize=7.5)
 ax.set_xlabel("perturbed fits")
@@ -227,7 +234,7 @@ fig.tight_layout()
 plt.show()
 ```
 
-The swap between ascites and albumin is not noise in the tree algorithm. The two are each other's strongest correlate in these data, and Breiman's section 11 analysis finds them to be surrogates: either carries most of what the other does. A tree must pick one, and which one depends on three patients. Part 4 returns to the pair.
+Breiman's point survives in a sharper form: removing three patients changes not just which variable a tree uses but whether it uses any. The swap between ascites and albumin is not noise in the tree algorithm. The two are each other's strongest correlate in these data, and Breiman's section 11 analysis finds them to be surrogates: either carries most of what the other does. A tree must pick one, and which one depends on three patients. Part 4 returns to the pair.
 
 ## Networks {#sec-nets}
 
@@ -240,7 +247,7 @@ The swap between ascites and albumin is not noise in the tree algorithm. The two
 
 ```{python}
 #| label: nets
-net_rows = cache.obj("nets_v1", lambda: {"rows": rashomon_exp.net_restarts(reps=100)[0]})["rows"]
+net_rows = cache.obj("nets_v2", lambda: {"rows": rashomon_exp.net_restarts(reps=100)})["rows"]
 labels = {t: rashomon_exp.distinct_minima(net_rows, t) for t in (0.05, 0.1, 0.2)}
 nets = pd.DataFrame([{"rep": r["rep"], "train_mse": r["train_mse"], "test_mse": r["test_mse"]}
                      for r in net_rows])
@@ -345,7 +352,7 @@ Hoadley's comment (p. 222) reports the same effect from credit scoring. Fitting 
 The idea has since been given a name and a formal treatment.
 
 - **The Rashomon set.** Semenova, Rudin and Parr (2022) define it as all models in a class within a tolerance of the best loss, which is what the subset explorer shows. They argue that when the set is large it often contains a simple model.
-- **Model class reliance.** Fisher, Rudin and Dominici (2019) measure a variable's importance as a range over the Rashomon set rather than for one model. On the ozone subsets that range is from 0 to 1 for every variable except today's ozone.
+- **Model class reliance.** Fisher, Rudin and Dominici (2019) measure a variable's importance as a range over the Rashomon set rather than for one model. This post does not compute that range, but the subsets fix one end of it: a model that leaves a variable out does not rely on it, and within 3% of the best RSS `{python} len(names) - len(always3)` of the 30 candidates are left out of at least one qualifying model. The exception is `{python} " and ".join(always3).replace("ozone_lag0", "today's ozone")`, which every one of them uses.
 - **Underspecification.** D'Amour et al. (2022) find the same effect in deep learning: models trained with different seeds agree on the held-out test set and disagree under distribution shift. The networks in @sec-nets diverge at the edge of the data.
 
 ## Constraints {#sec-constraints}
@@ -362,7 +369,7 @@ The idea has since been given a name and a formal treatment.
 | Experiment | Paper's data | Data used here | Paper's result | Our result | Notes |
 |---|---|---|---|---|---|
 | Subsets (§8) | 30 variables, not given | 30 ozone predictors, 1976 | many within 1% of best RSS | `{python} counts[0.01]` within 1%, `{python} counts[0.05]` within 5%; different stories | all share today's ozone |
-| Trees (§8) | not given | hepatitis, 3% removed | different tree, same test error | root ascites `{python} int(root_counts.get("ASCITES", 0))` / albumin `{python} int(root_counts.get("ALBUMIN", 0))` of 100; `{python} n_sig` top-level forms; test error `{python} f"{err_lo:.0%}"`–`{python} f"{err_hi:.0%}"` | reproduced in kind |
+| Trees (§8) | not given | hepatitis, 3% removed | different tree, same test error | no split `{python} n_stump`, root ascites `{python} int(root_counts.get("ASCITES", 0))`, albumin `{python} int(root_counts.get("ALBUMIN", 0))` of 100; `{python} n_sig` top-level forms; test error `{python} f"{err_lo:.0%}"`–`{python} f"{err_hi:.0%}"` | reproduced in kind |
 | Networks (§8) | simple 3-D data, not given | 3 ozone predictors | 32 distinct minima, equal test error | `{python} n_groups[0.1]` distinct functions; 80% of test MSE in `{python} f"{q10:.1f}"`–`{python} f"{q90:.1f}"` | count depends on architecture |
 | Bagged logistic (§8) | toxicity data (Arena et al.) | hepatitis, 19 → 4 | bagged significantly more accurate, more stable | `{python} f"{bag['single'].mean():.1%}"` single vs `{python} f"{bag['bagged'].mean():.1%}"` bagged; `{python} n_sets` distinct 4-sets in 500 bootstraps | stand-in data |
 
@@ -371,6 +378,20 @@ The idea has since been given a name and a formal treatment.
 :::
 
 Same. Error. Different. Stories. Instability. Picks. One. Averaging. Keeps. Accuracy.
+
+```{python}
+#| label: export-status
+#| include: false
+# The numbers Part 5's series table quotes from this part (twocultures/status.py).
+from twocultures import status
+
+status.export(
+    within_1=counts[0.01], within_5=counts[0.05],
+    tree_stumps=n_stump, tree_root_ascites=int(root_counts.get("ASCITES", 0)),
+    tree_root_albumin=int(root_counts.get("ALBUMIN", 0)), tree_reps=len(pert),
+    net_minima=n_groups[0.1], bag_single=bag["single"].mean(), bag_bagged=bag["bagged"].mean(),
+    bag_sets=n_sets)
+```
 
 ## References {#sec-references}
 

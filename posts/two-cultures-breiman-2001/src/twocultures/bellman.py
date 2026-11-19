@@ -88,12 +88,24 @@ def scorecard(n_bins=8):
     return make_pipeline(pre, LogisticRegression(C=1.0, max_iter=5000))
 
 
+def _credit_split(y, seed):
+    return train_test_split(
+        np.arange(len(y)), test_size=1 / 3, random_state=seed, stratify=y
+    )
+
+
+def credit_scorecard(seed=0):
+    """The scorecard alone, fitted on `credit_models(seed)`'s training split."""
+    raw, y = credit_frame()
+    ch = characteristics(raw)
+    tr, _ = _credit_split(y, seed)
+    return scorecard().fit(ch.iloc[tr], y[tr])
+
+
 def credit_models(seed=0):
     raw, y = credit_frame()
     ch = characteristics(raw)
-    tr, te = train_test_split(
-        np.arange(len(y)), test_size=1 / 3, random_state=seed, stratify=y
-    )
+    tr, te = _credit_split(y, seed)
     out = []
     specs = [
         (

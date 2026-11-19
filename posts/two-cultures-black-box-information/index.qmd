@@ -258,18 +258,24 @@ Breiman admitted in the rejoinder that importance has no satisfactory theoretica
 
 ```{python}
 #| label: fragility
-reps = cache.frame("importance_reps_v1", lambda: B.importance_replicates(boots=30))
+reps = cache.frame("importance_reps_v2", lambda: B.importance_replicates(boots=30))
 full = reps[reps["boot"] == 0].set_index("var")
 mdi_rank = full["mdi"].dropna().rank(ascending=False)
 perm_rank = full["perm"].drop("ASCITES+ALBUMIN").rank(ascending=False)
 noise_mdi_rank = int(mdi_rank["NOISE_CONT"])
 noise_perm = float(full.loc["NOISE_CONT", "perm"])
+bin_perm = float(full.loc["NOISE_BIN", "perm"])
 bin_mdi_rank = int(mdi_rank["NOISE_BIN"])
 alb_perm, alb_cond = float(full.loc["ALBUMIN", "perm"]), float(full.loc["ALBUMIN", "cond"])
 asc_perm, pair = float(full.loc["ASCITES", "perm"]), float(full.loc["ASCITES+ALBUMIN", "perm"])
 boot = reps[reps["boot"] > 0]
-alb_rank_boot = boot[boot["var"].isin(names)].pivot(index="boot", columns="var", values="perm").rank(axis=1, ascending=False)["ALBUMIN"]
-asc_rank_boot = boot[boot["var"].isin(names)].pivot(index="boot", columns="var", values="perm").rank(axis=1, ascending=False)["ASCITES"]
+perm_wide = boot[boot["j"] >= 0].pivot(index="boot", columns="var", values="perm")
+boot_rank = perm_wide[names].rank(axis=1, ascending=False)
+alb_rank_boot, asc_rank_boot = boot_rank["ALBUMIN"], boot_rank["ASCITES"]
+# The widget's ranking: all 21 columns, 1 + the number of columns strictly above.
+w_rank = perm_wide.rank(axis=1, ascending=False, method="min")
+n_swap = int((w_rank["ALBUMIN"] > w_rank["ASCITES"]).sum())
+n_split5 = int(((w_rank["ALBUMIN"] <= 5) != (w_rank["ASCITES"] <= 5)).sum())
 # Extrapolation: where do permuted albumin values land relative to the real ascites-yes patients?
 yes = Xi[:, ASC] == 1
 alb_yes_hi = np.quantile(Xi[yes, ALB], 0.9)
@@ -279,10 +285,10 @@ share_off = float(np.mean(perm_alb[yes] > alb_yes_hi))
 
 ### Result {#sec-fragility-result}
 
-- **Impurity bias.** On the full data the continuous noise column ranks `{python} noise_mdi_rank` of 21 by impurity importance, above most of the clinical findings; the binary noise column ranks `{python} bin_mdi_rank`. Its permutation importance is `{python} f"{noise_perm:.1f}"`%, near zero, as it should be.
+- **Impurity bias.** On the full data the continuous noise column ranks `{python} noise_mdi_rank` of 21 by impurity importance, above most of the clinical findings; the binary noise column ranks `{python} bin_mdi_rank`. Their permutation importances are `{python} f"{noise_perm:.1f}"`% and `{python} f"{bin_perm:.1f}"`% (continuous, binary), near zero, as they should be.
 - **Conditional permutation.** Permuting albumin freely raises the out-of-bag error by `{python} f"{alb_perm:.1f}"`%; permuting it only within ascites groups raises it by `{python} f"{alb_cond:.1f}"`%. The difference is credit albumin borrows from ascites when the two are pulled apart.
 - **The pair.** Permuting ascites and albumin together raises the error by `{python} f"{pair:.1f}"`%, against `{python} f"{asc_perm:.1f}"`% and `{python} f"{alb_perm:.1f}"`% separately. This is Breiman's own point in the rejoinder: delete one of two correlated variables and little changes, delete both and a lot does (p. 230).
-- **Resampling.** Over 30 bootstrap resamples albumin's permutation rank runs from `{python} int(alb_rank_boot.min())` to `{python} int(alb_rank_boot.max())`, and ascites' from `{python} int(asc_rank_boot.min())` to `{python} int(asc_rank_boot.max())`.
+- **Resampling.** Over 30 bootstrap resamples albumin's permutation rank among the 19 clinical variables runs from `{python} int(alb_rank_boot.min())` to `{python} int(alb_rank_boot.max())`, and ascites' from `{python} int(asc_rank_boot.min())` to `{python} int(asc_rank_boot.max())`. In a resample, out-of-bag means no copy of the patient is in the tree's bag, so no tree is scored on a patient it was trained on.
 - **Extrapolation.** Among patients with ascites present, the 90th percentile of albumin is `{python} f"{alb_yes_hi:.1f}"`. After one free permutation of albumin, `{python} f"{share_off:.0%}"` of those patients are assigned a value above it: ascites with normal albumin, a combination the data contain few of. The permuted forest is being asked about patients who barely exist.
 
 ::: {#widget-importance}
@@ -295,7 +301,7 @@ share_off = float(np.mean(perm_alb[yes] > alb_yes_hi))
 
 1. With **permutation** and resample 0 (the full data), albumin ranks 2 and ascites 3, and the continuous noise column N1 ranks 17 of 21.
 2. Switch to **impurity**. N1 moves up to 7th, above most of the clinical findings.
-3. Back on **permutation**, step through resamples 1 to 30. Albumin and ascites swap order in 6 of the 30, and in 10 one of them is in the top five while the other is not.
+3. Back on **permutation**, step through resamples 1 to 30. Albumin falls below ascites in `{python} n_swap` of the 30, and in `{python} n_split5` one of them is in the top five while the other is not.
 
 ## Bupa liver disorders {#sec-bupa}
 
@@ -382,7 +388,6 @@ Breiman ran a forest on 81 samples with 4,682 genes and no variable selection, a
 ```{python}
 #| label: lymphoma
 Xl, yl = data.lymphoma()
-labels_l = {"0": "B-CLL", "1": "DLBCL", "2": "FL"}
 
 
 def run_lymph():
@@ -419,7 +424,7 @@ plt.show()
 Breiman drew two conclusions (p. 214): higher predictive accuracy goes with more reliable information about the mechanism, and algorithmic models can give both. The re-runs bear on each.
 
 - **Accuracy as a guard.** Hepatitis logistic regression improves on the all-survivor baseline by `{python} f"{100 * (base - e['lr_all']):.1f}"` percentage points here, and its coefficient ranking does not survive resampling. That supports his warning: a model this weak should not be read.
-- **The forest's information.** The forest's top variables are more stable than logistic regression's, but they are not one answer: albumin and ascites share credit in proportions that move with the sample and the measure.
+- **The forest's information.** The forest's ranking is not one answer either. On the full data it puts albumin and ascites near the top, but across resamples albumin's rank drops as low as `{python} int(alb_rank_boot.max())` of 19 and ascites' as low as `{python} int(asc_rank_boot.max())`, and the two share credit in proportions that move with the sample and the measure.
 - **What no accuracy reveals.** The Bupa forest was accurate about the selector. Accuracy could not reveal that the selector was not the outcome. Cox's point about knowing what the data mean (Part 5) applies.
 
 ## Constraints {#sec-constraints}
@@ -447,6 +452,21 @@ Breiman drew two conclusions (p. 214): higher predictive accuracy goes with more
 :::
 
 Accuracy. Earns. Attention. Correlation. Splits. Credit. Permutation. Invents. Patients.
+
+```{python}
+#| label: export-status
+#| include: false
+# The numbers Part 5's series table quotes from this part (twocultures/status.py).
+from twocultures import status
+
+status.export(
+    lr_all=e["lr_all"], rf_all=e["rf_all"],
+    rf_rank_albumin=list(imp_rank.index).index("ALBUMIN") + 1,
+    rf_rank_ascites=list(imp_rank.index).index("ASCITES") + 1,
+    boot_rank_albumin_lo=alb_rank_boot.min(), boot_rank_albumin_hi=alb_rank_boot.max(),
+    boot_rank_ascites_lo=asc_rank_boot.min(), boot_rank_ascites_hi=asc_rank_boot.max(),
+    bupa_lo=b_err_lo, bupa_hi=b_err_hi, lymphoma_oob=lym["oob_error"])
+```
 
 ## References {#sec-references}
 

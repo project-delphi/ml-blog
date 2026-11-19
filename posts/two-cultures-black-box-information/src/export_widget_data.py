@@ -1,7 +1,7 @@
 """Write widget-data/data.js for Part 4's importance widget.
 
 Run from the post directory after the post's cells have filled cache/
-(`importance_reps_v1.parquet`):
+(`importance_reps_v2.parquet`):
     ../../.venv-two-cultures/bin/python src/export_widget_data.py
 """
 
@@ -12,7 +12,7 @@ import pandas as pd
 
 
 def main() -> None:
-    df = pd.read_parquet("cache/importance_reps_v1.parquet")
+    df = pd.read_parquet("cache/importance_reps_v2.parquet")
     df = df[df["j"] >= 0]
     names = df[df["boot"] == 0].sort_values("j")["var"].tolist()
     out = {"names": names, "boots": int(df["boot"].max()), "perm": [], "mdi": []}

@@ -38,7 +38,6 @@ This part covers two ideas:
 ```{python}
 #| label: setup
 #| echo: false
-import json
 import platform
 import sys
 from importlib.metadata import version
@@ -49,10 +48,13 @@ sys.path.insert(0, str(Path("../two-cultures-breiman-2001/src").resolve()))
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from twocultures import cache, causal
+from twocultures import cache, causal, status
 from twocultures.style import AMBER, BLUE, INK, MUTED, PINK, PURPLE, RULE, TEAL, md, setup
 
 setup()
+# What Parts 1-4 wrote when they last executed (twocultures/status.py).
+S1, S2, S3, S4 = (status.load(f"two-cultures-{s}") for s in
+                  ("breiman-2001", "rashomon", "occam-and-bellman", "black-box-information"))
 ```
 
 ## The discussion {#sec-discussion}
@@ -273,7 +275,7 @@ This section is an analogy, not history: neither Ockham nor Aquinas had anything
 
 - **Breiman was right that held-out accuracy should be reported.** It is now routine, and his Table 2 reproduces closely on the same data 25 years later (Part 3).
 - **He was right that equally good models tell different stories** (Part 2), and that selecting one of them and reading its coefficients is unsafe.
-- **He was partly right that an accurate black box gives better information.** The forest predicted hepatitis deaths better than logistic regression and flagged albumin, one of his two surrogates, in every bootstrap resample's top six, while best-subset logistic regression picked 205 different variable sets in 500 resamples (Part 2). But the forest's ranking of ascites, the other surrogate, ran from 1st to 14th: importance under correlation is fragile, as he admitted (Part 4).
+- **He was partly right that an accurate black box gives better information.** The forest predicted hepatitis deaths a little better than logistic regression (`{python} f"{S4['rf_all']:.1%}"` against `{python} f"{S4['lr_all']:.1%}"` error), and best-subset logistic regression picked `{python} S2['bag_sets']` different variable sets in 500 resamples (Part 2). But the forest's own ranking was not steady either: over 30 bootstrap resamples albumin's rank among the 19 covariates ran from `{python} int(S4['boot_rank_albumin_lo'])` to `{python} int(S4['boot_rank_albumin_hi'])` and ascites' from `{python} int(S4['boot_rank_ascites_lo'])` to `{python} int(S4['boot_rank_ascites_hi'])`. Importance under correlation is fragile, as he admitted (Part 4).
 - **The critics were right that a goodness-of-fit test is not always blind.** In Part 1 a directed test detected a nonlinearity well before a forest could use it; it failed when the nonlinearity lay where the test did not look.
 - **Hoadley was right that accuracy does not force opacity,** at least on credit data (Part 3).
 - **Cox was right about the question.** Accuracy on a random test set validates task 2. Policy, medicine and science usually ask task 3, and Breiman agreed.
@@ -282,54 +284,37 @@ This section is an analogy, not history: neither Ockham nor Aquinas had anything
 
 ```{python}
 #| label: tbl-status-all
-#| tbl-cap: "The series' reproduction table: every experiment Breiman reports, what data were used here, and how close the re-run came. Numbers come from the cached results of Parts 1–4."
-P = Path("..")
-gof = pd.read_parquet(P / "two-cultures-breiman-2001/cache/gof_v1.parquet")
-t2s = pd.read_parquet(P / "two-cultures-occam-and-bellman/cache/table2_small_v1.parquet")
-t2l = pd.read_parquet(P / "two-cultures-occam-and-bellman/cache/table2_large_v1.parquet")
-svm = pd.read_parquet(P / "two-cultures-occam-and-bellman/cache/svm_v1.parquet").set_index("degree")
-credit = pd.read_parquet(P / "two-cultures-occam-and-bellman/cache/credit_v1.parquet")
-bag = pd.read_parquet(P / "two-cultures-rashomon/cache/bagged_v1.parquet")
-hep = pd.read_parquet(P / "two-cultures-black-box-information/cache/hep_errors_v1.parquet").mean()
-bupa = pd.read_parquet(P / "two-cultures-black-box-information/cache/bupa_v1.parquet")
-lym = json.loads((P / "two-cultures-black-box-information/cache/lymphoma_v1.json").read_text())
-trees = json.loads((P / "two-cultures-rashomon/cache/trees_v1.json").read_text())["rows"]
-forest_wins = int((t2s.groupby("dataset")[["forest", "tree"]].mean().eval("forest < tree")).sum()
-                  + (t2l["forest"] < t2l["tree"]).sum())
-roots = pd.Series([r["root"] for r in trees if r["rep"] > 0]).value_counts()
-cg = credit.pivot(index="seed", columns="model", values="auc")
-gap = (cg["Random forest, raw inputs"] - cg["Scorecard: logistic on binned characteristics"]).abs().max()
-gof["ratio"] = gof["mse_rf"] / gof["mse_ols"]
-g = gof.groupby(["shape", "eta"]).agg(reset=("p_reset", lambda p: (p < 0.05).mean()), ratio=("ratio", "median"))
-status = [
+#| tbl-cap: "The series' reproduction table: every experiment Breiman reports, what data were used here, and how close the re-run came. Numbers come from the status values Parts 1–4 write when they execute (cache/status.json in each post)."
+status_rows = [
     ("1", "Ozone forecast (§3.1)", "7 years, 450+ variables", "1976 LA record", "selected regression failed on false alarms",
-     "forest beats selected regression slightly; false alarms for all", "stand-in"),
+     f"forest RMSE {S1['rf_rmse_lo']:.2f}–{S1['rf_rmse_hi']:.2f} vs selected regression {S1['quad_rmse']:.2f}; false alarms for all", "stand-in"),
     ("1", "Chlorine (§3.2)", "30,000 spectra", "—", "tree, 95% accuracy", "—", "not attempted: data not public"),
     ("1", "Goodness of fit (§5.2)", "7-D simulation", "7 real meteorological columns", "tests miss nonlinearity until extreme",
-     f"product term: RESET rejects {g.loc[('regime', 0.1), 'reset']:.0%} at η = 0.1 while the forest is worse; sine term: tests miss, forest gains {1 - g.loc[('wiggle', 0.5), 'ratio']:.0%}",
+     f"product term: RESET rejects {S1['reset_regime_01']:.0%} at η = 0.1 while the forest is worse; sine term: tests miss, forest gains {S1['gain_wiggle_05']:.0%}",
      "depends on the shape"),
-    ("2", "Subsets (§8)", "30 variables", "30 ozone predictors", "many within 1% of best", "4 within 1%, 175 within 5%", "partly"),
+    ("2", "Subsets (§8)", "30 variables", "30 ozone predictors", "many within 1% of best", f"{S2['within_1']} within 1%, {S2['within_5']} within 5%", "partly"),
     ("2", "Perturbed trees (§8)", "—", "hepatitis", "different tree, same error",
-     f"root ascites {roots.get('ASCITES', 0)}, albumin {roots.get('ALBUMIN', 0)} of 100", "reproduced in kind"),
-    ("2", "Network restarts (§8)", "3-D data", "3 ozone predictors", "32 minima", "28 distinct functions", "reproduced in kind"),
+     f"no split {S2['tree_stumps']}, root ascites {S2['tree_root_ascites']}, albumin {S2['tree_root_albumin']} of {S2['tree_reps']}", "reproduced in kind"),
+    ("2", "Network restarts (§8)", "3-D data", "3 ozone predictors", "32 minima", f"{S2['net_minima']} distinct functions", "reproduced in kind"),
     ("2", "Bagged logistic (§8)", "toxicity data", "hepatitis", "bagged more accurate",
-     f"{bag['single'].mean():.1%} single vs {bag['bagged'].mean():.1%} bagged", "stand-in"),
+     f"{S2['bag_single']:.1%} single vs {S2['bag_bagged']:.1%} bagged", "stand-in"),
     ("3", "Table 2 (§9.2)", "10 benchmark sets", "same 10 sets", "forest beats tree on all 10",
-     f"forest beats tree on {forest_wins} of 10; most within 1.5 points", "reproduced"),
+     f"forest beats tree on {S3['forest_wins']} of {S3['n_sets']}; {S3['within_1_5']} of {S3['n_cells']} errors within 1.5 points", "reproduced"),
     ("3", "Statlog ranks (§9.3)", "18 classifiers", "—", "forest ranks 1, 1, 1, 1", "—", "not attempted"),
     ("3", "Fat Scorecard (Hoadley)", "proprietary", "Taiwan credit default", "scorecard ≈ neural net",
-     f"scorecard AUC within {gap:.3f} of forest", "stand-in"),
+     f"scorecard AUC within {S3['credit_gap']:.3f} of forest", "stand-in"),
     ("3", "Shape forest (§10.2)", "NIST", "—", "0.7%", "—", "not attempted"),
-    ("3", "SVM on ZIP code (§10.3)", "USPS", "USPS", "4.1% at degree 4", f"{svm.loc[4, 'test_error']:.1%} at degree 4", "partly"),
-    ("4", "Hepatitis errors (§11.1)", "UCI", "UCI", "LR 17.4%, RF 12.3%", f"LR {hep['lr_all']:.1%}, RF {hep['rf_all']:.1%}", "partly: smaller gap"),
-    ("4", "Hepatitis importance (§11.1)", "UCI", "UCI", "RF singles out 12 and 17", "17 second, 12 fourth", "partly"),
+    ("3", "SVM on ZIP code (§10.3)", "USPS", "USPS", "4.1% at degree 4", f"{S3['svm4_error']:.1%} at degree 4", "partly"),
+    ("4", "Hepatitis errors (§11.1)", "UCI", "UCI", "LR 17.4%, RF 12.3%", f"LR {S4['lr_all']:.1%}, RF {S4['rf_all']:.1%}", "partly: smaller gap"),
+    ("4", "Hepatitis importance (§11.1)", "UCI", "UCI", "RF singles out 12 and 17",
+     f"17 ranks {S4['rf_rank_albumin']}, 12 ranks {S4['rf_rank_ascites']}; resamples move both", "partly"),
     ("4", "Bupa (§11.2)", "UCI", "UCI", "28%; tests 3, 5, 4; two clusters",
-     f"{bupa['oob_error'].min():.0%}–{bupa['oob_error'].max():.0%}; same ranking; two clusters", "reproduced; label is a selector"),
-    ("4", "Lymphoma (§11.3)", "81 × 4,682", "Breiman's file", "low error", f"OOB {lym['oob_error']:.1%}", "reproduced"),
+     f"{S4['bupa_lo']:.0%}–{S4['bupa_hi']:.0%}; same ranking; two clusters", "reproduced; label is a selector"),
+    ("4", "Lymphoma (§11.3)", "81 × 4,682", "Breiman's file", "low error", f"OOB {S4['lymphoma_oob']:.1%}", "reproduced"),
     ("5", "Lalonde (extension)", "—", "NSW + PSID", "—",
      f"partial dependence {rng('s_learner')}; experiment {usd(L['experimental'])}", "extension"),
 ]
-md(pd.DataFrame(status, columns=["Part", "Experiment", "Paper's data", "Data used", "Paper's result", "Our result", "Status"]))
+md(pd.DataFrame(status_rows, columns=["Part", "Experiment", "Paper's data", "Data used", "Paper's result", "Our result", "Status"]))
 ```
 
 Every part has its own table with the details; the code for every number is in its folded cells and in `posts/two-cultures-breiman-2001/src/`.

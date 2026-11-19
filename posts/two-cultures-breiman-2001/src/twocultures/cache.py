@@ -33,5 +33,5 @@ def obj(name: str, fn: Callable[[], dict]) -> dict:
         return json.loads(path.read_text())
     CACHE.mkdir(exist_ok=True)
     out = fn()
-    path.write_text(json.dumps(out, indent=1))
+    path.write_text(json.dumps(out, indent=1) + "\n")
     return out

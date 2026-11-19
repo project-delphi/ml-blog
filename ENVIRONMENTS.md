@@ -160,7 +160,7 @@ uv pip install --python .venv-two-cultures/bin/python \
 .venv-two-cultures/bin/python -m ipykernel install --user --name two-cultures-blog
 ```
 
-Three things are not obvious:
+Four things are not obvious:
 
 - **Expensive results are cached in each post's `cache/`** (parquet or JSON, committed), by
   `twocultures.cache`. A render reads a cached file whenever it exists, so changing an
@@ -170,8 +170,11 @@ Three things are not obvious:
 - **Quarto hashes `index.qmd` alone**, so an edit to `src/twocultures/` re-executes nothing.
   Re-render every post that imports the changed function, or a stale cache keeps serving.
 - **Widget data are exported from the caches** by each post's `src/export_widget_data.py`,
-  run from the post directory before the render that copies them. Part 5's reproduction
-  table reads the other four posts' caches directly.
+  run from the post directory before the render that copies them.
+- **Part 5's reproduction table reads what Parts 1–4 last wrote.** Each of those posts
+  ends with a hidden cell that writes `cache/status.json` (`twocultures.status`), and
+  Part 5 loads the four files. Freeze never re-executes Part 5 because a sibling
+  changed, so after re-rendering any of Parts 1–4, re-render Part 5 as well.
 
 Re-render all five posts when you bump this venv.
 

@@ -30,7 +30,14 @@ class OOBForest:
             n_jobs,
         )
 
-    def fit(self, X, y):
+    def fit(self, X, y, ids=None):
+        """Grow the forest. `ids` names the original case behind each row.
+
+        When X is itself a bootstrap resample, rows repeat; a row is then
+        out-of-bag for a tree only if no copy of its case is in that tree's
+        bag, so OOB error and permutation importance never score a tree on a
+        case it was trained on.
+        """
         X, y = np.asarray(X, float), np.asarray(y)
         self.classes_ = np.unique(y)
         n = len(y)
@@ -47,7 +54,8 @@ class OOBForest:
         self.trees_ = Parallel(n_jobs=self.n_jobs)(
             delayed(grow)(b, s) for b, s in zip(boots, seeds)
         )
-        self.oob_ = [np.setdiff1d(np.arange(n), b) for b in boots]
+        ids = np.arange(n) if ids is None else np.asarray(ids)
+        self.oob_ = [np.flatnonzero(~np.isin(ids, ids[b])) for b in boots]
         self.X_, self.y_ = X, y
         return self
 
@@ -214,7 +222,7 @@ def importance_replicates(boots=30, n_trees=500, seed=0):
     rng = np.random.default_rng(seed)
     for b in range(boots + 1):
         idx = np.arange(len(y)) if b == 0 else rng.integers(0, len(y), len(y))
-        f = OOBForest(n_trees=n_trees, seed=b).fit(Xi[idx], y[idx])
+        f = OOBForest(n_trees=n_trees, seed=b).fit(Xi[idx], y[idx], ids=idx)
         perm = f.permutation_importance(seed=b)
         cond = f.permutation_importance(
             groups={alb: [alb], asc: [asc]}, conditional={alb: asc}, seed=b
