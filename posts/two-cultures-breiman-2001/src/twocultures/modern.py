@@ -1,4 +1,4 @@
-"""Models from after the paper on Part 1's next-day ozone design.
+"""Models the paper does not run, on Part 1's next-day ozone design.
 
 The design and the test months are those of `ozone`: forecasts made September-
 December are scored. For tuning, the training months are split again by the

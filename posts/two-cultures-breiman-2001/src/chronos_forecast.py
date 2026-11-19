@@ -21,6 +21,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+if not Path("index.qmd").exists() or not Path("src/twocultures").is_dir():
+    sys.exit(
+        "run from posts/two-cultures-breiman-2001 (it reads src/ and writes cache/)"
+    )
 sys.path.insert(0, str(Path("src").resolve()))
 
 from chronos import BaseChronosPipeline  # noqa: E402

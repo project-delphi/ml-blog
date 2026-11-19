@@ -53,7 +53,7 @@ https://www.stat.cmu.edu/~ryantibs/journalclub/breiman_2001.pdf (33 pp.); its pa
 44. lundberg2017unified | confirmed | NeurIPS proceedings abstract page and its .bib (papers.nips.cc, hash 8a20a862...) | NeurIPS 30, 2017. The proceedings .bib gives no page numbers, so none are given here.
 45. (Fat Scorecard) | confirmed | PDF | The term appears only in Hoadley's comment, on p. 222: "The Fat Scorecard study had an ingredient that is rare ..." and "the Fat Scorecard outperformed the more traditional thinner scorecard for all four test samples." Breiman's rejoinder thanks Hoadley for his description (p. 230) without using the term.
 
-## Added 2026-11-19 (Part 1, models from after the paper)
+## Added 2026-11-19 (Part 1, models the paper does not run)
 
 46. tibshirani1996regression | confirmed | CR 10.1111/j.2517-6161.1996.tb02080.x | 58(1), 267–288. Crossref's journal name is the series' current one, "Journal of the Royal Statistical Society Series B: Statistical Methodology".
 47. friedman2001greedy | confirmed | CR 10.1214/aos/1013203451 | 29(5), 1189–1232.
