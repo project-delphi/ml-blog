@@ -1,7 +1,7 @@
 ---
 title: "When UMAP Lies, Part 3: Settings, Seeds and Starting Points"
 subtitle: "Settings move a method about as far as switching methods, the start decides the large distances, and some of what changes between seeds is real"
-description: "Every method in the series tuned on a grid of 4 to 12 settings, chosen on one draw of the data and scored on others; what UMAP's n_neighbors and min_dist change and what they only rearrange; initialisation, which decides large distances and leaves neighbourhoods alone; and five seeds on three draws, separating rotation from real change and the method's randomness from the data's."
+description: "Every method in the series tuned on a grid of 4 to 11 settings, chosen on one draw of the data and scored on others; what UMAP's n_neighbors and min_dist change and what they only rearrange; initialisation, which decides large distances and leaves neighbourhoods alone; and five seeds on three draws, separating rotation from real change and the method's randomness from the data's."
 author: "Ravi Kalia"
 date: "2026-11-20T11:00:00"
 categories: [Machine Learning, Statistics, Optimization]
@@ -115,8 +115,6 @@ Three synthetic datasets of 2,000 points, with three independent draws each:
 
 ### Grids {#sec-grids}
 
-Each method gets a grid around its defaults, from 4 settings for the methods with one main parameter to 12 for t-SNE, counting the default once. The grids vary the parameters each method's documentation names as its main ones; methods with more parameters get larger grids, which favours them slightly in the selection.
-
 ```{python}
 #| label: tbl-grids
 #| tbl-cap: "Settings tried per method. Every method also ran at its defaults."
@@ -124,8 +122,17 @@ from umaplab.embeddings import METHODS as _M
 
 
 def R_is_default(m, g):
-    """True when a grid entry equals the method's defaults on every key it sets."""
-    d = _M[m].defaults
+    """True when a grid entry equals the method's defaults on every key it sets.
+
+    Two defaults are resolved at fit time, so they are resolved here for n = 2,000:
+    openTSNE's exaggeration None means 1, and scikit-learn's SpectralEmbedding
+    n_neighbors None means n / 10.
+    """
+    d = dict(_M[m].defaults)
+    if m == "tsne" and d.get("exaggeration") is None:
+        d["exaggeration"] = 1.0
+    if m == "spectral" and d.get("n_neighbors") is None:
+        d["n_neighbors"] = 2000 // 10
     return all(k in d and d[k] == v for k, v in g.items())
 
 
@@ -134,10 +141,16 @@ for m, grid in X.TUNE_GRIDS.items():
     keys = sorted({k for g in grid for k in g})
     vals = "; ".join(f"{k} ∈ {{{', '.join(str(v) for v in sorted({g[k] for g in grid if k in g}, key=str))}}}" for k in keys)
     distinct = {json.dumps(g, sort_keys=True) for g in grid}
-    n_set = len(distinct) + (0 if any(R_is_default(m, g) for g in grid) else 1)
-    rows.append((P.name(m), n_set, vals))
-md(pd.DataFrame(rows, columns=["Method", "Settings", "Values"]))
+    has_default = any(R_is_default(m, g) for g in grid)
+    n_set = len(distinct) + (0 if has_default else 1)
+    rows.append((P.name(m), n_set, vals, has_default))
+GRIDS = pd.DataFrame(rows, columns=["Method", "Settings", "Values", "dup"])
+GRID_MIN, GRID_MAX = int(GRIDS.Settings.min()), int(GRIDS.Settings.max())
+N_DUP = int(GRIDS.dup.sum())
+md(GRIDS.drop(columns="dup"))
 ```
+
+Each method gets a grid around its defaults, from `{python} GRID_MIN` settings for the methods with one main parameter to `{python} GRID_MAX` for t-SNE, counting the default once. The grids vary the parameters each method's documentation names as its main ones; methods with more parameters get larger grids, which favours them slightly in the selection.
 
 ### Selection {#sec-selection}
 
@@ -378,13 +391,13 @@ A reader comparing two runs should discount orientation entirely. The relative p
 ## Constraints {#sec-constraints}
 
 - **Three datasets, three draws.** The tuning results are for a rolled sheet, separated Gaussian clusters and a noisy tree, at $n = 2000$ (1,000 in the UMAP grid). Tuned rankings on real data depend on its structure.
-- **Grids are coarse and unequal.** From 4 to 12 settings per method can miss a better region, and the larger grids give their methods more chances in the selection; the comparison is not exhaustive.
+- **Grids are coarse and unequal.** From `{python} GRID_MIN` to `{python} GRID_MAX` settings per method can miss a better region, and the larger grids give their methods more chances in the selection; the comparison is not exhaustive.
 - **Selection on one draw is noisy.** Choosing on draw 0 and scoring on draws 1–2 removes the optimism of reporting the chosen score, but one draw is a small selection set, which is part of why some tuned settings did worse.
 - **Two metrics drive the selection.** A setting chosen for global structure can lose local structure, and the reverse; the table shows each metric's choice separately, and selection never used the two jointly (in three rows the same setting happened to win both).
 - **UMAP with a PCA start ran with one seed per draw;** the other starting points ran with five.
 - **Learning rate and early exaggeration were varied for t-SNE only at single values** ($\text{early exaggeration} \in \{4, 36\}$; learning rate at openTSNE's automatic setting), so this part says little about them.
-- **Seed-to-seed overlaps are slightly low.** They are computed from maps stored at half precision, which on its own changes up to about 1.5% of a map's 10-neighbour sets (UMAP on the clusters); the shared-neighbour figures are lower bounds by about that much.
-- **Five methods ran their default setting twice per draw**, because the grid already contained it; the duplicates are averaged with each other and change no chosen setting.
+- **Seed-to-seed comparisons use maps stored at half precision.** Rounding moves individual points' neighbour sets slightly, but changes the reported seed-to-seed overlaps by about 0.0002, well below the two decimals quoted.
+- **`{python} N_DUP` methods ran their default setting twice per draw**, because the grid already contained it (for t-SNE and Laplacian eigenmaps once their automatic defaults are resolved); the two runs share settings and seed, give identical scores, and change no chosen setting.
 
 Tune. Every. Method. Starts. Set. Distances. Seeds. Move. Clusters.
 

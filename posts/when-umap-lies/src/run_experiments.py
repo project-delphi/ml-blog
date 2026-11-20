@@ -157,7 +157,7 @@ def main() -> None:
         if name == "derived":
             from umaplab.derived import run_all
 
-            run_all()
+            run_all(args.workers)
             print(f"{name}: done in {time.perf_counter() - t0:.0f}s", flush=True)
             continue
         if name == "scaling":

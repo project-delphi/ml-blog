@@ -87,15 +87,15 @@ def embeddings(exp: str) -> dict[str, np.ndarray]:
     path = CACHE / exp / "embeddings.npz"
     if not path.exists():
         return {}
-    z = np.load(path)
     r = runs(exp).set_index("cell_id")
     out = {}
-    for key in z.files:
-        Y = z[key].astype(np.float32)
-        if key in r.index and "info" in r.columns:
-            info = json.loads(r.at[key, "info"] or "{}")
-            Y = Y / float(info.get("embedding_scale", 1.0))  # stored as Y * scale
-        out[key] = Y
+    with np.load(path) as z:
+        for key in z.files:
+            Y = z[key].astype(np.float32)
+            if key in r.index and "info" in r.columns:
+                info = json.loads(r.at[key, "info"] or "{}")
+                Y = Y / float(info.get("embedding_scale", 1.0))  # stored as Y * scale
+            out[key] = Y
     return out
 
 

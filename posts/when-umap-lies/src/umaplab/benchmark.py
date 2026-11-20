@@ -575,7 +575,8 @@ class _Store:
         if getattr(self, "pruned", None):
             self._rewrite_embeddings(drop=self.pruned)
             if not self.new_runs:
-                _atomic_parquet(self.metrics, self.metrics_path)
+                if self.metrics is not None:  # metrics.parquet can be missing
+                    _atomic_parquet(self.metrics, self.metrics_path)
                 _atomic_parquet(self.runs, self.runs_path)
             self.pruned = set()
         if not self.new_runs:

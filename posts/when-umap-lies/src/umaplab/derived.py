@@ -138,6 +138,27 @@ def valley_ratio(Z: np.ndarray, labels: np.ndarray, grid: int = 400) -> float:
 
 
 def _gap_job(args):
+    """One (delta, seed, method) job; an error is recorded as a row, never raised."""
+    try:
+        return _gap_job_inner(args)
+    except Exception as exc:  # noqa: BLE001 - one bad job must not lose the rest
+        delta, seed, method, params = args
+        from .benchmark import config_label
+
+        cfg = "input" if method == "input" else config_label(method, params)
+        return [
+            dict(
+                delta=delta,
+                data_seed=seed,
+                config=cfg,
+                metric="failed",
+                value=float("nan"),
+                error=f"{type(exc).__name__}: {exc}"[:500],
+            )
+        ]
+
+
+def _gap_job_inner(args):
     from sklearn.cluster import HDBSCAN
 
     from .embeddings import embed, set_thread_env
@@ -230,7 +251,7 @@ def seed_pairs(exp: str = "stability") -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def run_all() -> None:
+def run_all(n_workers: int = 8) -> None:
     """Write every derived table the posts read, from the cached experiment results.
 
     - cache/noise_dims|noise_sigma/graph_fidelity.parquet (Part 2)
@@ -241,7 +262,7 @@ def run_all() -> None:
         graph_fidelity(exp).to_parquet(
             CACHE / exp / "graph_fidelity.parquet", index=False
         )
-    overlap_gaps(8).to_parquet(CACHE / "overlap" / "gaps.parquet", index=False)
+    overlap_gaps(n_workers).to_parquet(CACHE / "overlap" / "gaps.parquet", index=False)
     seed_pairs("stability").to_parquet(
         CACHE / "stability" / "seed_pairs.parquet", index=False
     )
