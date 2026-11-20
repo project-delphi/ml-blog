@@ -238,13 +238,13 @@ n_trm, n_dev = int(tr_m.sum()), int(dv_m.sum())
 
 - **Selection data.** Pairs made January–August (`{python} n_trm + n_dev` day pairs). The lasso's penalty, the forests' split and leaf settings, boosting's learning rate, tree size, leaf size, penalty and number of trees, extra trees' settings and quantile boosting's settings are each chosen by mean walk-forward RMSE from a fixed grid (`twocultures/modern.py`).
 - **Test.** September–December, as before. Every tuned model is refit on January–August before it is scored.
-- **CV RMSE.** Each model's out-of-fold predictions cover the three validation blocks; the table reports their RMSE. Settings were chosen on those folds, so this column is in-sample for the grid search, not a fresh test.
+- **CV RMSE.** Each tabular model's out-of-fold predictions cover the three validation blocks; the table reports their mean RMSE. Settings were chosen on those folds, so this column is in-sample for the grid search, not a fresh test. Chronos-2 is zero-shot, so its dev cell is a single-block (July–August) report, not walk-forward.
 - **Chronos-2 is not tuned or trained**, so its CV score is a report, not a choice.
 - **Uncertainty.** The forest, the tuned forest, boosting, extra trees and quantile boosting run with five seeds. The interval on each model's test RMSE minus the untuned forest's is a 95% circular moving-block bootstrap: 4,000 resamples of runs of seven consecutive test forecasts, a precaution in case errors persist from one day to the next. Days with missing data are already out of the design, so a run can span more than a week.
 
 ```{python}
 #| label: tbl-ozone-modern
-#| tbl-cap: "Next-day ozone, settings chosen by walk-forward CV on January–August and scored on September–December, in the data's units. CV RMSE is out-of-fold over the three validation blocks. Test RMSE is the range over five seeds for the seeded models. The interval is on test RMSE minus the untuned forest's; below zero means better than the forest. CV RMSE, the interval and the alert columns are for seed 0."
+#| tbl-cap: "Next-day ozone, settings chosen by walk-forward CV on January–August and scored on September–December, in the data's units. CV RMSE is out-of-fold over the three validation blocks for the tabular models (Chronos-2 is zero-shot, so its dev cell is a single-block report). Test RMSE is the range over five seeds for the seeded models. The interval is on test RMSE minus the untuned forest's; below zero means better than the forest. CV RMSE, the interval and the alert columns are for seed 0."
 mod = pd.concat([cache.frame(modern.CACHE_TAG, modern.run), modern.chronos()],
                 ignore_index=True)
 mod["y"] = df["target"].loc[mod["doy"]].to_numpy()
@@ -298,7 +298,11 @@ for k in ["forest_tuned", "boosting", "extra_trees", "quantile_boost"]:
         a, b = pick(k, "test", s), pick("forest", "test", s)
         lo_s, hi_s = modern.block_bootstrap(a["pred"], b["pred"], a["y"])
         assert lo_s < 0 < hi_s, (k, s, lo_s, hi_s)
-assert dev_order[0] == "chronos_ozone" and set(dev_order[1:3]) == {"persistence", "chronos_weather"}
+# dev_order is reported as-is: tabular models use walk-forward folds (March–August),
+# while Chronos-2's dev cell is a zero-shot single-block (July–August) report, so the
+# two are not a like-for-like walk-forward ranking.
+dev_order = sorted(dev_rmse, key=dev_rmse.get)
+assert len(dev_order) == len(names)
 lo = {k: v[0] for k, v in test_rng.items()}
 assert min(lo, key=lo.get) == "quantile_boost" and max(lo, key=lo.get) == "persistence"
 assert lo["forest"] < lo["linear_quad"] < lo["lasso"]
@@ -321,7 +325,7 @@ md(pd.DataFrame(rows_m))
 - **The lasso is close to the 1970s search, in one fit.** It scores `{python} f"{test_rng['lasso'][0]:.2f}"`, against `{python} f"{test_rng['linear_quad'][0]:.2f}"` for the selected quadratic regression.
 - **Tuning still buys nothing.** The tuned forest settled on `{python} tuned_mf` and scored `{python} f"{test_rng['forest_tuned'][0]:.2f}"`–`{python} f"{test_rng['forest_tuned'][1]:.2f}"`, a little worse than the untuned forest. With `max_features=1.0` it tries every column at every split, which makes it bagged trees rather than a forest. Walk-forward selection chose this on `{python} n_trm + n_dev` days, and it did not carry over.
 - **Quantile boosting gives intervals that miss far too often.** Its median scores `{python} f"{test_rng['quantile_boost'][0]:.2f}"`–`{python} f"{test_rng['quantile_boost'][1]:.2f}"`, in the tie, but its nominal 80% interval held the next day's ozone on only `{python} f"{cover['quantile_boost']:.0%}"` of test days, against `{python} f"{cover['chronos_ozone']:.0%}"` for Chronos-2 on ozone alone. A narrower interval is cheap; a calibrated one is the hard part.
-- **Walk-forward CV still ranks the models unlike the test months.** Out of fold over March–August, Chronos-2 on ozone alone is best (`{python} f"{dev_rmse['chronos_ozone']:.2f}"`) and persistence is second (`{python} f"{dev_rmse['persistence']:.2f}"`), with every trained model worse. On the test months persistence is last. This is not one summer dev set any more, but the folds still look forward from spring into summer, the same limit Hoadley raises against test sets in @sec-accuracy.
+- **Walk-forward CV still ranks the trained models unlike the test months.** Out of fold over March–August, the tabular models are ranked by mean walk-forward RMSE; Chronos-2's dev cell is a zero-shot single-block (July–August) report rather than walk-forward, so it is not part of that ranking. On the test months persistence is last. The folds still look forward from spring into summer, the same limit Hoadley raises against test sets in @sec-accuracy.
 - **Chronos-2 is now worse than every trained model.** With no training on this record it scores `{python} f"{test_rng['chronos_ozone'][0]:.2f}"` on ozone alone and `{python} f"{test_rng['chronos_weather'][0]:.2f}"` with the meteorology, against `{python} f"{test_rng['forest'][0]:.2f}"` for the forest. Its intervals held on `{python} f"{cover['chronos_ozone']:.0%}"` and `{python} f"{cover['chronos_weather']:.0%}"` of test days.
 - **Alerts still cannot rank them.** The test months hold `{python} alert_te` alert days, and every model issued false alarms.
 
@@ -371,7 +375,7 @@ The design copies @sec-ozone and @sec-ozone-modern; only these points differ.
 
 ```{python}
 #| label: tbl-delhi
-#| tbl-cap: "Next-day PM2.5 in New Delhi, settings chosen by walk-forward CV on the years before November 2023 and scored on November 2023 – October 2026, in µg/m³. CV RMSE is out-of-fold over the four November–October validation years. An alert is a forecast of 250 or more. Test RMSE is the range over five seeds for the seeded models. The interval is on test RMSE minus the untuned forest's; above zero means worse than the forest. CV RMSE, the interval and the alert columns are for seed 0."
+#| tbl-cap: "Next-day PM2.5 in New Delhi, settings chosen by walk-forward CV on the years before November 2023 and scored on November 2023 – October 2026, in µg/m³. CV RMSE is out-of-fold over the four November–October validation years for the tabular models (Chronos-2 is zero-shot, so its dev cell is a single-block report). An alert is a forecast of 250 or more. Test RMSE is the range over five seeds for the seeded models. The interval is on test RMSE minus the untuned forest's; above zero means worse than the forest. CV RMSE, the interval and the alert columns are for seed 0."
 dmod = pd.concat([cache.frame(delhi.CACHE_TAG, delhi.run), delhi.chronos()],
                  ignore_index=True)
 dmod["y"] = yd.loc[dmod["day"]].to_numpy()
@@ -441,8 +445,11 @@ ch_quad_late = modern.block_bootstrap(dpick("chronos_pm25", "test")["pred"][late
                                       dpick("linear_quad", "test")["pred"][late], dref["y"][late])
 assert ch_quad_late[0] < 0 < ch_quad_late[1], ch_quad_late
 assert d_lo["chronos_weather"] > d_lo["chronos_pm25"]
+# d_dev_order is reported as-is: tabular models use walk-forward folds, while
+# Chronos-2's dev cell is a zero-shot single-block (November 2022–October 2023)
+# report, so the two are not a like-for-like walk-forward ranking.
 d_dev_order = sorted(d_dev, key=d_dev.get)
-assert d_dev_order[0] == "chronos_pm25" and d_dev_order[-1] == "persistence"
+assert len(d_dev_order) == len(dnames)
 # The forest's gain, as a range over its five seeds.
 
 
@@ -489,7 +496,7 @@ md(pd.DataFrame(rows_d))
 - **The 1976 tie breaks.** On `{python} n_ted` test days the untuned forest scores `{python} f"{d_rng['forest'][0]:.1f}"`–`{python} f"{d_rng['forest'][1]:.1f}"` against `{python} f"{d_lo['linear_quad']:.1f}"` for the selected quadratic regression, and the interval on the difference lies wholly above zero on all five seeds of the forest; its lowest lower end is `{python} f"{quad_low:+.2f}"`. The same holds for the lasso and persistence. Chronos-2 is worse than the forest on `{python} worse_on["chronos_pm25"]` seeds of five on PM2.5 alone and on `{python} worse_on["chronos_weather"]` with the weather; on the other seeds the interval's lower end lies between `{python} ch_neg_lo` and `{python} ch_neg_hi`.
 - **The gap is small.** Over its five seeds the forest's error is `{python} gain_quad` below the 1970s route's and `{python} gain_persist` below persistence's. Ten years resolve a difference that one autumn could not; they do not make it large.
 - **Five tree models, two clean ties.** Extra trees (`{python} f"{d_rng['extra_trees'][0]:.1f}"`–`{python} f"{d_rng['extra_trees'][1]:.1f}"`) and quantile boosting (`{python} f"{d_rng['quantile_boost'][0]:.1f}"`–`{python} f"{d_rng['quantile_boost'][1]:.1f}"`) are inside the noise of the untuned forest on all five seeds. The tuned forest (`{python} f"{d_rng['forest_tuned'][0]:.1f}"`–`{python} f"{d_rng['forest_tuned'][1]:.1f}"`, settled on `{python} d_tuned`) and boosting (`{python} f"{d_rng['boosting'][0]:.1f}"`–`{python} f"{d_rng['boosting'][1]:.1f}"`) are worse on two and three seeds, never better. Tuning again bought nothing, and swapping the forest's split rule for extra trees did not either.
-- **Walk-forward CV changes the ranking but does not reproduce the test years.** Out of fold over four November–October years, Chronos-2 is best and persistence is worst; on the test years the untuned forest leads and persistence is still worst. Of the last validation year's `{python} n_dvd` usable days, `{python} dev_smog` fall in November–January and only `{python} dev_feb` in February. The winter months carry most of the test error, so a fold that samples all four winters still does not reproduce the ranking.
+- **Walk-forward CV changes the ranking but does not reproduce the test years.** Out of fold over four November–October years, the tabular models are ranked by mean walk-forward RMSE; Chronos-2's dev cell is a zero-shot single-block (November 2022–October 2023) report rather than walk-forward. On the test years the untuned forest leads and persistence is still worst. Of the last validation year's `{python} n_dvd` usable days, `{python} dev_smog` fall in November–January and only `{python} dev_feb` in February. The winter months carry most of the test error, so a fold that samples all four winters still does not reproduce the ranking.
 - **The intervals are too narrow here as well.** Quantile boosting's nominal 80% interval held the next day's PM2.5 on `{python} f"{d_cover['quantile_boost']:.0%}"` of test days, against `{python} f"{d_cover['chronos_pm25']:.0%}"` for Chronos-2 on PM2.5 alone. Both miss more often than they should in the winter peaks, which is the part of the year an alert would care about.
 - **Chronos-2 matches the 1970s route without being fitted to this record.** It scores `{python} f"{d_lo['chronos_pm25']:.1f}"` on PM2.5 alone against `{python} f"{d_lo['linear_quad']:.1f}"` for the selected regression, a difference inside the noise (`{python} f"{ch_quad[0]:+.1f}"` to `{python} f"{ch_quad[1]:+.1f}"`), and `{python} f"{d_lo['chronos_weather']:.1f}"` with the weather added: the covariates did not help it. Its pretraining data could hold this monitor's earlier years, but the last `{python} n_late` test days, November 2025 to October 2026, came after its release, and on them it scores `{python} f"{late_rmse['chronos_pm25']:.1f}"` against the regression's `{python} f"{late_rmse['linear_quad']:.1f}"`. Its nominal 80% intervals held the next day's PM2.5 on `{python} f"{d_cover['chronos_pm25']:.0%}"` and `{python} f"{d_cover['chronos_weather']:.0%}"` of test days.
 - **Winter carries the error.** For the forest, RMSE is `{python} f"{win_rmse:.0f}"` on forecasts of November–February days and `{python} f"{rest_rmse:.0f}"` on the rest of the year.
