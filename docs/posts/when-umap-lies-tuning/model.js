@@ -10,7 +10,7 @@
  * The experiment (cache/umap_widget): UMAP on 1,000 points of two datasets at
  * n_neighbors x min_dist, three method seeds each. "Local" is k = 10
  * neighbour preservation against the truth; "global" is the Spearman rank
- * correlation of all pairwise distances, map against truth. Every map is
+ * correlation of 50,000 sampled pairwise distances, map against truth. Every map is
  * Procrustes-aligned to the map at (15, 0.1, seed 0) of its dataset.
  */
 "use strict";

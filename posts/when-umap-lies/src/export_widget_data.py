@@ -31,6 +31,7 @@ sys.path.insert(0, str(HERE))
 
 from widgetdata import (  # noqa: E402
     FORMAT,
+    compact,
     encode_embedding,
     encode_labels,
     encode_values,
@@ -533,7 +534,10 @@ def ranking_wins(data: dict) -> dict:
                 continue
             best = max(vals.values())
             wins[(case["key"], mkey)] = sorted(
-                m for m, v in vals.items() if v >= best - data["tie"]
+                # Same test as the widget's model.js best(): tie and 1e-12 slack.
+                m
+                for m, v in vals.items()
+                if v >= best - data["tie"] - 1e-12
             )
     return wins
 
@@ -624,7 +628,9 @@ def ranking_data() -> dict:
         "tie": 0.01,
         "cases": out_cases,
     }
-    return out
+    # Round here, not only in the exporter, so the post's tally (ranking_wins on this
+    # output) and the widget decide ties on the same 4-significant-digit numbers.
+    return compact(out, 4)
 
 
 UMAP_BASES = {"gaussian_clusters": "Gaussian clusters", "swiss_roll": "Swiss roll"}

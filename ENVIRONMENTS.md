@@ -210,9 +210,14 @@ Four things are not obvious:
   neighbours through its `knn_tuple` argument; a test asserts every method beats
   chance on a Swiss roll, so a silently broken backend fails `pytest`.
 - **The experiments run outside the render.** `src/run_experiments.py --all` regenerates
-  every cache file (about four hours on 8 cores); runs resume by cell id, and bumping
+  every cache file (about four hours on 8 cores): the grids, the scaling study, the
+  elephant experiment, and last a `derived` step (`umaplab.derived.run_all`) that
+  writes the graph-fidelity, gap and seed-pair tables from the grids' results. Runs
+  resume by cell id; failed cells are retried on resume, and bumping
   `benchmark.CODE_VERSION` invalidates all of them. Raw downloads (PBMC 3k, MNIST,
-  Fashion-MNIST) go to the git-ignored `data/`; the render never needs them.
+  Fashion-MNIST) go to the git-ignored `data/`; the render never needs them, because
+  the PBMC reference space Part 1 scores against is cached as
+  `cache/elephant/pbmc_reference.npz`.
 - **Quarto hashes `index.qmd` alone**, so new results in `cache/` re-execute nothing.
   Re-render every part that reads a changed experiment.
 - **Widget data are exported from the caches** by `src/export_widget_data.py`, run from

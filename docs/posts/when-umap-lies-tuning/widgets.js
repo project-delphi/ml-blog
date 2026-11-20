@@ -29,7 +29,7 @@
         "dataset, so changing a setting does not spin the picture; alignment changes nothing about a " +
         "map's shape or its scores, and it cannot undo islands that trade places. The panels draw the " +
         "same 600 of the 1,000 points; the tiles score all 1,000. Local = share of each point's 10 true " +
-        "neighbours kept; global = rank correlation of all pairwise distances, map against truth. Truth: " +
+        "neighbours kept; global = rank correlation of 50,000 sampled pairwise distances, map against truth. Truth: " +
         "the 2-D PCA of the clean clusters, or the Swiss roll's unrolled sheet. The heatmaps show the " +
         "median of the three seeds; click a cell to go to that setting."
     });

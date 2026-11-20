@@ -47,7 +47,6 @@ KS = (5, 10, 30, 100)
 DATASET_CACHE_SIZE = 4
 DATASET_CACHE_MB = 512  # per worker; 8 workers x 512 MB stays well inside 16 GB
 FLOAT16_SAFE = 30_000.0  # rescale stored embeddings whose |values| exceed this
-MAX_WORKER_CRASHES = 2  # a cell that kills its worker this often is marked failed
 
 RUN_COLUMNS = [
     "cell_id", "experiment", "generator", "gen_params", "transforms", "D",
@@ -517,6 +516,14 @@ class _Store:
         )
         if not resume:
             self.emb_path.unlink(missing_ok=True)
+        if self.runs is not None:
+            # Failed cells (a download error, a native crash) are retried on resume:
+            # drop their rows so they run again. Infeasible cells stay done.
+            failed = set(self.runs.loc[self.runs.status == "failed", "cell_id"])
+            if failed:
+                self.runs = self.runs[~self.runs.cell_id.isin(failed)]
+                if self.metrics is not None:
+                    self.metrics = self.metrics[~self.metrics.cell_id.isin(failed)]
         self.done: set[str] = set() if self.runs is None else set(self.runs["cell_id"])
         self.new_runs: list[dict] = []
         self.new_metrics: list[dict] = []
@@ -619,7 +626,7 @@ def _crash_row(c: Cell, *, as_input: bool = False) -> dict:
         )  # fmt: skip
     row.update(
         status="failed",
-        error=f"worker process died {MAX_WORKER_CRASHES} times running this cell "
+        error="worker process died running this cell alone "
         "(likely out of memory or a native crash)",
     )
     return row
@@ -643,9 +650,10 @@ def run_grid(
     in this process (for debugging; no thread pinning, no warm-up). Without resume,
     existing result files are replaced.
 
-    A worker that dies (out of memory, segfault) breaks the pool. The pool is rebuilt,
-    the unfinished cells of the tasks that were in flight are resubmitted one per
-    task, and a cell in flight for ``MAX_WORKER_CRASHES`` crashes is recorded failed.
+    A worker that dies (out of memory, segfault) breaks the pool, so every cell in
+    flight is only a suspect. The pool is rebuilt for the rest of the queue; the
+    suspects then run one at a time in a one-worker pool, and only a cell that kills
+    its worker there is recorded failed. Failed rows are retried on the next resume.
     """
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -657,10 +665,17 @@ def run_grid(
                 _collect(store, _run_task(task, warm=False), flush_every)
             return
         E.set_thread_env(1)
-        strikes: dict[str, int] = {}
         ctx = get_context("spawn")
+        suspects: list[_Task] = []
         while queue:
-            queue = _run_pool(queue, n_workers, ctx, store, strikes, flush_every)
+            queue, crashed = _run_pool(queue, n_workers, ctx, store, flush_every)
+            suspects += crashed
+        # A crash breaks the whole pool, so every task in flight is only a suspect.
+        # Rerun suspects one at a time: a crash there is the cell's own.
+        for task in suspects:
+            _, crashed = _run_pool([task], 1, ctx, store, flush_every)
+            for t in crashed:
+                _record_crash(t, store)
     finally:
         store.flush()
 
@@ -680,10 +695,13 @@ def _run_pool(
     n_workers: int,
     ctx: Any,
     store: _Store,
-    strikes: dict[str, int],
     flush_every: int,
-) -> list[_Task]:
-    """Run the queue in one pool; return the tasks still to run if the pool broke."""
+) -> tuple[list[_Task], list[_Task]]:
+    """Run the queue in one pool.
+
+    Returns (tasks not yet started, suspects): when the pool breaks, the unfinished
+    cells of every task in flight come back as one-cell suspect tasks.
+    """
     queue = list(queue)
     retry: list[_Task] = []
     inflight: dict[Future, _Task] = {}
@@ -710,33 +728,27 @@ def _run_pool(
                     _collect(store, fut.result(), flush_every)
                 except BrokenProcessPool:
                     broken = True
-                    retry += _after_crash(task, store, strikes)
+                    retry += _split_unfinished(task, store)
                 except Exception as exc:  # noqa: BLE001 - e.g. an unpicklable result
                     for c in task.cells:
                         row = _base_row(c)
                         row.update(status="failed", error=_error_text(exc))
                         store.add(row, [], None)
-    return retry + queue
+    return queue, retry
 
 
-def _after_crash(task: _Task, store: _Store, strikes: dict[str, int]) -> list[_Task]:
-    """Strike each unfinished cell of a crashed task; resubmit survivors singly."""
-    retry: list[_Task] = []
-    for c in task.cells:
-        cid = cell_id(c)
-        if cid in store.done:
-            continue
-        strikes[cid] = strikes.get(cid, 0) + 1
-        if strikes[cid] >= MAX_WORKER_CRASHES:
-            store.add(_crash_row(c), [], None)
-        else:
-            retry.append(_Task((c,)))
+def _split_unfinished(task: _Task, store: _Store) -> list[_Task]:
+    """The unfinished cells of a task that was in flight when the pool broke."""
+    out: list[_Task] = [_Task((c,)) for c in task.cells if cell_id(c) not in store.done]
     c = task.input_cell
     if c is not None and input_cell_id(c) not in store.done:
-        iid = input_cell_id(c)
-        strikes[iid] = strikes.get(iid, 0) + 1
-        if strikes[iid] >= MAX_WORKER_CRASHES:
-            store.add(_crash_row(c, as_input=True), [], None)
-        else:
-            retry.append(_Task((), c))
-    return retry
+        out.append(_Task((), c))
+    return out
+
+
+def _record_crash(task: _Task, store: _Store) -> None:
+    """A one-cell task that killed its worker when running alone: record it failed."""
+    for c in task.cells:
+        store.add(_crash_row(c), [], None)
+    if task.input_cell is not None:
+        store.add(_crash_row(task.input_cell, as_input=True), [], None)

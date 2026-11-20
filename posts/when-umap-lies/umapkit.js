@@ -423,6 +423,10 @@ var UK = (function () {
       var regroup = !S.groups || !same && !!S.xy && d.xy.length !== S.xy.length;
       if (d.classes) { S.classes = d.classes; S.counts = d.counts || null; S.pinned = null; S.hi = null; S.values = null; regroup = true; }
       if (d.labels) { S.labels = d.labels; regroup = true; }
+      if (S.labels && S.labels.length !== S.n) {
+        throw new Error("UK.scatter.set: " + S.n + " points but " + S.labels.length +
+          " labels; pass labels whenever the point count changes");
+      }
       if (d.values !== undefined) {
         S.values = d.values; S.vrange = d.values ? (d.valueRange || valueRange(d.values)) : null; regroup = true;
       }

@@ -180,9 +180,12 @@
         "most wins on " + label + ": " + tiedTop.map(name).join(", ");
       tileMetric.root.querySelector(".widget-note").textContent =
         t.shared + " of the " + t.cases + " cases are shared wins";
+      var tiedAll = M.ranked(R, a.wins).filter(function (m) { return a.wins[m] === a.wins[topAll]; });
       tileAll.set(String(a.wins[topAll]) + " of " + a.pairs);
-      tileAll.root.querySelector(".widget-stat-label").textContent = "most wins over all pairs: " + name(topAll);
-      tileAll.root.querySelector(".widget-note").textContent = a.alone[topAll] + " of them not shared; " +
+      tileAll.root.querySelector(".widget-stat-label").textContent =
+        "most wins over all pairs: " + tiedAll.map(name).join(", ");
+      tileAll.root.querySelector(".widget-note").textContent =
+        (tiedAll.length === 1 ? a.alone[topAll] + " of them not shared; " : "") +
         a.shared + " of the " + a.pairs + " pairs are shared wins";
     }
 

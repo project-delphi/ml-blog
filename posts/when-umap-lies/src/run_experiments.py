@@ -111,6 +111,23 @@ def run_elephant(out: Path) -> None:
         layouts[f"{name}/labels"] = ds.labels.astype(np.int16)
     pd.concat(frames).to_parquet(out / "scores.parquet", index=False)
     np.savez_compressed(out / "layouts.npz", **layouts)
+    save_pbmc_reference(data["pbmc3k"], out)
+
+
+def save_pbmc_reference(ds, out: Path) -> None:
+    """The PBMC reference space Part 1 scores against, so its render needs no download.
+
+    The 50-PC matrix, the labels and the label names, as preprocessed by
+    ``umaplab.realdata.load_pbmc3k``.
+    """
+    import numpy as np
+
+    np.savez_compressed(
+        out / "pbmc_reference.npz",
+        X=ds.X.astype(np.float32),
+        labels=ds.labels.astype(np.int16),
+        label_names=np.array(ds.meta["label_names"]),
+    )
 
 
 def main() -> None:
@@ -126,9 +143,17 @@ def main() -> None:
             print(f"{name:15s} {len(fn()):5d} cells")
         print(f"{'scaling':15s} {len(E.scaling_grid()):5d} fits")
         return
-    names = list(E.EXPERIMENTS) + ["scaling", "elephant"] if args.all else args.names
+    # "derived" reads the grids' caches, so it runs last.
+    everything = list(E.EXPERIMENTS) + ["scaling", "elephant", "derived"]
+    names = everything if args.all else args.names
     for name in names:
         t0 = time.perf_counter()
+        if name == "derived":
+            from umaplab.derived import run_all
+
+            run_all()
+            print(f"{name}: done in {time.perf_counter() - t0:.0f}s", flush=True)
+            continue
         if name == "scaling":
             run_scaling(CACHE / "scaling.parquet", max(1, args.workers // 2))
         elif name == "elephant":

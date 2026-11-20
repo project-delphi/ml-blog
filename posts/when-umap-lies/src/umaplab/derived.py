@@ -228,10 +228,17 @@ def seed_pairs(exp: str = "stability") -> pd.DataFrame:
 
 
 def run_all() -> None:
-    """Write cache/<exp>/graph_fidelity.parquet for the noise experiments."""
-    for exp in ("noise_dims", "noise_sigma", "isometry"):
-        if (CACHE / exp / "runs.parquet").exists():
-            graph_fidelity(exp).to_parquet(
-                CACHE / exp / "graph_fidelity.parquet", index=False
-            )
-    overlap_gaps().to_parquet(CACHE / "overlap" / "gaps.parquet", index=False)
+    """Write every derived table the posts read, from the cached experiment results.
+
+    - cache/noise_dims|noise_sigma/graph_fidelity.parquet (Part 2)
+    - cache/overlap/gaps.parquet (Part 4)
+    - cache/stability/seed_pairs.parquet (Part 3)
+    """
+    for exp in ("noise_dims", "noise_sigma"):
+        graph_fidelity(exp).to_parquet(
+            CACHE / exp / "graph_fidelity.parquet", index=False
+        )
+    overlap_gaps(8).to_parquet(CACHE / "overlap" / "gaps.parquet", index=False)
+    seed_pairs("stability").to_parquet(
+        CACHE / "stability" / "seed_pairs.parquet", index=False
+    )

@@ -190,10 +190,18 @@ def test_grid_end_to_end_with_resume(tmp_path: Path) -> None:
             npz[k].dtype == np.float16 and npz[k].shape == (200, 2) for k in kept
         )
 
-    stamp = {p.name: p.stat().st_mtime_ns for p in tmp_path.iterdir()}
+    # Resume reruns only the failed cell (failures are retried); ok rows are kept
+    # as they were, and nothing is duplicated.
+    ok_before = runs[runs["status"] == "ok"].set_index("cell_id")["seconds"]
     B.run_grid(cells, tmp_path, n_workers=2)
-    assert {p.name: p.stat().st_mtime_ns for p in tmp_path.iterdir()} == stamp
-    assert len(pd.read_parquet(tmp_path / "runs.parquet")) == len(runs)
+    after = pd.read_parquet(tmp_path / "runs.parquet")
+    assert len(after) == len(runs) and after["cell_id"].is_unique
+    ok_after = after[after["status"] == "ok"].set_index("cell_id")["seconds"]
+    pd.testing.assert_series_equal(ok_before.sort_index(), ok_after.sort_index())
+    assert (
+        after.loc[after["cell_id"] == bad["cell_id"].iloc[0], "status"].item()
+        == "failed"
+    )
 
 
 def test_grid_survives_a_failing_method(
@@ -220,19 +228,33 @@ def test_grid_survives_a_failing_method(
     assert grid["error"].str.contains("umap exploded").sum() == 3
 
 
-def test_worker_crash_strikes(tmp_path: Path) -> None:
-    """A crashed task's cells are retried singly, then failed after repeated crashes."""
+def test_worker_crash_suspects_split_singly(tmp_path: Path) -> None:
+    """A crashed task's unfinished cells become one-cell suspects, none failed yet."""
     store = B._Store(tmp_path, resume=False)
-    strikes: dict[str, int] = {}
     a, b = _cell(D=5), _cell(D=10)
     task = B._Task((a, b), a)
-    retry = B._after_crash(task, store, strikes)
-    assert [t.cells for t in retry] == [(a,), (b,), ()]
-    assert retry[2].input_cell == a
-    for t in retry:
-        assert B._after_crash(t, store, strikes) == []
-    assert {B.cell_id(a), B.cell_id(b), B.input_cell_id(a)} <= store.done
+    suspects = B._split_unfinished(task, store)
+    assert [t.cells for t in suspects] == [(a,), (b,), ()]
+    assert suspects[2].input_cell == a
+    assert store.new_runs == []  # being in flight during a crash is not a failure
+
+
+def test_crash_alone_is_recorded_failed(tmp_path: Path) -> None:
+    store = B._Store(tmp_path, resume=False)
+    a = _cell(D=5)
+    B._record_crash(B._Task((a,)), store)
+    B._record_crash(B._Task((), a), store)
+    assert {B.cell_id(a), B.input_cell_id(a)} <= store.done
     assert all(r["status"] == "failed" for r in store.new_runs)
+
+
+def test_failed_rows_are_retried_on_resume(tmp_path: Path) -> None:
+    store = B._Store(tmp_path, resume=False)
+    a = _cell(D=5)
+    B._record_crash(B._Task((a,)), store)
+    store.flush()
+    again = B._Store(tmp_path, resume=True)
+    assert B.cell_id(a) not in again.done
 
 
 def test_dataset_cache_is_a_bounded_lru() -> None:

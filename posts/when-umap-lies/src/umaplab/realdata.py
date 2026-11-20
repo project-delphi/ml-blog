@@ -138,7 +138,11 @@ def load_openml_images(
         import urllib.request
 
         data_dir.mkdir(parents=True, exist_ok=True)
-        urllib.request.urlretrieve(openml_parquet_url(data_id), path)
+        # Download beside the target and move into place, so an interrupted download
+        # never leaves a truncated file that later runs would trust.
+        part = path.with_suffix(".part")
+        urllib.request.urlretrieve(openml_parquet_url(data_id), part)
+        part.replace(path)
     frame = pd.read_parquet(path)
     X_all = frame.drop(columns="class").to_numpy(dtype=np.float64) / 255.0
     y_all = frame["class"].astype(int).to_numpy()
