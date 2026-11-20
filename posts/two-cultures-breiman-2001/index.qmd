@@ -1,12 +1,12 @@
 ---
 title: "The Two Cultures, Part 1: Two Ways to Fill a Black Box"
 subtitle: "Breiman's 2001 argument, his ozone project re-run on the 1976 Los Angeles record and on ten years of New Delhi PM2.5, and when a goodness-of-fit test sees what a forest can use"
-description: "Leo Breiman's Statistical Modeling: The Two Cultures (2001) said statistics validated its models by the wrong test. The paper's two goals and two cultures, the consulting projects behind them, the ozone forecast re-run on public 1976 data with the lasso, gradient boosting and Chronos-2 added, the same comparison on ten years of New Delhi PM2.5, and a goodness-of-fit simulation on real meteorology whose verdict depends on the shape of the nonlinearity."
+description: "Leo Breiman's Statistical Modeling: The Two Cultures (2001) said statistics validated its models by the wrong test. The paper's two goals and two cultures, the consulting projects behind them, the ozone forecast re-run on public 1976 data with the lasso, gradient boosting, extra trees, quantile boosting and Chronos-2 added and settings chosen by walk-forward validation, the same comparison on ten years of New Delhi PM2.5, and a goodness-of-fit simulation on real meteorology whose verdict depends on the shape of the nonlinearity."
 author: "Ravi Kalia"
 date: "2026-11-18T10:00:00"
 categories: [Statistics, Machine Learning, Reading]
 image: "./cover.png"
-tags: [Breiman, two cultures, data modeling, algorithmic modeling, random forests, goodness of fit, RESET test, ozone, prediction, reproduction, gradient boosting, lasso, Chronos-2, time-series foundation models, PM2.5, Delhi, air quality]
+tags: [Breiman, two cultures, data modeling, algorithmic modeling, random forests, extra trees, quantile boosting, walk-forward validation, goodness of fit, RESET test, ozone, prediction, reproduction, gradient boosting, lasso, Chronos-2, time-series foundation models, PM2.5, Delhi, air quality]
 jupyter: two-cultures-blog
 resources:
   - widgets.js
@@ -218,13 +218,15 @@ Both forecasts track the autumn decline and both fall short of the highest peaks
 
 ### Models the paper does not run {#sec-ozone-modern}
 
-In 2001 the forest was the newest tool in the comparison. Three kinds of model that the paper does not run are now standard first tries for a forecast like this one. The lasso and gradient boosting were published within five years of the paper, Chronos-2 in 2025.
+In 2001 the forest was the newest tool in the comparison. Five kinds of model that the paper does not run are now standard first tries for a forecast like this one. The lasso and gradient boosting were published within five years of the paper, Chronos-2 in 2025.
 
 - **Lasso** (Tibshirani 1996): a linear regression on all 30 candidates whose coefficients are shrunk toward zero, many of them to zero. It selects variables in one fit, where the 1970s route searched.
 - **Gradient boosting** (Friedman 2001): a sum of small trees, each fitted to the errors left by the trees before it. The version here is scikit-learn's `HistGradientBoostingRegressor`, which bins every input before searching for splits, the method LightGBM made standard (Ke et al. 2017).
+- **Extra trees** (Geurts et al. 2006): a forest that randomises the split point as well as the columns tried, so its trees are less correlated. It uses the same 500 trees and the same grid as the tuned forest.
+- **Quantile boosting**: three histogram gradient boosters fitted to the 10th, 50th and 90th percentiles. The median is the point forecast; the outer pair is a predictive interval. It reads the same 30 columns.
 - **Chronos-2** (Ansari et al. 2025): a transformer pretrained on a large collection of time series, which forecasts a new series from its own history with no training on it. It runs twice: on the ozone record alone, and with the eight meteorological series as covariates and the next day's weekend flag as a known future input. A forecast made on day $t$ sees every day from 1 January to day $t$, gaps included; the trained models choose their inputs from days $t$, $t-1$ and $t-2$.
 
-Tuning needs data that the test months do not touch, so the training months are split again by forecast day.
+Tuning needs data that the test months do not touch, so the settings are chosen by walk-forward validation inside January–August. Three expanding-window folds validate March–April, May–June and July–August in turn; each trains on every earlier day with a three-day embargo at the edge (two lag days and the next-day target). The mean fold RMSE picks the settings, and the chosen model is refit on all of January–August before the test months are scored.
 
 ```{python}
 #| label: ozone-modern-split
@@ -234,15 +236,15 @@ tr_m, dv_m, _ = modern.masks(df)
 n_trm, n_dev = int(tr_m.sum()), int(dv_m.sum())
 ```
 
-- **Train.** Pairs made January–June (`{python} n_trm` day pairs).
-- **Dev.** Pairs made July–August (`{python} n_dev`). The lasso's penalty, the forest's split and leaf settings, and boosting's learning rate, tree size, leaf size, penalty and number of trees are each chosen by dev RMSE from a fixed grid (`twocultures/modern.py`).
+- **Selection data.** Pairs made January–August (`{python} n_trm + n_dev` day pairs). The lasso's penalty, the forests' split and leaf settings, boosting's learning rate, tree size, leaf size, penalty and number of trees, extra trees' settings and quantile boosting's settings are each chosen by mean walk-forward RMSE from a fixed grid (`twocultures/modern.py`).
 - **Test.** September–December, as before. Every tuned model is refit on January–August before it is scored.
-- **Chronos-2 is not tuned or trained**, so its dev score is a report, not a choice.
-- **Uncertainty.** The forest, the tuned forest and boosting run with five seeds. The interval on each model's test RMSE minus the untuned forest's is a 95% circular moving-block bootstrap: 4,000 resamples of runs of seven consecutive test forecasts, a precaution in case errors persist from one day to the next. Days with missing data are already out of the design, so a run can span more than a week.
+- **CV RMSE.** Each model's out-of-fold predictions cover the three validation blocks; the table reports their RMSE. Settings were chosen on those folds, so this column is in-sample for the grid search, not a fresh test.
+- **Chronos-2 is not tuned or trained**, so its CV score is a report, not a choice.
+- **Uncertainty.** The forest, the tuned forest, boosting, extra trees and quantile boosting run with five seeds. The interval on each model's test RMSE minus the untuned forest's is a 95% circular moving-block bootstrap: 4,000 resamples of runs of seven consecutive test forecasts, a precaution in case errors persist from one day to the next. Days with missing data are already out of the design, so a run can span more than a week.
 
 ```{python}
 #| label: tbl-ozone-modern
-#| tbl-cap: "Next-day ozone, tuned on July–August and scored on September–December, in the data's units. Test RMSE is the range over five seeds for the seeded models. The interval is on test RMSE minus the untuned forest's; below zero means better than the forest. Dev RMSE, the interval and the alert columns are for seed 0."
+#| tbl-cap: "Next-day ozone, settings chosen by walk-forward CV on January–August and scored on September–December, in the data's units. CV RMSE is out-of-fold over the three validation blocks. Test RMSE is the range over five seeds for the seeded models. The interval is on test RMSE minus the untuned forest's; below zero means better than the forest. CV RMSE, the interval and the alert columns are for seed 0."
 mod = pd.concat([cache.frame(modern.CACHE_TAG, modern.run), modern.chronos()],
                 ignore_index=True)
 mod["y"] = df["target"].loc[mod["doy"]].to_numpy()
@@ -260,6 +262,7 @@ names = {"persistence": "Persistence (today's ozone)",
          "linear_quad": "Linear, selected + squares and products",
          "forest": "Random forest, untuned", "lasso": "Lasso",
          "forest_tuned": "Random forest, tuned", "boosting": "Gradient boosting",
+         "extra_trees": "Extra trees", "quantile_boost": "Quantile boosting",
          "chronos_ozone": "Chronos-2, ozone only",
          "chronos_weather": "Chronos-2, ozone + meteorology"}
 ref = pick("forest", "test")
@@ -275,7 +278,7 @@ for key, label in names.items():
     ci[key] = modern.block_bootstrap(t["pred"], ref["pred"], t["y"])
     s = ozone.scores(t["pred"].to_numpy(), t["y"].to_numpy())
     rows_m.append({
-        "Model": label, "Dev RMSE": f"{dev_rmse[key]:.2f}",
+        "Model": label, "CV RMSE": f"{dev_rmse[key]:.2f}",
         "Test RMSE": (f"{r[0]:.2f}" if len(r) == 1 else f"{min(r):.2f}–{max(r):.2f}"),
         "Test − forest, 95% interval": ("—" if key == "forest"
                                          else f"{ci[key][0]:+.2f} to {ci[key][1]:+.2f}"),
@@ -283,40 +286,41 @@ for key, label in names.items():
         "False alarms": s["false_alarms"]})
 
 dev_order = sorted(dev_rmse, key=dev_rmse.get)
-trained = ["linear_quad", "forest", "lasso", "forest_tuned", "boosting"]
+trained = ["linear_quad", "forest", "lasso", "forest_tuned", "boosting", "extra_trees", "quantile_boost"]
 worse_than_forest = [k for k in names if k != "forest" and ci[k][0] > 0]
 assert worse_than_forest == ["persistence"]
 assert not any(ci[k][1] < 0 for k in names if k != "forest")
 # The same verdict seed by seed: each seeded model against the forest of that seed.
-for k in ["forest_tuned", "boosting"]:
+for k in ["forest_tuned", "boosting", "extra_trees", "quantile_boost"]:
     for s in modern.SEEDS:
         a, b = pick(k, "test", s), pick("forest", "test", s)
         lo_s, hi_s = modern.block_bootstrap(a["pred"], b["pred"], a["y"])
         assert lo_s < 0 < hi_s, (k, s, lo_s, hi_s)
-assert dev_order[0] == "persistence" and set(dev_order[1:3]) == {"chronos_ozone", "chronos_weather"}
+assert dev_order[0] == "chronos_ozone" and set(dev_order[1:3]) == {"persistence", "chronos_weather"}
 lo = {k: v[0] for k, v in test_rng.items()}
-assert min(lo, key=lo.get) == "boosting" and max(lo, key=lo.get) == "persistence"
-assert lo["forest"] < lo["lasso"] < lo["linear_quad"]
-assert min(lo["chronos_ozone"], lo["chronos_weather"]) > max(lo[k] for k in trained)
+assert min(lo, key=lo.get) == "quantile_boost" and max(lo, key=lo.get) == "persistence"
+assert lo["forest"] < lo["linear_quad"] < lo["lasso"]
+assert min(lo["chronos_ozone"], lo["chronos_weather"]) > max(lo[k] for k in trained if k != "quantile_boost")
 tuned_mf = pick("forest_tuned", "test")["params"].iloc[0]
 assert tuned_mf.startswith("max_features=1.0,")
 assert all(r["False alarms"] > 0 for r in rows_m)
 cover = {k: float(((pick(k, "test")["q10"] <= pick(k, "test")["y"])
                    & (pick(k, "test")["y"] <= pick(k, "test")["q90"])).mean())
-         for k in ["chronos_ozone", "chronos_weather"]}
+         for k in ["quantile_boost", "chronos_ozone", "chronos_weather"]}
 # The equal average dropped from the table (see Constraints); seed 0 of each part.
 avg = np.mean([pick(k, "test")["pred"].to_numpy()
                for k in ["forest_tuned", "boosting", "chronos_weather"]], axis=0)
 avg_rmse = modern.rmse(avg, ref["y"])
-assert test_rng["boosting"][0] <= avg_rmse <= test_rng["forest"][1]
+assert test_rng["forest"][0] <= avg_rmse <= test_rng["quantile_boost"][1]
 md(pd.DataFrame(rows_m))
 ```
 
-- **No model separates from the untuned forest on the test months.** Only persistence's interval lies wholly above zero; every other interval includes zero, and for the tuned forest and boosting it does so on all five seeds. Boosting has the lowest error in the table, `{python} f"{test_rng['boosting'][0]:.2f}"`–`{python} f"{test_rng['boosting'][1]:.2f}"` over five seeds, against `{python} f"{test_rng['forest'][0]:.2f}"`–`{python} f"{test_rng['forest'][1]:.2f}"` for the forest.
-- **The lasso does as well as the 1970s search, in one fit.** It scores `{python} f"{test_rng['lasso'][0]:.2f}"`, between the forest and the selected quadratic regression (`{python} f"{test_rng['linear_quad'][0]:.2f}"`).
-- **Tuning bought nothing.** The tuned forest settled on `{python} tuned_mf` and scored `{python} f"{test_rng['forest_tuned'][0]:.2f}"`–`{python} f"{test_rng['forest_tuned'][1]:.2f}"`. With `max_features=1.0` it tries every column at every split, which makes it bagged trees rather than a forest.
-- **The dev months rank the models almost in reverse.** On July–August persistence is best (`{python} f"{dev_rmse['persistence']:.2f}"`), the two Chronos-2 runs come next, and every trained model is worse than all three. On the test months persistence is last. A dev set drawn from summer is a poor sample of autumn, the same limit Hoadley raises against test sets in @sec-accuracy.
-- **Chronos-2, with no training on this record, lands between persistence and the trained models.** It brings the error from `{python} f"{rmse['persist']:.2f}"` to `{python} f"{test_rng['chronos_ozone'][0]:.2f}"` on ozone alone and to `{python} f"{test_rng['chronos_weather'][0]:.2f}"` with the meteorology. It is also the only model here that gives a forecast interval: its nominal 80% intervals held the next day's ozone on `{python} f"{cover['chronos_ozone']:.0%}"` of test days on ozone alone and `{python} f"{cover['chronos_weather']:.0%}"` with the meteorology.
+- **No model separates from the untuned forest on the test months.** Only persistence's interval lies wholly above zero; every other interval includes zero, and for the tuned forest, boosting, extra trees and quantile boosting it does so on all five seeds. Boosting scores `{python} f"{test_rng['boosting'][0]:.2f}"`–`{python} f"{test_rng['boosting'][1]:.2f}"` over five seeds, extra trees `{python} f"{test_rng['extra_trees'][0]:.2f}"`–`{python} f"{test_rng['extra_trees'][1]:.2f}"`, and the forest `{python} f"{test_rng['forest'][0]:.2f}"`–`{python} f"{test_rng['forest'][1]:.2f}"`. The extra trees are the easier win: the same 500 trees with the split points randomised and no tuning beyond the same grid.
+- **The lasso is close to the 1970s search, in one fit.** It scores `{python} f"{test_rng['lasso'][0]:.2f}"`, against `{python} f"{test_rng['linear_quad'][0]:.2f}"` for the selected quadratic regression.
+- **Tuning still buys nothing.** The tuned forest settled on `{python} tuned_mf` and scored `{python} f"{test_rng['forest_tuned'][0]:.2f}"`–`{python} f"{test_rng['forest_tuned'][1]:.2f}"`, a little worse than the untuned forest. With `max_features=1.0` it tries every column at every split, which makes it bagged trees rather than a forest. Walk-forward selection chose this on `{python} n_trm + n_dev` days, and it did not carry over.
+- **Quantile boosting gives intervals that miss far too often.** Its median scores `{python} f"{test_rng['quantile_boost'][0]:.2f}"`–`{python} f"{test_rng['quantile_boost'][1]:.2f}"`, in the tie, but its nominal 80% interval held the next day's ozone on only `{python} f"{cover['quantile_boost']:.0%}"` of test days, against `{python} f"{cover['chronos_ozone']:.0%}"` for Chronos-2 on ozone alone. A narrower interval is cheap; a calibrated one is the hard part.
+- **Walk-forward CV still ranks the models unlike the test months.** Out of fold over March–August, Chronos-2 on ozone alone is best (`{python} f"{dev_rmse['chronos_ozone']:.2f}"`) and persistence is second (`{python} f"{dev_rmse['persistence']:.2f}"`), with every trained model worse. On the test months persistence is last. This is not one summer dev set any more, but the folds still look forward from spring into summer, the same limit Hoadley raises against test sets in @sec-accuracy.
+- **Chronos-2 is now worse than every trained model.** With no training on this record it scores `{python} f"{test_rng['chronos_ozone'][0]:.2f}"` on ozone alone and `{python} f"{test_rng['chronos_weather'][0]:.2f}"` with the meteorology, against `{python} f"{test_rng['forest'][0]:.2f}"` for the forest. Its intervals held on `{python} f"{cover['chronos_ozone']:.0%}"` and `{python} f"{cover['chronos_weather']:.0%}"` of test days.
 - **Alerts still cannot rank them.** The test months hold `{python} alert_te` alert days, and every model issued false alarms.
 
 On `{python} n_te` autumn days the gap between a selected regression and a model that assumes nothing cannot be resolved, and the models now standard for the job do not resolve it either.
@@ -358,14 +362,14 @@ The design copies @sec-ozone and @sec-ozone-modern; only these points differ.
 
 - **Target and alert.** Day $t+1$'s 24-hour mean PM2.5. An alert is a forecast of 250 or more, the Severe band, which `{python} f"{sev_tr / (n_trd + n_dvd):.0%}"` of the training and dev day pairs reach.
 - **Predictors.** Days $t$, $t-1$ and $t-2$ of PM2.5 and the eight weather readings (27 columns), plus season and whether day $t+1$ is a weekend: 30 candidates, as for ozone.
-- **Split.** By the day the forecast is made. Train: November 2016 to October 2022 (`{python} f"{n_trd:,}"` day pairs). Dev: November 2022 to October 2023 (`{python} n_dvd`). Test: November 2023 to October 2026 (`{python} n_ted`), three winters whose day pairs include `{python} sev_te` Severe days. As in the project, the split is by time and every season appears on both sides of it.
+- **Split.** By the day the forecast is made. The test period is November 2023 to October 2026 (`{python} n_ted` day pairs), three winters whose day pairs include `{python} sev_te` Severe days. Settings are chosen on the earlier years by expanding-window walk-forward CV: four validation blocks, each a November–October year from 2019–20 to 2022–23, with a three-day embargo at each edge. The chosen model is refit on all `{python} f"{n_trd + n_dvd:,}"` pre-test day pairs before scoring. As in the project, the split is by time and every season appears on both sides of it.
 - **Chronos-2** sees the daily record from 1 November 2016 to day $t$, gaps included, once on PM2.5 alone and once with the eight weather series as covariates.
 
 ### Result {#sec-delhi-result}
 
 ```{python}
 #| label: tbl-delhi
-#| tbl-cap: "Next-day PM2.5 in New Delhi, tuned on November 2022 – October 2023 and scored on November 2023 – October 2026, in µg/m³. An alert is a forecast of 250 or more. Test RMSE is the range over five seeds for the seeded models. The interval is on test RMSE minus the untuned forest's; above zero means worse than the forest. Dev RMSE, the interval and the alert columns are for seed 0."
+#| tbl-cap: "Next-day PM2.5 in New Delhi, settings chosen by walk-forward CV on the years before November 2023 and scored on November 2023 – October 2026, in µg/m³. CV RMSE is out-of-fold over the four November–October validation years. An alert is a forecast of 250 or more. Test RMSE is the range over five seeds for the seeded models. The interval is on test RMSE minus the untuned forest's; above zero means worse than the forest. CV RMSE, the interval and the alert columns are for seed 0."
 dmod = pd.concat([cache.frame(delhi.CACHE_TAG, delhi.run), delhi.chronos()],
                  ignore_index=True)
 dmod["y"] = yd.loc[dmod["day"]].to_numpy()
@@ -391,14 +395,14 @@ for key, label in dnames.items():
     d_ci[key] = modern.block_bootstrap(t["pred"], dref["pred"], t["y"])
     d_sc[key] = ozone.scores(t["pred"].to_numpy(), t["y"].to_numpy(), alert=delhi.ALERT)
     rows_d.append({
-        "Model": label, "Dev RMSE": f"{d_dev[key]:.1f}",
+        "Model": label, "CV RMSE": f"{d_dev[key]:.1f}",
         "Test RMSE": (f"{r[0]:.1f}" if len(r) == 1 else f"{min(r):.1f}–{max(r):.1f}"),
         "Test − forest, 95% interval": ("—" if key == "forest"
                                          else f"{d_ci[key][0]:+.1f} to {d_ci[key][1]:+.1f}"),
         "Alerts issued": d_sc[key]["alerts_issued"], "Hits": d_sc[key]["hits"],
         "False alarms": d_sc[key]["false_alarms"]})
 
-trees = ["forest", "forest_tuned", "boosting"]
+trees = ["forest", "forest_tuned", "boosting", "extra_trees", "quantile_boost"]
 others = [k for k in dnames if k not in trees]
 # Lower ends of each other model's interval against the forest, one per forest seed.
 lows = {k: [modern.block_bootstrap(dpick(k, "test")["pred"],
@@ -406,16 +410,17 @@ lows = {k: [modern.block_bootstrap(dpick(k, "test")["pred"],
             for s in modern.SEEDS] for k in others}
 worse_on = {k: sum(lo > 0 for lo in v) for k, v in lows.items()}
 assert all(worse_on[k] == 5 for k in ["persistence", "linear_quad", "lasso"]), worse_on
-assert all(1 <= worse_on[k] < 5 for k in ["chronos_pm25", "chronos_weather"]), worse_on
+assert all(3 <= worse_on[k] < 5 for k in ["chronos_pm25", "chronos_weather"]), worse_on
 quad_low = min(lows["linear_quad"])
 ch_neg = [lo for k in ["chronos_pm25", "chronos_weather"] for lo in lows[k] if lo <= 0]
 ch_neg_lo, ch_neg_hi = (f"{x:+.2f}".replace("-0.00", "0.00") for x in (min(ch_neg), max(ch_neg)))
-assert all(d_ci[k][0] > 0 for k in others)
-# The tuned forest and boosting tie with the forest on at least four seeds of five.
-for k in ["forest_tuned", "boosting"]:
+assert all(d_ci[k][0] > 0 for k in ["persistence", "linear_quad", "lasso", "chronos_pm25", "chronos_weather"])
+# Extra trees and quantile boosting tie on all five seeds; the tuned forest and
+# boosting are worse on some seeds but never better.
+for k, expected in [("forest_tuned", 3), ("boosting", 2), ("extra_trees", 5), ("quantile_boost", 5)]:
     ties = [modern.block_bootstrap(dpick(k, "test", s)["pred"], dpick("forest", "test", s)["pred"],
                                    dref["y"]) for s in modern.SEEDS]
-    assert sum(lo < 0 < hi for lo, hi in ties) >= 4, (k, ties)
+    assert sum(lo < 0 < hi for lo, hi in ties) == expected, (k, ties)
     assert not any(hi < 0 for _, hi in ties)
 d_lo = {k: v[0] for k, v in d_rng.items()}
 assert max(d_lo, key=d_lo.get) == "persistence"
@@ -434,7 +439,7 @@ ch_quad_late = modern.block_bootstrap(dpick("chronos_pm25", "test")["pred"][late
 assert ch_quad_late[0] < 0 < ch_quad_late[1], ch_quad_late
 assert d_lo["chronos_weather"] > d_lo["chronos_pm25"]
 d_dev_order = sorted(d_dev, key=d_dev.get)
-assert d_dev_order[0] == "boosting" and d_dev_order[-1] == "persistence"
+assert d_dev_order[0] == "chronos_pm25" and d_dev_order[-1] == "persistence"
 # The forest's gain, as a range over its five seeds.
 
 
@@ -463,7 +468,7 @@ sev_obs = float(np.median(dref["y"].to_numpy()[sev_mask]))
 sev_rf = float(np.median(dref["pred"].to_numpy()[sev_mask]))
 d_cover = {k: float(((dpick(k, "test")["q10"] <= dpick(k, "test")["y"])
                      & (dpick(k, "test")["y"] <= dpick(k, "test")["q90"])).mean())
-           for k in ["chronos_pm25", "chronos_weather"]}
+           for k in ["quantile_boost", "chronos_pm25", "chronos_weather"]}
 win = np.isin(delhi.dates(dref["day"].to_numpy() + 1).month, [11, 12, 1, 2])
 err2 = (dref["pred"].to_numpy() - dref["y"].to_numpy()) ** 2
 assert err2[win].sum() / err2.sum() > 0.5  # winter carries most of the squared error
@@ -471,7 +476,7 @@ win_rmse = modern.rmse(dref["pred"][win], dref["y"][win])
 rest_rmse = modern.rmse(dref["pred"][~win], dref["y"][~win])
 d_tuned = dpick("forest_tuned", "test")["params"].iloc[0]
 d_boost = dpick("boosting", "test")["params"].iloc[0]
-assert all(e in d_boost for e in ["learning_rate=0.03", "max_leaf_nodes=16", "min_samples_leaf=20"])
+assert all(e in d_boost for e in ["learning_rate=0.1", "max_leaf_nodes=8", "min_samples_leaf=10", "max_iter=100"])
 r_today = float(np.corrcoef(dref["pred"], ddf["pm25_lag0"].loc[dref["day"]])[0, 1])
 r_next = float(np.corrcoef(dref["pred"], dref["y"])[0, 1])
 assert r_today > r_next
@@ -480,8 +485,9 @@ md(pd.DataFrame(rows_d))
 
 - **The 1976 tie breaks.** On `{python} n_ted` test days the untuned forest scores `{python} f"{d_rng['forest'][0]:.1f}"`–`{python} f"{d_rng['forest'][1]:.1f}"` against `{python} f"{d_lo['linear_quad']:.1f}"` for the selected quadratic regression, and the interval on the difference lies wholly above zero on all five seeds of the forest; its lowest lower end is `{python} f"{quad_low:+.2f}"`. The same holds for the lasso and persistence. Chronos-2 is worse than the forest on `{python} worse_on["chronos_pm25"]` seeds of five on PM2.5 alone and on `{python} worse_on["chronos_weather"]` with the weather; on the other seeds the interval's lower end lies between `{python} ch_neg_lo` and `{python} ch_neg_hi`.
 - **The gap is small.** Over its five seeds the forest's error is `{python} gain_quad` below the 1970s route's and `{python} gain_persist` below persistence's. Ten years resolve a difference that one autumn could not; they do not make it large.
-- **The three tree ensembles tie.** Boosting (`{python} f"{d_rng['boosting'][0]:.1f}"`–`{python} f"{d_rng['boosting'][1]:.1f}"`) and the tuned forest (`{python} f"{d_rng['forest_tuned'][0]:.1f}"`–`{python} f"{d_rng['forest_tuned'][1]:.1f}"`, settled on `{python} d_tuned`) are inside the noise of the untuned forest on at least four seeds of five. Tuning again bought nothing.
-- **The dev year agrees with the test years this time.** Persistence is worst on both. Boosting is best on November 2022 – October 2023, and on the test years it is one of the three tree ensembles that tie for best. Gaps leave the dev year's `{python} n_dvd` usable days with `{python} dev_feb` in February, but `{python} dev_smog` of them fall in November–January, three of the four winter months that carry most of the test error; @sec-ozone-modern's dev months were summer only.
+- **Five tree models, two clean ties.** Extra trees (`{python} f"{d_rng['extra_trees'][0]:.1f}"`–`{python} f"{d_rng['extra_trees'][1]:.1f}"`) and quantile boosting (`{python} f"{d_rng['quantile_boost'][0]:.1f}"`–`{python} f"{d_rng['quantile_boost'][1]:.1f}"`) are inside the noise of the untuned forest on all five seeds. The tuned forest (`{python} f"{d_rng['forest_tuned'][0]:.1f}"`–`{python} f"{d_rng['forest_tuned'][1]:.1f}"`, settled on `{python} d_tuned`) and boosting (`{python} f"{d_rng['boosting'][0]:.1f}"`–`{python} f"{d_rng['boosting'][1]:.1f}"`) are worse on two and three seeds, never better. Tuning again bought nothing, and swapping the forest's split rule for extra trees did not either.
+- **Walk-forward CV changes the ranking but does not reproduce the test years.** Out of fold over four November–October years, Chronos-2 is best and persistence is worst; on the test years the untuned forest leads and persistence is still worst. Of the last validation year's `{python} n_dvd` usable days, `{python} dev_smog` fall in November–January and only `{python} dev_feb` in February. The winter months carry most of the test error, so a fold that samples all four winters still does not reproduce the ranking.
+- **The intervals are too narrow here as well.** Quantile boosting's nominal 80% interval held the next day's PM2.5 on `{python} f"{d_cover['quantile_boost']:.0%}"` of test days, against `{python} f"{d_cover['chronos_pm25']:.0%}"` for Chronos-2 on PM2.5 alone. Both miss more often than they should in the winter peaks, which is the part of the year an alert would care about.
 - **Chronos-2 matches the 1970s route without being fitted to this record.** It scores `{python} f"{d_lo['chronos_pm25']:.1f}"` on PM2.5 alone against `{python} f"{d_lo['linear_quad']:.1f}"` for the selected regression, a difference inside the noise (`{python} f"{ch_quad[0]:+.1f}"` to `{python} f"{ch_quad[1]:+.1f}"`), and `{python} f"{d_lo['chronos_weather']:.1f}"` with the weather added: the covariates did not help it. Its pretraining data could hold this monitor's earlier years, but the last `{python} n_late` test days, November 2025 to October 2026, came after its release, and on them it scores `{python} f"{late_rmse['chronos_pm25']:.1f}"` against the regression's `{python} f"{late_rmse['linear_quad']:.1f}"`. Its nominal 80% intervals held the next day's PM2.5 on `{python} f"{d_cover['chronos_pm25']:.0%}"` and `{python} f"{d_cover['chronos_weather']:.0%}"` of test days.
 - **Winter carries the error.** For the forest, RMSE is `{python} f"{win_rmse:.0f}"` on forecasts of November–February days and `{python} f"{rest_rmse:.0f}"` on the rest of the year.
 - **The failure has changed sides.** The test forecasts include `{python} sev_days` Severe days, enough to see a pattern. The trained models and Chronos-2 catch `{python} hits_lo` to `{python} hits_hi` of them, fewer than half. On Severe days the median observation is `{python} f"{sev_obs:.0f}"` and the forest's median forecast `{python} f"{sev_rf:.0f}"`: a forecast built to minimise squared error is pulled toward typical days. Persistence catches the most, and issues the most false alarms. Breiman's project failed on false alarms; at a threshold of 250 these models fail on misses, and lowering the threshold trades one for the other.
@@ -663,9 +669,9 @@ Two limits matter for the rest of the series.
 The train/dev/test cuts above are by forecast day, never at random.
 
 - **Why by time.** A random split places a future day next to a past day in training. Daily PM2.5 is autocorrelated, so a lagged predictor could read the held-out level through a neighbouring day and score better than an actual forecast would. The chronological cut blocks that. For Delhi the test block is three consecutive winters, and every season appears on both sides of each cut.
-- **What one dev block hides.** Model selection here uses one year, November 2022 – October 2023. A setting that wins in that year may win on that year's weather rather than on the model. The ozone run is the warning: its dev block is two summer months, and @sec-ozone-modern ranks persistence first there and last on the test months.
-- **Rolling origins.** Repeat the cut from several start dates. An expanding window trains on all earlier years; a sliding window keeps a fixed recent span. Refit at each origin, score the next block, average the scores. The choice then rests on several forecast years instead of one, and the spread across origins shows whether a lead survives a change of year. Delhi's three test winters give three such scores, but they are reported after the settings were fixed, not used to choose them.
-- **Purged folds.** The predictors use days $t$, $t-1$ and $t-2$, so a validation block starting the day after training ends shares those lags across the boundary. Leave a gap at each fold edge; leave a wider one where the series has longer memory. Purged and combinatorial purged cross-validation make the gap explicit. Unordered k-fold has no gap and leaks through both the lags and the autocorrelation.
+- **What one dev block hides.** Selecting on a single year, as the first version of this comparison did, lets that year's weather decide the settings. The ozone dev block was two summer months, and persistence ranked first there and last on the test months. Spreading the choice over several origins removes that single point of failure; it does not make the folds resemble the test years.
+- **Rolling origins.** Repeat the cut from several start dates. An expanding window trains on all earlier years; a sliding window keeps a fixed recent span. Refit at each origin, score the next block, average the scores. The choice then rests on several forecast years instead of one. That is how the settings in @sec-ozone-modern and @sec-delhi-result are chosen now: three expanding blocks inside January–August for ozone, four November–October years for Delhi. The test period is never part of the search.
+- **Purged folds.** The predictors use days $t$, $t-1$ and $t-2$, so a validation block starting the day after training ends shares those lags across the boundary. Each fold here drops three days at the edge. Purged and combinatorial purged cross-validation make the same gap explicit; unordered k-fold has none and leaks through both the lags and the autocorrelation.
 - **What rolling origins miss.** Every fold still samples the past. Hoadley's limit from @sec-accuracy holds: a test set samples the present, not a future with different emissions or monitors. Delhi's fuel rules, the 2020 lockdown and shifts in stubble burning are changes of regime that an average over past folds can smooth away. The moving-block bootstrap in @sec-ozone-modern and @sec-delhi-result accounts for consecutive similar days, not for a change in the process that produces them.
 
 ## What the comparison leaves out {#sec-modern-models}
@@ -675,22 +681,22 @@ Every model in @sec-ozone-modern and @sec-delhi-result reads the same 30 columns
 - **Deep forecasting models.** A temporal fusion transformer combines attention across horizons with feature selection and reports which inputs it uses (Lim et al. 2021). N-BEATS and N-HiTS are feed-forward models that build a forecast from basis expansions of trend and season, with no recurrence (Oreshkin et al. 2020; Challu et al. 2023). DeepAR fits a full predictive distribution with an autoregressive recurrent network (Salinas et al. 2020). Mamba-style state-space models carry long-range dependencies at linear cost in sequence length (Gu & Dao 2023). These families learn a temporal representation; the models here use hand-built lag and season columns.
 - **Other pretrained forecasters.** Chronos-2 is the only foundation model run here. Chronos, TimesFM, Moirai, Lag-Llama and TimeGPT are the other zero-shot baselines a 2026 benchmark would add (Ansari et al. 2024; Das et al. 2024). Chronos-2 appeared in October 2025, which is why @sec-delhi-result scores the later test days on their own.
 - **Spatial models.** Winter smoke in Delhi is carried in from Punjab and Haryana and shaped by wind and boundary-layer height. A graph neural network over a network of monitors could model that spread. This comparison has one monitor, so there is no graph; boundary-layer height is missing from the archive for half of 2024 (@sec-delhi-data).
-- **Distributional scores and intervals.** RMSE and alert counts score point forecasts. CRPS scores a whole predictive distribution (Matheson & Winkler 1976), and conformal prediction puts finite-sample coverage around a fitted model's output (Angelopoulos & Bates 2023). Chronos-2's nominal 80% interval is the only distributional output here, with its witnessed coverage reported. A conformal layer on the forest or boosting would give the same kind of interval at the Severe threshold, where @sec-delhi-result finds that every model misses more than half the days.
+- **Distributional scores and intervals.** RMSE and alert counts score point forecasts. CRPS scores a whole predictive distribution (Matheson & Winkler 1976), and conformal prediction puts finite-sample coverage around a fitted model's output (Angelopoulos & Bates 2023). Quantile boosting is the one distributional model fitted here, and its nominal 80% interval covered 63% of Delhi's test days and 38% of the ozone test days: an interval is not a guarantee just because it is printed. Chronos-2's intervals do better. A conformal layer on the forest or boosting would give a coverage guarantee at the Severe threshold, where @sec-delhi-result finds that every model misses more than half the days.
 - **Missing values and drift.** Public monitors drop out, and state-space or attention-based imputation is the usual first step. A usable day here needs four complete days in a row, so gaps shrink the design instead of being filled. Emission profiles change with policy — BS-VI fuel, the 2020 lockdown, Graded Response Action Plan restrictions — and sliding-window retraining or online updating is the usual response. That is the present-versus-future limit again.
 - **Extreme-aware losses.** Squared error is dominated by ordinary days, which is why the forest's median forecast on Severe days falls below the median observation (@sec-delhi-result). Peak-weighted losses and extreme-value methods target those days. Neither was in the fixed grids.
 
-None of these is run here. The question in this part is whether a held-out check catches what a goodness-of-fit test misses, on one monitor with 30 columns and grids fixed before the test scores. The methods above need other data, another runtime and a leaderboard to be compared on; each is the natural next post, and none is required to settle this one.
+None of the models above is run here. The two additions in this version, extra trees and quantile boosting, are classical tabular models that fit the existing design; the families listed above need other data, another runtime and a leaderboard to be compared on. The question in this part is whether a held-out check catches what a goodness-of-fit test misses, on one monitor with 30 columns and grids fixed before the test scores. Each listed family is the natural next post; none is required to settle this one.
 
 ## Constraints {#sec-constraints}
 
 - **The ozone stand-in is one year at one station.** The test months differ in season from the training months, and the alert comparison rests on `{python} alert_te` alert days.
 - **The linear route is a re-enactment.** Breiman describes the 1970s procedure in one paragraph; the selection criterion, the candidate sets and the stopping rule here are choices, made before seeing the test months.
-- **The dev months are `{python} n_dev` day pairs from one season.** Settings chosen on them are a guess about autumn made from summer. The grids and the split were set once and not revised after the test scores were seen. One model was dropped after them: an equal average of the tuned forest, boosting and Chronos-2 with meteorology, which scores `{python} f"{avg_rmse:.2f}"` on the test months, within the forest's and boosting's range.
+- **The walk-forward folds are one season short on ozone.** The three validation blocks cover March–August; the last is the `{python} n_dev` summer day pairs. Settings chosen by mean fold RMSE are still a guess about autumn made from spring and summer. The grids and the split were set once and not revised after the test scores were seen. One model was dropped after them: an equal average of the tuned forest, boosting and Chronos-2 with meteorology, which scores `{python} f"{avg_rmse:.2f}"` on the test months, within the range of the tabular models.
 - **Chronos-2's forecasts are read from a file.** `src/chronos_forecast.py` writes them with its own pinned venv (`src/requirements-chronos.txt`) and a pinned model revision, because the series' shared venv has no torch; the render does not run the model. Its pretraining corpus was not checked for this 1976 record or for the Delhi monitor; Chronos-2 was released in October 2025, so the Delhi test years before then may be in it, and @sec-delhi-result reports the later days separately.
 - **The Delhi weather is a reanalysis.** ERA5 for day $t$ is a reconstruction made after the fact, at a grid point about 13 km from the monitor; a forecaster on day $t$ would have the station readings instead. Boundary-layer height, the variable most like the 1976 inversion base, is left out because the archive lacks it for half of 2024.
-- **The Delhi run reuses the ozone grids.** They were sized for the 1976 record's training months, and on Delhi's `{python} f"{n_trd + n_dvd:,}"` training and dev day pairs boosting settled at three edges of its grid (`{python} d_boost`). A wider grid might tune boosting further; the tie among the tree ensembles is a result for these grids.
+- **The Delhi run reuses smaller ozone grids.** Walk-forward selection fits each setting once per fold, so the grids were cut from the single-dev version. On Delhi's `{python} f"{n_trd + n_dvd:,}"` pre-test day pairs boosting settled at `{python} d_boost` — an edge on all five settings, including `max_iter=100` and `l2_regularization=0.0`. A wider grid might tune it further; the tie among the tree ensembles is a result for these grids.
 - **The Delhi record has holes.** `{python} f"{1 - n_pm / n_days:.0%}"` of days have no 24-hour mean, mostly in runs, and a forecast needs four complete days in a row, so `{python} f"{len(ddf):,}"` of `{python} f"{n_days - 3:,}"` possible day pairs are usable. The alert threshold is applied to a point forecast; @sec-delhi-result does not tune it.
-- **One dev block chooses the settings.** @sec-eval-strategy sets out rolling-origin and purged alternatives; neither is run here. The test block spans three winters, but it is scored after the grids are fixed.
+- **Selection uses expanding windows, not the test years.** @sec-eval-strategy sets out the reason; the folds are three blocks inside January–August and four November–October years. With five seeds and a 4,000-resample bootstrap, the reported intervals describe sampling noise on the test block, not uncertainty in the choice of settings.
 - **The comparison is tabular.** @sec-modern-models lists the deep, pretrained, spatial and probabilistic models left out and the data each would need.
 - **LightGBM itself was not run.** Its macOS wheel needs a system OpenMP library; scikit-learn's histogram boosting uses the same binning idea.
 - **The goodness-of-fit design is ours.** The paper does not describe its simulation. The product term was fixed before any result; the sine term was chosen after the first result was seen, which the text labels.
@@ -702,8 +708,8 @@ None of these is run here. The question in this part is whether a held-out check
 
 | Experiment | Paper's data | Data used here | Paper's result | Our result | Notes |
 |---|---|---|---|---|---|
-| Ozone forecast (§3.1) | 7 years, 450+ variables, LA Basin | 1976 LA record (`mlbench::Ozone`), 30 candidate predictors | selected regression; false-alarm rate too high | forest RMSE `{python} f"{rf_lo:.2f}"`–`{python} f"{rf_hi:.2f}"` vs selected regression `{python} f"{rmse['quad']:.2f}"`; all methods issued false alarms; lasso, boosting and Chronos-2 within noise of the forest | stand-in; original data not public |
-| Next-day air-quality forecast, long record (§3.1 design) | 7 years, 450+ variables, LA Basin | 10 years of New Delhi PM2.5 (US Embassy) and ERA5 weather, 30 candidate predictors | selected regression; false-alarm rate too high | forest RMSE `{python} f"{d_rng['forest'][0]:.1f}"`–`{python} f"{d_rng['forest'][1]:.1f}"` vs selected regression `{python} f"{d_lo['linear_quad']:.1f}"` µg/m³, separated on all five seeds; boosting ties the forest; Chronos-2 level with the regression; every model but persistence missed more than half the Severe days | different city and pollutant; same design |
+| Ozone forecast (§3.1) | 7 years, 450+ variables, LA Basin | 1976 LA record (`mlbench::Ozone`), 30 candidate predictors | selected regression; false-alarm rate too high | forest RMSE `{python} f"{rf_lo:.2f}"`–`{python} f"{rf_hi:.2f}"` vs selected regression `{python} f"{rmse['quad']:.2f}"`; all methods issued false alarms; lasso, boosting, extra trees, quantile boosting and Chronos-2 within noise of the forest | stand-in; original data not public |
+| Next-day air-quality forecast, long record (§3.1 design) | 7 years, 450+ variables, LA Basin | 10 years of New Delhi PM2.5 (US Embassy) and ERA5 weather, 30 candidate predictors | selected regression; false-alarm rate too high | forest RMSE `{python} f"{d_rng['forest'][0]:.1f}"`–`{python} f"{d_rng['forest'][1]:.1f}"` vs selected regression `{python} f"{d_lo['linear_quad']:.1f}"` µg/m³, separated on all five seeds; extra trees and quantile boosting tie the forest; Chronos-2 level with the regression; every model but persistence missed more than half the Severe days | different city and pollutant; same design |
 | Chlorine (§3.2) | 30,000 mass spectra | none | tree on 1,500 questions, 95% accuracy | not attempted | data not public; not simulated |
 | Goodness of fit (§5.2) | 7-D simulation, setup not given | 7 real meteorological columns, simulated response | tests did not reject until nonlinearity extreme | product term: tests reject before the forest gains; sine term: tests miss what the forest gains | outcome depends on the shape of the nonlinearity |
 
@@ -744,6 +750,7 @@ status.export(
 - Das, A., Kong, W., Sen, R. & Zhou, Y. (2024). [A decoder-only foundation model for time-series forecasting](https://arxiv.org/abs/2310.10688). ICML 2024.
 - Faraway, J. *faraway: Functions and Datasets for Books by Julian Faraway*, R package 1.0.9 (`ozone`).
 - Friedman, J. H. (2001). [Greedy function approximation: a gradient boosting machine](https://doi.org/10.1214/aos/1013203451). *Annals of Statistics* 29(5), 1189–1232.
+- Geurts, P., Ernst, D. & Wehenkel, L. (2006). Extremely randomized trees. *Machine Learning* 63, 3–42.
 - Gu, A. & Dao, T. (2023). [Mamba: linear-time sequence modeling with selective state spaces](https://arxiv.org/abs/2312.00752). NeurIPS 2023.
 - Hersbach, H., Bell, B., Berrisford, P., et al. (2020). [The ERA5 global reanalysis](https://doi.org/10.1002/qj.3803). *Quarterly Journal of the Royal Meteorological Society* 146(730), 1999–2049.
 - Ke, G., Meng, Q., Finley, T., Wang, T., Chen, W., Ma, W., Ye, Q. & Liu, T.-Y. (2017). [LightGBM: a highly efficient gradient boosting decision tree](https://papers.nips.cc/paper_files/paper/2017/hash/6449f44a102fde848669bdd9eb6b76fa-Abstract.html). *Advances in Neural Information Processing Systems* 30.
