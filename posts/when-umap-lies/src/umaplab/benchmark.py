@@ -354,6 +354,9 @@ def run_cell(c: Cell) -> tuple[dict, list[dict], np.ndarray | None]:
         ds = _dataset(c)
         row.update(_dataset_columns(ds))
         if c.experiment.startswith("scaling"):
+            # Check limits here: an Infeasible raised in the child comes back as a
+            # plain error and would be recorded as failed, not infeasible.
+            E.check_feasible(c.method, ds.X.shape[0], ds.X.shape[1])
             res, rss = E.embed_in_subprocess(
                 c.method, ds.X, c.algo_seed, c.method_params
             )

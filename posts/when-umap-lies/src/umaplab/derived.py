@@ -89,7 +89,10 @@ def graph_fidelity(
         spaces = {"input": ds.X}
         for p in pca_dims:
             if p < ds.X.shape[1]:
-                spaces[f"pca{p}"] = PCA(p, random_state=0).fit_transform(ds.X)
+                # The same reduction embed() applies for pca_dims=p: randomized SVD
+                # seeded by the method's seed, which in the sweeps is the data seed.
+                pca = PCA(p, svd_solver="randomized", random_state=int(row.data_seed))
+                spaces[f"pca{p}"] = pca.fit_transform(ds.X)
         for name, Z in spaces.items():
             for k, q in knn_preservation(ds.latent, Z, list(ks)).items():
                 rows.append({**base, "space": name, "k": k, "value": q})

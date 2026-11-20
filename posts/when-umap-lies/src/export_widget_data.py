@@ -529,7 +529,12 @@ def ranking_wins(data: dict) -> dict:
     wins = {}
     for case in data["cases"]:
         for mkey, sc in case["scores"].items():
-            vals = {m: s["v"] for m, s in sc.items() if s["v"] == s["v"]}
+            # compact() turns NaN into None, so drop both.
+            vals = {
+                m: s["v"]
+                for m, s in sc.items()
+                if s["v"] is not None and s["v"] == s["v"]
+            }
             if not vals:
                 continue
             best = max(vals.values())

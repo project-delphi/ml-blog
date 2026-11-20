@@ -73,11 +73,16 @@ def _label(method: str, params: dict) -> str:
 
 @cache
 def sigma0(generator: str, params_items: tuple = ()) -> float:
-    """Noise sd giving eta = 1 at D - p = ETA_ANCHOR for this base (seed 0 draw)."""
+    """Noise sd giving eta = 1 at D - p = ETA_ANCHOR for this base (seed 0 draw).
+
+    r_k is measured on the data as generated (X), so a base with noise of its own (the
+    topology circle) gets added noise on the scale of its real neighbourhoods. For
+    the noise-free sweep bases X is the clean data, so their sigma is unchanged.
+    """
     from .metrics import local_radius
 
     ds = GENERATORS[generator](N, 0, **dict(params_items))
-    rk2 = float(np.median(local_radius(ds.clean, ETA_K)) ** 2)
+    rk2 = float(np.median(local_radius(ds.X, ETA_K)) ** 2)
     return float(np.sqrt(rk2 / np.sqrt(8 * ETA_ANCHOR)))
 
 
