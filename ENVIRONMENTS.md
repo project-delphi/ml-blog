@@ -184,6 +184,43 @@ it is not a bump of all five. `src/chronos_forecast.py` runs in its own
 It writes the committed `cache/chronos2_v1.parquet`, which the post only reads. The
 recipe is in the script's docstring.
 
+## The When UMAP Lies posts share one venv, one module and one results cache
+
+The four parts (`when-umap-lies`, `-dimension`, `-tuning`, `-gaps-density-holes`) pin
+the kernel **`umap-blog`** over `.venv-umap`. Every experiment lives in Part 1's
+`src/umaplab/` package (contract in `notes/lab-spec.md`), and every result in Part 1's
+`cache/`, which the four posts only read.
+
+```bash
+uv venv .venv-umap --python 3.12
+uv pip install --python .venv-umap/bin/python numpy scipy pandas pyarrow scikit-learn \
+  umap-learn openTSNE pacmap phate ripser matplotlib scanpy tabulate pytest \
+  ipykernel jupyter nbclient nbformat pyyaml
+SDK=$(xcrun --show-sdk-path)
+CXXFLAGS="-isysroot $SDK -I$SDK/usr/include/c++/v1" CFLAGS="-isysroot $SDK" \
+  uv pip install --python .venv-umap/bin/python trimap
+.venv-umap/bin/python -m ipykernel install --user --name umap-blog
+```
+
+Four things are not obvious:
+
+- **TriMap's `annoy` dependency has no arm64 wheel, and the source build is broken.**
+  It compiles only with the SDK flags above, and the result returns just the query
+  point from every neighbour search. `umaplab.embeddings` therefore hands TriMap exact
+  neighbours through its `knn_tuple` argument; a test asserts every method beats
+  chance on a Swiss roll, so a silently broken backend fails `pytest`.
+- **The experiments run outside the render.** `src/run_experiments.py --all` regenerates
+  every cache file (about four hours on 8 cores); runs resume by cell id, and bumping
+  `benchmark.CODE_VERSION` invalidates all of them. Raw downloads (PBMC 3k, MNIST,
+  Fashion-MNIST) go to the git-ignored `data/`; the render never needs them.
+- **Quarto hashes `index.qmd` alone**, so new results in `cache/` re-execute nothing.
+  Re-render every part that reads a changed experiment.
+- **Widget data are exported from the caches** by `src/export_widget_data.py`, run from
+  the repository root before the render that copies them. Parts 2–4 load Part 1's
+  `umapkit.js`, so render with the project render, which recopies it.
+
+Tests: `.venv-umap/bin/python -m pytest posts/when-umap-lies/tests -q`.
+
 ## The AlphaTensor posts run no Python and share one model
 
 `alphatensor-matmul-cube`, `alphatensor-seven-multiplications` and
