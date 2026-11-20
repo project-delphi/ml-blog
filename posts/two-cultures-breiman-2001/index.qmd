@@ -658,6 +658,29 @@ Two limits matter for the rest of the series.
 - **Accuracy is measured on the population the test set came from.** Hoadley's comment (Part 5) points out that a test sample is a sample of the present, not the future (pp. 221–222).
 - **Accuracy says nothing about interventions.** Cox's comment asks what would happen if medical X-ray use fell by 10% (p. 216), and no held-out set contains the answer. Breiman agreed (p. 227). [Part 5](../two-cultures-pushback-and-causality/) takes this up.
 
+## Evaluation beyond one split {#sec-eval-strategy}
+
+The train/dev/test cuts above are by forecast day, never at random.
+
+- **Why by time.** A random split places a future day next to a past day in training. Daily PM2.5 is autocorrelated, so a lagged predictor could read the held-out level through a neighbouring day and score better than an actual forecast would. The chronological cut blocks that. For Delhi the test block is three consecutive winters, and every season appears on both sides of each cut.
+- **What one dev block hides.** Model selection here uses one year, November 2022 – October 2023. A setting that wins in that year may win on that year's weather rather than on the model. The ozone run is the warning: its dev block is two summer months, and @sec-ozone-modern ranks persistence first there and last on the test months.
+- **Rolling origins.** Repeat the cut from several start dates. An expanding window trains on all earlier years; a sliding window keeps a fixed recent span. Refit at each origin, score the next block, average the scores. The choice then rests on several forecast years instead of one, and the spread across origins shows whether a lead survives a change of year. Delhi's three test winters give three such scores, but they are reported after the settings were fixed, not used to choose them.
+- **Purged folds.** The predictors use days $t$, $t-1$ and $t-2$, so a validation block starting the day after training ends shares those lags across the boundary. Leave a gap at each fold edge; leave a wider one where the series has longer memory. Purged and combinatorial purged cross-validation make the gap explicit. Unordered k-fold has no gap and leaks through both the lags and the autocorrelation.
+- **What rolling origins miss.** Every fold still samples the past. Hoadley's limit from @sec-accuracy holds: a test set samples the present, not a future with different emissions or monitors. Delhi's fuel rules, the 2020 lockdown and shifts in stubble burning are changes of regime that an average over past folds can smooth away. The moving-block bootstrap in @sec-ozone-modern and @sec-delhi-result accounts for consecutive similar days, not for a change in the process that produces them.
+
+## What the comparison leaves out {#sec-modern-models}
+
+Every model in @sec-ozone-modern and @sec-delhi-result reads the same 30 columns. The forecasting toolkit available in 2026 reaches further; each addition below extends the algorithmic culture Breiman described in @sec-cultures rather than answering his question.
+
+- **Deep forecasting models.** A temporal fusion transformer combines attention across horizons with feature selection and reports which inputs it uses (Lim et al. 2021). N-BEATS and N-HiTS are feed-forward models that build a forecast from basis expansions of trend and season, with no recurrence (Oreshkin et al. 2020; Challu et al. 2023). DeepAR fits a full predictive distribution with an autoregressive recurrent network (Salinas et al. 2020). Mamba-style state-space models carry long-range dependencies at linear cost in sequence length (Gu & Dao 2023). These families learn a temporal representation; the models here use hand-built lag and season columns.
+- **Other pretrained forecasters.** Chronos-2 is the only foundation model run here. Chronos, TimesFM, Moirai, Lag-Llama and TimeGPT are the other zero-shot baselines a 2026 benchmark would add (Ansari et al. 2024; Das et al. 2024). Chronos-2 appeared in October 2025, which is why @sec-delhi-result scores the later test days on their own.
+- **Spatial models.** Winter smoke in Delhi is carried in from Punjab and Haryana and shaped by wind and boundary-layer height. A graph neural network over a network of monitors could model that spread. This comparison has one monitor, so there is no graph; boundary-layer height is missing from the archive for half of 2024 (@sec-delhi-data).
+- **Distributional scores and intervals.** RMSE and alert counts score point forecasts. CRPS scores a whole predictive distribution (Matheson & Winkler 1976), and conformal prediction puts finite-sample coverage around a fitted model's output (Angelopoulos & Bates 2023). Chronos-2's nominal 80% interval is the only distributional output here, with its witnessed coverage reported. A conformal layer on the forest or boosting would give the same kind of interval at the Severe threshold, where @sec-delhi-result finds that every model misses more than half the days.
+- **Missing values and drift.** Public monitors drop out, and state-space or attention-based imputation is the usual first step. A usable day here needs four complete days in a row, so gaps shrink the design instead of being filled. Emission profiles change with policy — BS-VI fuel, the 2020 lockdown, Graded Response Action Plan restrictions — and sliding-window retraining or online updating is the usual response. That is the present-versus-future limit again.
+- **Extreme-aware losses.** Squared error is dominated by ordinary days, which is why the forest's median forecast on Severe days falls below the median observation (@sec-delhi-result). Peak-weighted losses and extreme-value methods target those days. Neither was in the fixed grids.
+
+None of these is run here. The question in this part is whether a held-out check catches what a goodness-of-fit test misses, on one monitor with 30 columns and grids fixed before the test scores. The methods above need other data, another runtime and a leaderboard to be compared on; each is the natural next post, and none is required to settle this one.
+
 ## Constraints {#sec-constraints}
 
 - **The ozone stand-in is one year at one station.** The test months differ in season from the training months, and the alert comparison rests on `{python} alert_te` alert days.
@@ -667,6 +690,8 @@ Two limits matter for the rest of the series.
 - **The Delhi weather is a reanalysis.** ERA5 for day $t$ is a reconstruction made after the fact, at a grid point about 13 km from the monitor; a forecaster on day $t$ would have the station readings instead. Boundary-layer height, the variable most like the 1976 inversion base, is left out because the archive lacks it for half of 2024.
 - **The Delhi run reuses the ozone grids.** They were sized for the 1976 record's training months, and on Delhi's `{python} f"{n_trd + n_dvd:,}"` training and dev day pairs boosting settled at three edges of its grid (`{python} d_boost`). A wider grid might tune boosting further; the tie among the tree ensembles is a result for these grids.
 - **The Delhi record has holes.** `{python} f"{1 - n_pm / n_days:.0%}"` of days have no 24-hour mean, mostly in runs, and a forecast needs four complete days in a row, so `{python} f"{len(ddf):,}"` of `{python} f"{n_days - 3:,}"` possible day pairs are usable. The alert threshold is applied to a point forecast; @sec-delhi-result does not tune it.
+- **One dev block chooses the settings.** @sec-eval-strategy sets out rolling-origin and purged alternatives; neither is run here. The test block spans three winters, but it is scored after the grids are fixed.
+- **The comparison is tabular.** @sec-modern-models lists the deep, pretrained, spatial and probabilistic models left out and the data each would need.
 - **LightGBM itself was not run.** Its macOS wheel needs a system OpenMP library; scikit-learn's histogram boosting uses the same binning idea.
 - **The goodness-of-fit design is ours.** The paper does not describe its simulation. The product term was fixed before any result; the sine term was chosen after the first result was seen, which the text labels.
 - **The forest and OLS are compared on one random split per replicate.** The median ratio over 200 replicates is stable; a single replicate's ratio is not.
@@ -704,24 +729,33 @@ status.export(
 
 ## References {#sec-references}
 
+- Ansari, A. F., Stella, F., Turkmen, C., et al. (2024). [Chronos: learning the language of time series](https://arxiv.org/abs/2403.07815). arXiv:2403.07815.
 - Ansari, A. F., Shchur, O., Küken, J., et al. (2025). [Chronos-2: from univariate to universal forecasting](https://arxiv.org/abs/2510.15821). arXiv:2510.15821. Run here as `amazon/chronos-2`, revision `29ec376`.
 - AirNow. [AirNow](https://www.airnow.gov/), which publishes the US Department of State's embassy and consulate monitors. The New Delhi monitor is read here through OpenAQ.
+- Angelopoulos, A. N. & Bates, S. (2023). [A gentle introduction to conformal prediction and distribution-free uncertainty quantification](https://arxiv.org/abs/2107.07511). *Foundations and Trends in Machine Learning* 16(4), 494–591.
 - Bickel, P. J., Ritov, Y. & Stoker, T. M. (2006). [Tailor-made tests for goodness of fit to semiparametric hypotheses](https://doi.org/10.1214/009053606000000137). *Annals of Statistics* 34(2), 721–741. Cited by Breiman as a 2001 manuscript.
 - Breiman, L. (2001). [Statistical modeling: the two cultures (with comments and a rejoinder)](https://doi.org/10.1214/ss/1009213726). *Statistical Science* 16(3), 199–231.
 - Breiman, L. (2001). [Random forests](https://doi.org/10.1023/A:1010933404324). *Machine Learning* 45, 5–32.
 - Breiman, L. & Friedman, J. H. (1985). [Estimating optimal transformations for multiple regression and correlation](https://doi.org/10.1080/01621459.1985.10478157). *Journal of the American Statistical Association* 80(391), 580–598. The source of the 1976 ozone data.
 - Breiman, L., Friedman, J. H., Olshen, R. A. & Stone, C. J. (1984). *Classification and Regression Trees*. Wadsworth.
 - Central Pollution Control Board (2014). *National Air Quality Index*. Ministry of Environment, Forests and Climate Change, Government of India. The PM2.5 band "Severe" is a 24-hour mean of 250+ µg/m³.
+- Challu, C., Olivares, K. G., Oreshkin, B. N., et al. (2023). [N-HiTS: neural hierarchical interpolation for time series forecasting](https://arxiv.org/abs/2201.12886). AAAI 2023.
 - Commission for Air Quality Management in NCR and Adjoining Areas. [Graded Response Action Plan](https://caqm.nic.in/).
+- Das, A., Kong, W., Sen, R. & Zhou, Y. (2024). [A decoder-only foundation model for time-series forecasting](https://arxiv.org/abs/2310.10688). ICML 2024.
 - Faraway, J. *faraway: Functions and Datasets for Books by Julian Faraway*, R package 1.0.9 (`ozone`).
 - Friedman, J. H. (2001). [Greedy function approximation: a gradient boosting machine](https://doi.org/10.1214/aos/1013203451). *Annals of Statistics* 29(5), 1189–1232.
+- Gu, A. & Dao, T. (2023). [Mamba: linear-time sequence modeling with selective state spaces](https://arxiv.org/abs/2312.00752). NeurIPS 2023.
 - Hersbach, H., Bell, B., Berrisford, P., et al. (2020). [The ERA5 global reanalysis](https://doi.org/10.1002/qj.3803). *Quarterly Journal of the Royal Meteorological Society* 146(730), 1999–2049.
 - Ke, G., Meng, Q., Finley, T., Wang, T., Chen, W., Ma, W., Ye, Q. & Liu, T.-Y. (2017). [LightGBM: a highly efficient gradient boosting decision tree](https://papers.nips.cc/paper_files/paper/2017/hash/6449f44a102fde848669bdd9eb6b76fa-Abstract.html). *Advances in Neural Information Processing Systems* 30.
 - Leisch, F. & Dimitriadou, E. *mlbench: Machine Learning Benchmark Problems*, R package 2.1-11 (`Ozone`).
+- Lim, B., Arik, S. Ö., Loeff, N. & Pfister, T. (2021). [Temporal Fusion Transformers for interpretable multi-horizon time series forecasting](https://arxiv.org/abs/1912.09363). *International Journal of Forecasting* 37(4), 1748–1764.
+- Matheson, J. E. & Winkler, R. L. (1976). [Scoring rules for continuous probability distributions](https://doi.org/10.1287/mnsc.22.10.1087). *Management Science* 22(10), 1087–1096.
 - Mosteller, F. & Tukey, J. W. (1977). *Data Analysis and Regression*. Addison-Wesley.
 - OpenAQ. [Open air quality data archive](https://docs.openaq.org/), location 8118, "US Diplomatic Post: New Delhi".
 - Open-Meteo. [Historical weather API](https://open-meteo.com/en/docs/historical-weather-api) (Zippenfenig 2023, [doi:10.5281/zenodo.7970649](https://doi.org/10.5281/zenodo.7970649)). ERA5 data, CC BY 4.0.
+- Oreshkin, B. N., Carpov, D., Chapados, N. & Bengio, Y. (2020). [N-BEATS: neural basis expansion analysis for interpretable time series forecasting](https://arxiv.org/abs/1905.10437). ICLR 2020.
 - Ramsey, J. B. (1969). [Tests for specification errors in classical linear least-squares regression analysis](https://doi.org/10.1111/j.2517-6161.1969.tb00796.x). *Journal of the Royal Statistical Society B* 31(2), 350–371.
+- Salinas, D., Flunkert, V., Gasthaus, J. & Januschowski, T. (2020). [DeepAR: probabilistic forecasting with autoregressive recurrent networks](https://arxiv.org/abs/1704.04110). *International Journal of Forecasting* 36(3), 1181–1191.
 - Stone, M. (1974). Cross-validatory choice and assessment of statistical predictions. *Journal of the Royal Statistical Society B* 36(2), 111–147.
 - Tibshirani, R. (1996). [Regression shrinkage and selection via the lasso](https://doi.org/10.1111/j.2517-6161.1996.tb02080.x). *Journal of the Royal Statistical Society B* 58(1), 267–288.
 - Utts, J. M. (1982). [The rainbow test for lack of fit in regression](https://doi.org/10.1080/03610928208828423). *Communications in Statistics: Theory and Methods* 11(24), 2801–2815.
