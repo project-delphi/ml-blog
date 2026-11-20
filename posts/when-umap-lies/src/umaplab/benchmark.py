@@ -530,6 +530,7 @@ class _Store:
                 self.runs = self.runs[~self.runs.cell_id.isin(failed)]
                 if self.metrics is not None:
                     self.metrics = self.metrics[~self.metrics.cell_id.isin(failed)]
+                self.pruned = failed  # written out at the next flush
         self.done: set[str] = set() if self.runs is None else set(self.runs["cell_id"])
         self.new_runs: list[dict] = []
         self.new_metrics: list[dict] = []
@@ -550,9 +551,33 @@ class _Store:
     def pending(self) -> int:
         return len(self.new_runs)
 
+    def prune(self, valid: set[str]) -> None:
+        """Drop stored rows whose cell is not in the current experiment definition.
+
+        An experiment's cell list is the source of truth: after CODE_VERSION is bumped
+        or a definition changes, the old cell ids would otherwise sit beside the new
+        ones and the posts would pool both.
+        """
+        if self.runs is None:
+            return
+        stale = set(self.runs["cell_id"]) - valid
+        if not stale:
+            return
+        self.runs = self.runs[~self.runs["cell_id"].isin(stale)]
+        if self.metrics is not None:
+            self.metrics = self.metrics[~self.metrics["cell_id"].isin(stale)]
+        self.done -= stale
+        self.pruned = getattr(self, "pruned", set()) | stale
+
     def flush(self) -> None:
         import pandas as pd
 
+        if getattr(self, "pruned", None):
+            self._rewrite_embeddings(drop=self.pruned)
+            if not self.new_runs:
+                _atomic_parquet(self.metrics, self.metrics_path)
+                _atomic_parquet(self.runs, self.runs_path)
+            self.pruned = set()
         if not self.new_runs:
             return
         runs = _runs_frame(self.new_runs)
@@ -575,6 +600,16 @@ class _Store:
         _atomic_parquet(self.metrics, self.metrics_path)
         _atomic_parquet(self.runs, self.runs_path)
         self.new_runs, self.new_metrics, self.new_emb = [], [], {}
+
+    def _rewrite_embeddings(self, drop: set[str]) -> None:
+        if not self.emb_path.exists():
+            return
+        with np.load(self.emb_path) as old:
+            arrays = {k: old[k] for k in old.files if k not in drop}
+        tmp = self.emb_path.with_name(self.emb_path.name + ".tmp")
+        with open(tmp, "wb") as fh:
+            np.savez_compressed(fh, **arrays)
+        os.replace(tmp, self.emb_path)
 
     def _append_embeddings(self) -> None:
         arrays: dict[str, np.ndarray] = {}
@@ -664,6 +699,7 @@ def run_grid(
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     store = _Store(out, resume)
+    store.prune({cell_id(c) for c in cells} | {input_cell_id(c) for c in cells})
     queue = _plan(cells, store, chunk_size)
     try:
         if n_workers <= 0:
@@ -679,8 +715,10 @@ def run_grid(
         # A crash breaks the whole pool, so every task in flight is only a suspect.
         # Rerun suspects one at a time: a crash there is the cell's own.
         for task in suspects:
-            _, crashed = _run_pool([task], 1, ctx, store, flush_every)
-            for t in crashed:
+            unstarted, crashed = _run_pool([task], 1, ctx, store, flush_every)
+            # A suspect that crashed alone, or that a fresh pool could not even start,
+            # is recorded failed rather than silently dropped.
+            for t in crashed + unstarted:
                 _record_crash(t, store)
     finally:
         store.flush()
@@ -739,6 +777,10 @@ def _run_pool(
                     for c in task.cells:
                         row = _base_row(c)
                         row.update(status="failed", error=_error_text(exc))
+                        store.add(row, [], None)
+                    if task.input_cell is not None:
+                        row = _crash_row(task.input_cell, as_input=True)
+                        row.update(error=_error_text(exc))
                         store.add(row, [], None)
     return queue, retry
 

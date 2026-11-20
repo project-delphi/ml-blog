@@ -44,7 +44,7 @@ def run_scaling(out: Path, n_workers: int) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
     import pandas as pd
-    from umaplab.benchmark import config_label
+    from umaplab.benchmark import CODE_VERSION, config_label
     from umaplab.embeddings import Infeasible, check_feasible, measure_memory
     from umaplab.generators import add_noise_dims, gaussian_clusters
 
@@ -52,8 +52,12 @@ def run_scaling(out: Path, n_workers: int) -> None:
     done = set()
     if out.exists():
         old = pd.read_parquet(out)
-        # Failed fits are retried on resume, as in the grids: drop their rows.
-        rows = [r for r in old.to_dict("records") if r["status"] != "failed"]
+        # Failed fits, and fits from another CODE_VERSION, are rerun: drop their rows.
+        rows = [
+            r
+            for r in old.to_dict("records")
+            if r["status"] != "failed" and r.get("code_version") == CODE_VERSION
+        ]
         done = {(r["config"], r["n"], r["seed"]) for r in rows}
 
     def one(job):
@@ -63,6 +67,7 @@ def run_scaling(out: Path, n_workers: int) -> None:
             return None
         ds = add_noise_dims(gaussian_clusters(n, seed, dim=50), 100, 1.0, seed)
         row = {"config": label, "method": method, "n": n, "seed": seed, "D": 100}
+        row["code_version"] = CODE_VERSION
         try:
             check_feasible(method, n, 100)
             sec, mb = measure_memory(method, ds.X, seed, mp)

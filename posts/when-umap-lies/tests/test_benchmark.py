@@ -266,3 +266,19 @@ def test_dataset_cache_is_a_bounded_lru() -> None:
         B._dataset(_cell(D=7, data_seed=seed))
     assert len(B._CACHE) == B.DATASET_CACHE_SIZE
     assert B._dataset(c) is not None and len(B._CACHE) == B.DATASET_CACHE_SIZE
+
+
+def test_prune_drops_cells_outside_the_definition(tmp_path: Path) -> None:
+    """Rows whose cell is no longer in the experiment are removed on resume."""
+    store = B._Store(tmp_path, resume=False)
+    a, b = _cell(D=5), _cell(D=10)
+    for c in (a, b):
+        row = B._base_row(c)
+        row.update(status="ok", error="")
+        store.add(row, [], None)
+    store.flush()
+    again = B._Store(tmp_path, resume=True)
+    again.prune({B.cell_id(b)})
+    again.flush()
+    kept = pd.read_parquet(tmp_path / "runs.parquet")
+    assert set(kept["cell_id"]) == {B.cell_id(b)}

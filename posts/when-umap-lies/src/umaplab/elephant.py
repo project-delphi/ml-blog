@@ -91,7 +91,8 @@ def _loo_knn_accuracy(Z: np.ndarray, labels: np.ndarray, k: int = 10) -> float:
 
 
 def _max_ami(Z: np.ndarray, labels: np.ndarray) -> float:
-    best = -1.0
+    """Best AMI over the HDBSCAN settings; NaN when no setting finds any cluster."""
+    best = float("nan")
     for m in HDBSCAN_SIZES:
         lab = HDBSCAN(min_cluster_size=m, min_samples=m).fit_predict(Z)
         if (lab >= 0).sum() == 0:
@@ -101,7 +102,8 @@ def _max_ami(Z: np.ndarray, labels: np.ndarray) -> float:
             nn = NearestNeighbors(n_neighbors=1).fit(Z[~noise])
             lab = lab.copy()
             lab[noise] = lab[~noise][nn.kneighbors(Z[noise])[1][:, 0]]
-        best = max(best, adjusted_mutual_info_score(labels, lab))
+        ami = adjusted_mutual_info_score(labels, lab)
+        best = ami if best != best else max(best, ami)
     return float(best)
 
 
