@@ -370,6 +370,10 @@ written by a fetch script under `src/` (`graph-data.js`, from
 changes the numbers, so re-run `src/check_model.js` afterwards and update any slide text
 that quotes them.
 
+The first post with `lightbox: true` (the When UMAP Lies series) added
+`docs/site_libs/quarto-contrib/glightbox/` the same way; later lightbox posts should
+change nothing there.
+
 The first deck added `docs/site_libs/revealjs/` and three files under
 `docs/site_libs/quarto-html/`. Later decks should change nothing under `site_libs/`.
 reveal.js keeps its runtime under `revealjs/dist/`. The Python packaging rule in

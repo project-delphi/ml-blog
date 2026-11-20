@@ -23,9 +23,10 @@ def snn_neighbours(X: np.ndarray, K: int, k: int = 10) -> np.ndarray:
     """K neighbours of each point re-ranked by shared neighbours within its K-NN list.
 
     A same-information baseline for a map built from a K-neighbour graph: no layout,
-    only pooling. Candidates are each point's K nearest neighbours; their score is the
-    number of K-NN lists they share with the point (ties broken by original distance
-    rank); the top k are returned. Self excluded throughout.
+    only pooling. Candidates are each point's K nearest neighbours; candidate j's score
+    is the overlap of the two points' own lists, |({i} ∪ N_K(i)) ∩ ({j} ∪ N_K(j))|
+    (S = A Aᵀ with A the self-inclusive K-NN indicator), ties broken by original
+    distance rank; the top k are returned. Self is never returned as a neighbour.
     """
     import scipy.sparse as sp
 
