@@ -36,7 +36,12 @@ CACHE_TAG = (
 )
 CHRONOS_FILE = Path("cache") / "chronos2_v1.parquet"
 EMBARGO = 3  # two lag days plus the next-day target, dropped at each fold edge
-OZONE_FOLD_EDGES = (61, 122, 183, 244)  # three validation blocks in January-August
+OZONE_FOLD_EDGES = (
+    61,
+    122,
+    183,
+    244,
+)  # three validation blocks, March-August (doy 61-243)
 
 
 def _grid(**kw):
@@ -97,6 +102,10 @@ class QuantileBoost:
     Fits q10, q50 and q90 separately with the same settings, so the spread
     between the outer two is a predictive interval without a distributional
     assumption. `intervals` exposes the pair for the table and the figure.
+
+    It deliberately does not implement sklearn's estimator interface
+    (`get_params`/`clone`): the grid is fixed and instances are made only
+    through `FACTORIES`.
     """
 
     QUANTILES = (0.1, 0.5, 0.9)
@@ -224,6 +233,13 @@ def fit_all(df, tr, dv, te, persist, key, folds) -> pd.DataFrame:
     fit = tr | dv
     test_idx = np.flatnonzero(te)
     dev_idx = np.concatenate([va for _, va in folds])
+    # The comparison rests on this split. Fail loudly if an edited fold edge
+    # reaches the test period or a fold trains on its own validation days.
+    assert not np.intersect1d(dev_idx, test_idx).size, (
+        "folds reach into the test period"
+    )
+    for tr_i, va_i in folds:
+        assert not np.intersect1d(tr_i, va_i).size, "train and validation folds overlap"
     lag0 = X[persist].to_numpy()
     out = []
 
