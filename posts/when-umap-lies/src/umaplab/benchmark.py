@@ -515,7 +515,10 @@ class _Store:
             else None
         )
         if not resume:
-            self.emb_path.unlink(missing_ok=True)
+            # Clear all three together, so an interrupted first flush cannot leave
+            # old runs/metrics beside a deleted embeddings file.
+            for path in (self.runs_path, self.metrics_path, self.emb_path):
+                path.unlink(missing_ok=True)
         if self.runs is not None:
             # Failed cells (a download error, a native crash) are retried on resume:
             # drop their rows so they run again. Infeasible cells stay done.

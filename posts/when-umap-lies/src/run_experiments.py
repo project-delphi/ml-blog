@@ -52,7 +52,8 @@ def run_scaling(out: Path, n_workers: int) -> None:
     done = set()
     if out.exists():
         old = pd.read_parquet(out)
-        rows = old.to_dict("records")
+        # Failed fits are retried on resume, as in the grids: drop their rows.
+        rows = [r for r in old.to_dict("records") if r["status"] != "failed"]
         done = {(r["config"], r["n"], r["seed"]) for r in rows}
 
     def one(job):

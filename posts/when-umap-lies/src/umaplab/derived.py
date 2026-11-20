@@ -207,8 +207,8 @@ def seed_pairs(exp: str = "stability") -> pd.DataFrame:
     E = embeddings(exp)
     r = r[r.cell_id.isin(E.keys())]
     rows = []
-    for (gen, gp, cfg, ds), sub in r.groupby(
-        ["generator", "gen_params", "config", "data_seed"]
+    for (gen, gp, _tr, _n, cfg, ds), sub in r.groupby(
+        ["generator", "gen_params", "transforms", "n", "config", "data_seed"]
     ):
         by_seed = dict(zip(sub.algo_seed, sub.cell_id))
         for a, b in combinations(sorted(by_seed), 2):
