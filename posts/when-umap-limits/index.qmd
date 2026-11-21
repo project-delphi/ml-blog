@@ -1,7 +1,7 @@
 ---
 title: "When UMAP Lies, Part 5: Nothing to Validate Against"
 subtitle: "UMAP fits a target that its own settings build, so no held-out set can choose a setting or catch a misleading map"
-description: "Supervised learning picks hyperparameters on a dev set because the target and the loss stay fixed while the settings change. UMAP has neither: its parameters are the training points' own coordinates, and n_neighbors rebuilds the graph they are fitted to. On a train/dev/test split of synthetic clusters, the dev-set winner changes with the seed and with the score's own neighbourhood size, the arrangement of clusters on the map is uncorrelated with the data, and held-out points inherit the map's erased density instead of exposing it."
+description: "Supervised learning picks hyperparameters on a dev set because the target and the loss stay fixed while the settings change. UMAP has neither: no reconstruction error like PCA's, parameters that are the training points' own coordinates, and a graph target that n_neighbors rebuilds. On a train/dev/test split of synthetic clusters, the dev-set winner changes with the seed and with the score's own neighbourhood size, the arrangement of clusters on the map is uncorrelated with the data, held-out points inherit the map's erased density, and the proxies used in practice (held-out trustworthiness, downstream accuracy, silhouette, seed stability) each miss a failure."
 author: "Ravi Kalia"
 date: "2026-11-21T00:00:00"
 categories: [Machine Learning, Statistics]
@@ -23,7 +23,7 @@ execute:
 
 ![When UMAP Lies, Part 5: Nothing to Validate Against](./cover.png)
 
-A UMAP embedding cannot be checked the way a trained model is checked. It has no fixed target and no loss on held-out data, so a train/dev/test split can neither choose its settings nor catch a map that misleads.
+A UMAP embedding cannot be checked the way a trained model is checked. It has no fixed target and no loss on held-out data, not even the reconstruction error that lets PCA be checked, so a train/dev/test split can neither choose its settings nor catch a map that misleads.
 
 Anyone who has trained a classifier knows the routine. Hold some data back, score every candidate setting on a dev set, keep the best, and confirm it on a test set. The routine works for a linear regression and a language model alike, because two things stay put while the settings change: the target the model is trying to hit, and the loss that measures the miss. UMAP plots are read with the confidence that routine earns — two islands as two populations, open water as separation, a dense patch as a tight group — but the routine is never run on them, because UMAP gives it nothing to work with.
 
@@ -139,16 +139,49 @@ $$
 The optimiser moves the $y_i$ and nothing else. A fit on 720 training points has `{python} n_params_str` parameters: two coordinates per point. Three consequences follow.
 
 - **New points need a separate procedure.** `transform` finds a new point's neighbours among the training points, starts it at their weighted average position, and runs a few more rounds of optimisation with the training map held still. It is a placement rule added to the fit, not a function the fit learned.
-- **Nothing maps back to the data.** PCA and an autoencoder reconstruct a new point from its coordinates, and the reconstruction error on held-out points scores them. umap-learn's `inverse_transform` interpolates between the training points near a map location; no part of the fit was trained to make it accurate.
+- **There is no reconstruction loss.** PCA maps a point to coordinates and back again, and the distance between a held-out point and its reconstruction is a loss on data the fit never saw. An autoencoder does the same with a network. umap-learn's `inverse_transform` interpolates between the training points near a map location; no part of the fit was trained to make it accurate, and nothing scores it.
 - **No loss exists on held-out data.** $L$ sums over pairs of training points. A dev point appears in no term of it, and umap-learn does not report $L$ at the end of a fit.
 
-| What validation needs | Supervised model | UMAP |
-|---|---|---|
-| A target fixed before fitting | the labels | the graph $v_{ij}$, rebuilt by `n_neighbors` |
-| Parameters that apply to new data | the weights of a function | one 2-D position per training point |
-| A loss on held-out points | the error on the dev set | none |
+| What validation needs | Supervised model | PCA | UMAP |
+|---|---|---|---|
+| A target fixed before fitting | the labels | the data itself | the graph $v_{ij}$, rebuilt by `n_neighbors` |
+| Parameters that apply to new data | the weights of a function | a projection matrix | one 2-D position per training point |
+| A loss on held-out points | the error on the dev set | the reconstruction error on the dev set | none |
 
-: The three things a train/dev/test split relies on, and what UMAP supplies for each. {#tbl-needs}
+: The three things a train/dev/test split relies on, and what a supervised model, PCA and UMAP supply for each. {#tbl-needs}
+
+### Reconstruction error in PCA
+
+PCA has all three, and the four clusters show what they buy. Fit PCA with $k$ components on the training points, project the dev and test points onto those components, map them back, and measure the squared distance between each point and its reconstruction.
+
+```{python}
+#| label: fig-pca-recon
+#| fig-cap: "Mean squared reconstruction error of PCA on the four clusters, by number of components, fitted on train and measured on train, dev and test. The error falls steeply to three components and slowly after. The held-out curves track the training curve."
+#| fig-alt: "A line chart with number of components from 1 to 9 on the horizontal axis and reconstruction error on a log scale on the vertical axis. Three nearly overlapping lines for train, dev and test fall steeply from about 160 at one component to about 7 at three, then decline gently to about 1 at nine."
+KS_PCA = range(1, 10)
+RECON = {}
+for k in KS_PCA:
+    pca = PCA(k).fit(X_train)
+    for part, Z in [("train", X_train), ("dev", X_dev), ("test", X_test)]:
+        RECON[part, k] = ((Z - pca.inverse_transform(pca.transform(Z))) ** 2).sum(1).mean()
+
+fig, ax = plt.subplots(figsize=(6, 3.2))
+for part, marker in [("train", "o"), ("dev", "x"), ("test", "s")]:
+    ax.plot(list(KS_PCA), [RECON[part, k] for k in KS_PCA], marker=marker, label=part, ms=4)
+ax.set_yscale("log")
+ax.set_xlabel("PCA components")
+ax.set_ylabel("reconstruction error")
+ax.axvline(3, color="0.6", lw=0.8, ls="--")
+ax.legend(fontsize=8)
+fig.tight_layout()
+
+recon1_str = f"{RECON['dev', 1]:.0f}"
+recon3_str = f"{RECON['dev', 3]:.1f}"
+recon_step_str = f"{(RECON['dev', 3] - RECON['dev', 9]) / 6:.1f}"
+recon3_parts_str = ", ".join(f"{part} {RECON[part, 3]:.2f}" for part in ["train", "dev", "test"])
+```
+
+The dev error falls from `{python} recon1_str` at one component to `{python} recon3_str` at three, then by about `{python} recon_step_str` for each further component, the variance of one column of pure noise. Four cluster centres span three directions, so the curve finds the structure and says where the noise starts. At three components the errors are `{python} recon3_parts_str`: held-out data scores like training data, so the fit generalises, and an overfit would show as dev error above train. Every $k$ is scored against the same target, the data, so the errors are comparable across settings. UMAP has neither half of this: no reconstruction to measure, and no fixed target to measure it against.
 
 ### The target moves with the setting
 
@@ -360,6 +393,46 @@ On all 1,000 points, the correlation is `{python} pca_rho_str` for PCA and `{pyt
 A held-out set does not catch this. Fit on 700 points and place the other 300 with `transform`: the held-out points correlate with their true density at `{python} dev_rho_str`, against `{python} pca_dev_rho_str` for PCA on the same points. They land where the training map's even spacing puts them, so they carry the erasure rather than expose it.
 
 densMAP ([Narayan, Berger & Cho 2021](https://doi.org/10.1038/s41587-020-00801-7)) adds a term to the objective that preserves each point's local radius, and it restores the correlation to `{python} dens_rho_str`. It cannot place new points: in umap-learn 0.6.0, `transform` on a densMAP fit raises `NotImplementedError`.
+
+## Proxies used in practice
+
+Practitioners who know UMAP has no held-out loss tune it on proxies instead: scores of the map that stand in for a loss. Three are common, and the clusters and the curve already test all three.
+
+```{python}
+#| label: proxies
+#| echo: false
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import silhouette_score
+
+KNN_ACC, SIL = {}, {}
+for (name, seed), model in FITS.items():
+    clf = KNeighborsClassifier(n_neighbors=10).fit(model.embedding_, y_train)
+    KNN_ACC[name, seed] = clf.score(DEV_EMB[name, seed], y_dev)
+    SIL[name, seed] = silhouette_score(DEV_EMB[name, seed], y_dev)
+
+input_knn = KNeighborsClassifier(n_neighbors=10).fit(X_train, y_train).score(X_dev, y_dev)
+input_sil = silhouette_score(X_dev, y_dev)
+sil_mean = {n: np.mean([SIL[n, s] for s in SEEDS]) for n in SETTINGS}
+
+knn_str = span(KNN_ACC.values())
+input_knn_str = num(input_knn)
+sil_str = span(SIL.values())
+input_sil_str = num(input_sil)
+sil_best_str = setting_title(max(sil_mean, key=sil_mean.get))
+sil_worst_str = setting_title(min(sil_mean, key=sil_mean.get))
+n_sil_above_str = str(sum(v > input_sil for v in SIL.values()))
+for name in SETTINGS:
+    print(f"{setting_title(name):30} kNN accuracy {span([KNN_ACC[name, s] for s in SEEDS])}"
+          f"   silhouette {span([SIL[name, s] for s in SEEDS], 3)}")
+print(f"{'input space':30} kNN accuracy {input_knn_str}   silhouette {num(input_sil, 3)}")
+```
+
+- **Held-out trustworthiness and continuity.** @tbl-winners is this proxy at work. Its winner depends on the seed and on its own $k$.
+- **Downstream accuracy.** A 10-nearest-neighbour classifier trained on the training map labels the dev points with accuracy `{python} knn_str` under every setting and seed; the same classifier in the input space scores `{python} input_knn_str`. Clusters this well separated put every setting at the ceiling. The score reads only which island a point lands on, so it cannot see where the islands sit or how tightly they are packed.
+- **Silhouette.** On the dev points, the map's silhouette runs from `{python} sil_str`, against `{python} input_sil_str` in the input space, and `{python} n_sil_above_str` of the 20 maps score above the data they draw. It is highest at `{python} sil_best_str` and lowest at `{python} sil_worst_str`: it ranks how tightly the drawing packs each island, which `min_dist` sets by design. A proxy that rewards exaggerated separation selects for it.
+- **Stability over seeds.** It catches the arrangement, whose correlation with the data ranges from `{python} arr_rho_str` over seeds and settings. It passes the density error, because UMAP's density correlation stays within `{python} umap_rho_str` over five seeds. A map can be stably wrong.
+
+Every proxy scores one property of the map, and a reader of the map may be reading another. None of them is a loss against a fixed target, which is what PCA's reconstruction error is.
 
 ## What to do
 
