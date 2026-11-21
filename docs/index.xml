@@ -10,7 +10,858 @@
 <atom:link href="https://project-delphi.github.io/ml-blog/index.xml" rel="self" type="application/rss+xml"/>
 <description>Technical write-ups on machine learning, statistics, linear algebra, and the tooling around them, by Ravi Kalia.</description>
 <generator>quarto-1.6.40</generator>
-<lastBuildDate>Fri, 20 Nov 2026 17:00:00 GMT</lastBuildDate>
+<lastBuildDate>Sat, 21 Nov 2026 05:00:00 GMT</lastBuildDate>
+<item>
+  <title>When UMAP Lies, Part 5: Nothing to Validate Against</title>
+  <dc:creator>Ravi Kalia</dc:creator>
+  <link>https://project-delphi.github.io/ml-blog/posts/when-umap-limits/</link>
+  <description><![CDATA[ 
+
+
+
+
+
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><a href="./cover.png" class="lightbox" data-gallery="quarto-lightbox-gallery-1" title="When UMAP Lies, Part 5: Nothing to Validate Against"><img src="https://project-delphi.github.io/ml-blog/posts/when-umap-limits/cover.png" class="img-fluid figure-img" alt="When UMAP Lies, Part 5: Nothing to Validate Against"></a></p>
+<figcaption>When UMAP Lies, Part 5: Nothing to Validate Against</figcaption>
+</figure>
+</div>
+<p>A UMAP embedding cannot be checked the way a trained model is checked. It has no fixed target and no loss on held-out data, so a train/dev/test split can neither choose its settings nor catch a map that misleads.</p>
+<p>Anyone who has trained a classifier knows the routine. Hold some data back, score every candidate setting on a dev set, keep the best, and confirm it on a test set. The routine works for a linear regression and a language model alike, because two things stay put while the settings change: the target the model is trying to hit, and the loss that measures the miss. UMAP plots are read with the confidence that routine earns — two islands as two populations, open water as separation, a dense patch as a tight group — but the routine is never run on them, because UMAP gives it nothing to work with.</p>
+<p>The first four parts of this series catalogued how a map misleads: what a 2-D map keeps (<a href="../when-umap-lies/">Part 1</a>), how dimension breaks it (<a href="../when-umap-lies-dimension/">Part 2</a>), how settings and seeds move it (<a href="../when-umap-lies-tuning/">Part 3</a>), and which gaps, densities and holes it supports (<a href="../when-umap-lies-gaps-density-holes/">Part 4</a>). This last part asks why the usual safeguard catches none of it, and runs the safeguard to show what happens.</p>
+<p>Two results carry the argument:</p>
+<ul>
+<li><strong>No setting can be chosen.</strong> UMAP’s parameters are the training points’ own coordinates, and <code>n_neighbors</code> rebuilds the graph those coordinates are fitted to. Two settings minimise two different objectives, and the dev-set score that might choose between them changes its verdict with the seed and with its own neighbourhood size.</li>
+<li><strong>No failure shows up on held-out data.</strong> UMAP’s errors come from its objective, not from overfitting the training sample. Held-out points placed by <code>transform</code> inherit them.</li>
+</ul>
+<section id="data" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="data"><span class="header-section-number">1</span> Data</h2>
+<p>Both datasets are synthetic, so the true answer to every question asked of a map is known.</p>
+<ul>
+<li><strong>Four clusters.</strong> 1,200 points from four Gaussian clusters in ten dimensions (<code>make_blobs</code>: standard deviation 1, centres drawn at random in a box 20 units wide), split by stratified sampling into 720 train, 240 dev and 240 test points. The three parts share one distribution. The clusters stand in for the easiest real case, a few well-separated cell types or document topics: a validation method that fails here will not do better on harder data.</li>
+<li><strong>A curve with uneven density.</strong> 1,000 points along a gently bent curve in three dimensions, 900 of them packed into the first third of its length. It stands in for a population sampled unevenly, such as common cells beside rare ones.</li>
+</ul>
+<div id="data" class="cell" data-execution_count="2">
+<div class="cell-output cell-output-stdout">
+<pre><code>train 720  dev 240  test 240
+curve: density 18 times higher in the first third</code></pre>
+</div>
+</div>
+<p>The density along the curve changes by a factor of 18. Every UMAP map of the clusters is fitted on the 720 training points only, under four settings and five seeds: 20 maps.</p>
+</section>
+<section id="what-a-umap-fit-contains" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="what-a-umap-fit-contains"><span class="header-section-number">2</span> What a UMAP fit contains</h2>
+<p>UMAP does two things (<a href="https://arxiv.org/abs/1802.03426">McInnes, Healy &amp; Melville 2018</a>).</p>
+<ol type="1">
+<li><strong>It builds a graph from the data.</strong> Each point is joined to its <code>n_neighbors</code> nearest points, with weights <img src="https://latex.codecogs.com/png.latex?v_%7Bij%7D"> that fall off with distance. Each point’s weights are then rescaled so that its neighbourhood carries the same total weight, whether the region around it is dense or sparse.</li>
+<li><strong>It places the points in 2-D to match that graph.</strong> Map positions <img src="https://latex.codecogs.com/png.latex?y_i"> give weights <img src="https://latex.codecogs.com/png.latex?w_%7Bij%7D"> through a curve whose shape <code>min_dist</code> and <code>spread</code> set, and the optimiser moves the <img src="https://latex.codecogs.com/png.latex?y_i"> to minimise the cross-entropy between the two graphs:</li>
+</ol>
+<p><img src="https://latex.codecogs.com/png.latex?%0AL%20=%20%5Csum_%7Bi%20%5Cneq%20j%7D%20%5Cleft%5B%20v_%7Bij%7D%20%5Clog%20%5Cfrac%7Bv_%7Bij%7D%7D%7Bw_%7Bij%7D%7D%20+%20(1%20-%20v_%7Bij%7D)%20%5Clog%20%5Cfrac%7B1%20-%20v_%7Bij%7D%7D%7B1%20-%20w_%7Bij%7D%7D%20%5Cright%5D,%0A%5Cqquad%0Aw_%7Bij%7D%20=%20%5Cfrac%7B1%7D%7B1%20+%20a%20%5ClVert%20y_i%20-%20y_j%20%5CrVert%5E%7B2b%7D%7D.%0A"></p>
+<p>The optimiser moves the <img src="https://latex.codecogs.com/png.latex?y_i"> and nothing else. A fit on 720 training points has 1,440 parameters: two coordinates per point. Three consequences follow.</p>
+<ul>
+<li><strong>New points need a separate procedure.</strong> <code>transform</code> finds a new point’s neighbours among the training points, starts it at their weighted average position, and runs a few more rounds of optimisation with the training map held still. It is a placement rule added to the fit, not a function the fit learned.</li>
+<li><strong>Nothing maps back to the data.</strong> PCA and an autoencoder reconstruct a new point from its coordinates, and the reconstruction error on held-out points scores them. umap-learn’s <code>inverse_transform</code> interpolates between the training points near a map location; no part of the fit was trained to make it accurate.</li>
+<li><strong>No loss exists on held-out data.</strong> <img src="https://latex.codecogs.com/png.latex?L"> sums over pairs of training points. A dev point appears in no term of it, and umap-learn does not report <img src="https://latex.codecogs.com/png.latex?L"> at the end of a fit.</li>
+</ul>
+<div id="tbl-needs" class="quarto-float quarto-figure quarto-figure-center anchored">
+<figure class="quarto-float quarto-float-tbl figure">
+<figcaption class="quarto-float-caption-top quarto-float-caption quarto-float-tbl" id="tbl-needs-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Table&nbsp;1: The three things a train/dev/test split relies on, and what UMAP supplies for each.
+</figcaption>
+<div aria-describedby="tbl-needs-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>What validation needs</th>
+<th>Supervised model</th>
+<th>UMAP</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>A target fixed before fitting</td>
+<td>the labels</td>
+<td>the graph <img src="https://latex.codecogs.com/png.latex?v_%7Bij%7D">, rebuilt by <code>n_neighbors</code></td>
+</tr>
+<tr class="even">
+<td>Parameters that apply to new data</td>
+<td>the weights of a function</td>
+<td>one 2-D position per training point</td>
+</tr>
+<tr class="odd">
+<td>A loss on held-out points</td>
+<td>the error on the dev set</td>
+<td>none</td>
+</tr>
+</tbody>
+</table>
+</div>
+</figure>
+</div>
+<section id="the-target-moves-with-the-setting" class="level3" data-number="2.1">
+<h3 data-number="2.1" class="anchored" data-anchor-id="the-target-moves-with-the-setting"><span class="header-section-number">2.1</span> The target moves with the setting</h3>
+<p>The first row of Table&nbsp;1 is the one that rules out choosing a setting. A dev-set loss can rank settings only when they all aim at the same target. UMAP’s target is the graph, and <code>n_neighbors</code> builds it.</p>
+<div id="graph" class="cell" data-execution_count="3">
+<div class="cell-output cell-output-stdout">
+<pre><code>n_neighbors=5, min_dist=0.1      2,173 edges
+n_neighbors=15, min_dist=0.1     7,330 edges
+n_neighbors=100, min_dist=0.1   44,212 edges
+n_neighbors=15, min_dist=0.5     7,330 edges
+shared edges, (5, 0.1) vs (15, 0.1): 0.30
+shared edges, (5, 0.1) vs (100, 0.1): 0.05
+shared edges, (15, 0.1) vs (15, 0.5): 1.00</code></pre>
+</div>
+</div>
+<p>The <code>n_neighbors=5</code> graph has 2,173 edges and the <code>n_neighbors=100</code> graph has 44,212. Only 5% of the edges in either graph appear in both. <code>min_dist</code> leaves the graph alone (shared fraction 1.00) but changes <img src="https://latex.codecogs.com/png.latex?a"> and <img src="https://latex.codecogs.com/png.latex?b">, the curve that turns map distances into <img src="https://latex.codecogs.com/png.latex?w_%7Bij%7D">, so it changes the loss function itself. Comparing the final <img src="https://latex.codecogs.com/png.latex?L"> of two settings compares scores on two different exams.</p>
+</section>
+</section>
+<section id="choosing-a-setting-on-a-dev-set" class="level2 page-columns page-full" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="choosing-a-setting-on-a-dev-set"><span class="header-section-number">3</span> Choosing a setting on a dev set</h2>
+<p>With no loss to read, the nearest substitute is a score of how well the map keeps neighbours, computed on dev points placed by <code>transform</code>. Trustworthiness is that score (<a href="https://doi.org/10.1007/3-540-44668-0_68">Venna &amp; Kaski 2001</a>). It is 1 when every point’s nearest neighbours on the map were also among its nearest in the data, and it falls as the map brings in points that were far away. It has a setting of its own: the neighbourhood size <img src="https://latex.codecogs.com/png.latex?k">.</p>
+<div id="cell-fig-split" class="cell page-columns page-full" data-execution_count="4">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode cell-code" id="cb3" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1">DEV_EMB, DEV_TW <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> {}, {}</span>
+<span id="cb3-2"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> (name, seed), model <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> FITS.items():</span>
+<span id="cb3-3">    DEV_EMB[name, seed] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> model.transform(X_dev)</span>
+<span id="cb3-4">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> k <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> KS:</span>
+<span id="cb3-5">        DEV_TW[name, seed, k] <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> trustworthiness(X_dev, DEV_EMB[name, seed], n_neighbors<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>k)</span>
+<span id="cb3-6"></span>
+<span id="cb3-7"></span>
+<span id="cb3-8"><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">def</span> label_islands(ax, Z, labels):</span>
+<span id="cb3-9">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> c <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">range</span>(<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">4</span>):</span>
+<span id="cb3-10">        cx, cy <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> Z[labels <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> c].mean(<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>)</span>
+<span id="cb3-11">        ax.annotate(LETTERS[c], (cx, cy), xytext<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>(<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">14</span>), textcoords<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"offset points"</span>,</span>
+<span id="cb3-12">                    ha<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"center"</span>, fontsize<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">10</span>, fontweight<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"bold"</span>)</span>
+<span id="cb3-13"></span>
+<span id="cb3-14"></span>
+<span id="cb3-15">fig, axes <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> plt.subplots(<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">2</span>, figsize<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>(<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">9</span>, <span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">3.4</span>))</span>
+<span id="cb3-16"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> ax, name <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">zip</span>(axes, [<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"(5, 0.1)"</span>, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"(100, 0.1)"</span>]):</span>
+<span id="cb3-17">    model <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> FITS[name, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>]</span>
+<span id="cb3-18">    tr, dv, te <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> model.embedding_, DEV_EMB[name, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>], model.transform(X_test)</span>
+<span id="cb3-19">    ax.scatter(tr[:, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>], tr[:, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>], c<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>y_train, s<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">7</span>, cmap<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"tab10"</span>, vmin<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>, vmax<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">9</span>, alpha<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0.5</span>, label<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"train"</span>)</span>
+<span id="cb3-20">    ax.scatter(dv[:, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>], dv[:, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>], c<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>y_dev, s<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">26</span>, cmap<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"tab10"</span>, vmin<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>, vmax<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">9</span>, marker<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"x"</span>, label<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"dev"</span>)</span>
+<span id="cb3-21">    ax.scatter(te[:, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>], te[:, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>], edgecolors<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>plt.cm.tab10(y_test), s<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">26</span>, marker<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"s"</span>, facecolors<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"none"</span>, label<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"test"</span>)</span>
+<span id="cb3-22">    label_islands(ax, tr, y_train)</span>
+<span id="cb3-23">    ax.set_title(setting_title(name), fontsize<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">9</span>)</span>
+<span id="cb3-24">    ax.set_xticks([])<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">;</span> ax.set_yticks([])</span>
+<span id="cb3-25">    ax.margins(<span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0.12</span>)</span>
+<span id="cb3-26">axes[<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>].legend(fontsize<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">7</span>, loc<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"lower left"</span>, framealpha<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0.9</span>)</span>
+<span id="cb3-27">fig.tight_layout()</span></code></pre></div>
+</details>
+<div class="cell-output cell-output-display page-columns page-full">
+<div id="fig-split" class="quarto-float quarto-figure quarto-figure-center anchored page-columns page-full" alt="Two scatter plots, each with four coloured clusters labelled A to D. Small dots are training points; crosses and open squares, the dev and test points, sit on top of the cluster of the same colour in both panels.">
+<figure class="quarto-float quarto-float-fig figure page-columns page-full">
+<div aria-describedby="fig-split-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca" class="page-columns page-full">
+<a href="index_files/figure-html/fig-split-output-1.png" class="lightbox page-columns page-full" data-gallery="quarto-lightbox-gallery-2" title="Figure&nbsp;1: One train/dev/test split of four clusters, fitted on train only. Dots are training points, crosses are dev points placed by transform, and squares are test points. Held-out points land on their own cluster under both settings."><img src="https://project-delphi.github.io/ml-blog/posts/when-umap-limits/index_files/figure-html/fig-split-output-1.png" class="img-fluid figure-img column-page" alt="Two scatter plots, each with four coloured clusters labelled A to D. Small dots are training points; crosses and open squares, the dev and test points, sit on top of the cluster of the same colour in both panels."></a>
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-split-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure&nbsp;1: One train/dev/test split of four clusters, fitted on train only. Dots are training points, crosses are dev points placed by <code>transform</code>, and squares are test points. Held-out points land on their own cluster under both settings.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<p>Fit all four settings with five seeds, place the dev points, and score them at four values of <img src="https://latex.codecogs.com/png.latex?k">. Table&nbsp;2 shows which setting scores highest in each case.</p>
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode cell-code" id="cb4" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1">WINNERS <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> {</span>
+<span id="cb4-2">    (seed, k): <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">max</span>(SETTINGS, key<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">lambda</span> n: DEV_TW[n, seed, k])</span>
+<span id="cb4-3">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> seed <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> SEEDS <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> k <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> KS</span>
+<span id="cb4-4">}</span>
+<span id="cb4-5"><span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"| seed | "</span> <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">" | "</span>.join(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"$k = </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>k<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">$"</span> <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> k <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> KS) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">" |"</span>)</span>
+<span id="cb4-6"><span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"|---|"</span> <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"---|"</span> <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">*</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">len</span>(KS))</span>
+<span id="cb4-7"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> seed <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> SEEDS:</span>
+<span id="cb4-8">    <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">print</span>(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"| </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>seed<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;"> | "</span> <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">" | "</span>.join(WINNERS[seed, k] <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> k <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> KS) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">+</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">" |"</span>)</span>
+<span id="cb4-9"></span>
+<span id="cb4-10">n_winners <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">len</span>(<span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">set</span>(WINNERS.values()))</span>
+<span id="cb4-11">n_winners_str <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"All four"</span> <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">if</span> n_winners <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">==</span> <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">4</span> <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">else</span> <span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"</span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>n_winners<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;"> of the four"</span></span>
+<span id="cb4-12">gaps <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> [</span>
+<span id="cb4-13">    <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">max</span>(DEV_TW[n, s, k] <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> n <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> SETTINGS) <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">-</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">min</span>(DEV_TW[n, s, k] <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> n <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> SETTINGS)</span>
+<span id="cb4-14">    <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> s <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> SEEDS <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> k <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> KS</span>
+<span id="cb4-15">]</span>
+<span id="cb4-16">gap_str <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> num(np.mean(gaps), <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">3</span>)</span>
+<span id="cb4-17">tw10 <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> [DEV_TW[n, s, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">10</span>] <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> n <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> SETTINGS <span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> s <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> SEEDS]</span>
+<span id="cb4-18">tw10_str <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> span(tw10, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">3</span>)</span></code></pre></div>
+</details>
+<div id="tbl-winners" class="cell quarto-float quarto-figure quarto-figure-center anchored" data-execution_count="5">
+<figure class="quarto-float quarto-float-tbl figure">
+<figcaption class="quarto-float-caption-top quarto-float-caption quarto-float-tbl" id="tbl-winners-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Table&nbsp;2: The setting with the highest dev-set trustworthiness, by seed and by the score’s neighbourhood size <img src="https://latex.codecogs.com/png.latex?k">. Each setting is written as (n_neighbors, min_dist).
+</figcaption>
+<div aria-describedby="tbl-winners-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<table class="cell caption-top table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th>seed</th>
+<th><img src="https://latex.codecogs.com/png.latex?k%20=%205"></th>
+<th><img src="https://latex.codecogs.com/png.latex?k%20=%2010"></th>
+<th><img src="https://latex.codecogs.com/png.latex?k%20=%2030"></th>
+<th><img src="https://latex.codecogs.com/png.latex?k%20=%2060"></th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>0</td>
+<td>(5, 0.1)</td>
+<td>(5, 0.1)</td>
+<td>(15, 0.5)</td>
+<td>(15, 0.5)</td>
+</tr>
+<tr class="even">
+<td>1</td>
+<td>(15, 0.1)</td>
+<td>(15, 0.1)</td>
+<td>(100, 0.1)</td>
+<td>(100, 0.1)</td>
+</tr>
+<tr class="odd">
+<td>2</td>
+<td>(15, 0.1)</td>
+<td>(15, 0.1)</td>
+<td>(100, 0.1)</td>
+<td>(5, 0.1)</td>
+</tr>
+<tr class="even">
+<td>3</td>
+<td>(15, 0.1)</td>
+<td>(15, 0.1)</td>
+<td>(15, 0.5)</td>
+<td>(15, 0.1)</td>
+</tr>
+<tr class="odd">
+<td>4</td>
+<td>(15, 0.5)</td>
+<td>(15, 0.5)</td>
+<td>(100, 0.1)</td>
+<td>(15, 0.5)</td>
+</tr>
+</tbody>
+</table>
+</div>
+</figure>
+</div>
+<p>All four settings win somewhere in Table&nbsp;2. Changing only the seed changes the winner, and so does changing only <img src="https://latex.codecogs.com/png.latex?k">. The margins are thin as well: the best and worst setting differ by 0.006 on average. A dev set that names a different winner each time it is asked has not chosen anything.</p>
+<p>Supervised learning tolerates a noisy dev score because the score measures what the model is for. Trustworthiness measures one property of the map, and readers look at others: which island sits next to which, and how tightly each one is packed.</p>
+</section>
+<section id="cluster-arrangement" class="level2 page-columns page-full" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="cluster-arrangement"><span class="header-section-number">4</span> Cluster arrangement</h2>
+<p>Every map in Figure&nbsp;2 draws four clean islands, and dev-set trustworthiness at <img src="https://latex.codecogs.com/png.latex?k%20=%2010"> runs from 0.927 to 0.937 over all 20 maps. By the score, every map is good. The arrangement of the islands is another matter.</p>
+<div id="cell-fig-umap-grid" class="cell page-columns page-full" data-execution_count="6">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode cell-code" id="cb5" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1">fig, axes <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> plt.subplots(<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">4</span>, figsize<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>(<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">13</span>, <span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">3.2</span>))</span>
+<span id="cb5-2"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> ax, name <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">zip</span>(axes, SETTINGS):</span>
+<span id="cb5-3">    e <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> FITS[name, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>].embedding_</span>
+<span id="cb5-4">    ax.scatter(e[:, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>], e[:, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>], c<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>y_train, s<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">6</span>, cmap<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"tab10"</span>, vmin<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>, vmax<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">9</span>, alpha<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0.85</span>)</span>
+<span id="cb5-5">    label_islands(ax, e, y_train)</span>
+<span id="cb5-6">    ax.set_title(setting_title(name), fontsize<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">8</span>)</span>
+<span id="cb5-7">    ax.set_xticks([])<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">;</span> ax.set_yticks([])</span>
+<span id="cb5-8">    ax.margins(<span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0.12</span>)</span>
+<span id="cb5-9">fig.tight_layout()</span></code></pre></div>
+</details>
+<div class="cell-output cell-output-display page-columns page-full">
+<div id="fig-umap-grid" class="quarto-float quarto-figure quarto-figure-center anchored page-columns page-full" alt="Four scatter plots of the same four coloured clusters, labelled A to D, under four UMAP settings. Each panel shows four compact islands. The islands sit in a different arrangement in every panel; in the n_neighbors=100 panel, islands C and D are the nearest pair.">
+<figure class="quarto-float quarto-float-fig figure page-columns page-full">
+<div aria-describedby="fig-umap-grid-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca" class="page-columns page-full">
+<a href="index_files/figure-html/fig-umap-grid-output-1.png" class="lightbox page-columns page-full" data-gallery="quarto-lightbox-gallery-3" title="Figure&nbsp;2: The training clusters under four settings, seed 0, with each cluster labelled at its centre. All four draw four clean islands. In the data, C and D are the two clusters furthest apart; under n_neighbors=100 they are drawn closest together."><img src="https://project-delphi.github.io/ml-blog/posts/when-umap-limits/index_files/figure-html/fig-umap-grid-output-1.png" class="img-fluid figure-img column-page" alt="Four scatter plots of the same four coloured clusters, labelled A to D, under four UMAP settings. Each panel shows four compact islands. The islands sit in a different arrangement in every panel; in the n_neighbors=100 panel, islands C and D are the nearest pair."></a>
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-umap-grid-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure&nbsp;2: The training clusters under four settings, seed 0, with each cluster labelled at its centre. All four draw four clean islands. In the data, C and D are the two clusters furthest apart; under n_neighbors=100 they are drawn closest together.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<div id="arrangement" class="cell" data-execution_count="7">
+<div class="cell-output cell-output-stdout">
+<pre><code>n_neighbors=5, min_dist=0.1    rank correlation by seed: −0.20  0.43  0.43  −0.43  −0.54
+n_neighbors=15, min_dist=0.1   rank correlation by seed: −0.26  0.54  −0.14  0.49  −0.09
+n_neighbors=100, min_dist=0.1  rank correlation by seed: −0.37  0.31  −0.37  −0.14  0.31
+n_neighbors=15, min_dist=0.5   rank correlation by seed: 0.20  0.37  −0.26  0.31  0.66</code></pre>
+</div>
+</div>
+<p>In the data, C and D are 32.5 units apart and the closest pair is 20.2. Compare the six distances between cluster centres in the data with the same six on each map. The rank correlation runs from −0.54 to 0.66 over the 20 maps, and it is negative in 10 of them. The pair furthest apart in the data is drawn closest together in 5 of the 20.</p>
+<p>Two points that are not neighbours in the graph get <img src="https://latex.codecogs.com/png.latex?v_%7Bij%7D%20=%200">, whether they are 20 units apart in the data or 30. The objective pushes every such pair apart by the same rule, so it has no preference about where one island sits relative to another, and the starting layout and the seed decide it (<a href="../when-umap-lies-tuning/">Part 3</a>; <a href="https://doi.org/10.1038/s41587-020-00809-z">Kobak &amp; Linderman 2021</a>). A dev point lands on its own cluster’s island wherever that island was drawn, so the held-out set repeats whatever arrangement it is given.</p>
+</section>
+<section id="density-on-held-out-points" class="level2 page-columns page-full" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="density-on-held-out-points"><span class="header-section-number">5</span> Density on held-out points</h2>
+<p>The rescaling in step 1 of the fit gives every neighbourhood the same total weight, which removes density from the graph before the layout starts. The curve measures how much survives. Each point’s local density is one over the squared distance to its 15th nearest neighbour, and the score is the rank correlation between density in the data and density on the map.</p>
+<div id="density" class="cell" data-execution_count="8">
+<div class="cell-output cell-output-stdout">
+<pre><code>all 1,000 points  PCA 0.76  UMAP 0.26 to 0.30  densMAP 0.78 to 0.80
+held-out 300      PCA 0.84  UMAP 0.40 to 0.50
+densMAP transform: NotImplementedError: Transforming data into an existing embedding not supported for densMAP.</code></pre>
+</div>
+</div>
+<div id="cell-fig-density" class="cell page-columns page-full" data-execution_count="9">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="sourceCode cell-code" id="cb8" style="background: #f1f3f5;"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1">fig, axes <span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span> plt.subplots(<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">3</span>, figsize<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>(<span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">11</span>, <span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">3.2</span>))</span>
+<span id="cb8-2"><span class="cf" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">for</span> ax, (e, name) <span class="kw" style="color: #003B4F;
+background-color: null;
+font-weight: bold;
+font-style: inherit;">in</span> <span class="bu" style="color: null;
+background-color: null;
+font-style: inherit;">zip</span>(axes, [(pca_map, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"PCA"</span>), (umap_map, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"UMAP"</span>), (dens_map, <span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"densMAP"</span>)]):</span>
+<span id="cb8-3">    ax.scatter(e[:, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0</span>], e[:, <span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">1</span>], c<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span>np.log(truth), s<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">6</span>, cmap<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="st" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"viridis"</span>, alpha<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="fl" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">0.8</span>)</span>
+<span id="cb8-4">    ax.set_title(<span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">f"</span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>name<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">   ρ = </span><span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">{</span>num(rho(truth, local_density(e)))<span class="sc" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">}</span><span class="ss" style="color: #20794D;
+background-color: null;
+font-style: inherit;">"</span>, fontsize<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">=</span><span class="dv" style="color: #AD0000;
+background-color: null;
+font-style: inherit;">10</span>)</span>
+<span id="cb8-5">    ax.set_xticks([])<span class="op" style="color: #5E5E5E;
+background-color: null;
+font-style: inherit;">;</span> ax.set_yticks([])</span>
+<span id="cb8-6">fig.tight_layout()</span></code></pre></div>
+</details>
+<div class="cell-output cell-output-display page-columns page-full">
+<div id="fig-density" class="quarto-float quarto-figure quarto-figure-center anchored page-columns page-full" alt="Three maps of the same curve coloured from purple (sparse) to yellow (dense). In the PCA and densMAP panels the yellow points are packed tightly at one end and the purple points spread out at the other. In the UMAP panel the yellow points are spread along a long arm at even spacing, and the purple points form a short tail broken into pieces.">
+<figure class="quarto-float quarto-float-fig figure page-columns page-full">
+<div aria-describedby="fig-density-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca" class="page-columns page-full">
+<a href="index_files/figure-html/fig-density-output-1.png" class="lightbox page-columns page-full" data-gallery="quarto-lightbox-gallery-4" title="Figure&nbsp;3: The unevenly sampled curve, coloured by true local density (yellow is dense), seed 0. PCA keeps the crowded end crowded. UMAP gives every point about the same spacing, so the crowded end stretches into the long arm and the sparse end shrinks to a short, broken tail. densMAP, which adds a density term to UMAP’s objective, puts the crowding back and scatters the sparse end. Each title gives the rank correlation with the true density."><img src="https://project-delphi.github.io/ml-blog/posts/when-umap-limits/index_files/figure-html/fig-density-output-1.png" class="img-fluid figure-img column-page" alt="Three maps of the same curve coloured from purple (sparse) to yellow (dense). In the PCA and densMAP panels the yellow points are packed tightly at one end and the purple points spread out at the other. In the UMAP panel the yellow points are spread along a long arm at even spacing, and the purple points form a short tail broken into pieces."></a>
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-density-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure&nbsp;3: The unevenly sampled curve, coloured by true local density (yellow is dense), seed 0. PCA keeps the crowded end crowded. UMAP gives every point about the same spacing, so the crowded end stretches into the long arm and the sparse end shrinks to a short, broken tail. densMAP, which adds a density term to UMAP’s objective, puts the crowding back and scatters the sparse end. Each title gives the rank correlation with the true density.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<p>On all 1,000 points, the correlation is 0.76 for PCA and 0.26 to 0.30 for UMAP over five seeds. UMAP draws the crowded third and the sparse two-thirds with roughly the same spacing between points. The 900 crowded points stretch into a long arm, and the 100 sparse points shrink into a short tail with gaps that are not in the data. A tight-looking island on a UMAP map is no evidence of a tight population.</p>
+<p>A held-out set does not catch this. Fit on 700 points and place the other 300 with <code>transform</code>: the held-out points correlate with their true density at 0.40 to 0.50, against 0.84 for PCA on the same points. They land where the training map’s even spacing puts them, so they carry the erasure rather than expose it.</p>
+<p>densMAP (<a href="https://doi.org/10.1038/s41587-020-00801-7">Narayan, Berger &amp; Cho 2021</a>) adds a term to the objective that preserves each point’s local radius, and it restores the correlation to 0.78 to 0.80. It cannot place new points: in umap-learn 0.6.0, <code>transform</code> on a densMAP fit raises <code>NotImplementedError</code>.</p>
+</section>
+<section id="what-to-do" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="what-to-do"><span class="header-section-number">6</span> What to do</h2>
+<ul>
+<li><strong>Test a claim in the data, not on the map.</strong> Distances between groups, density and overlap can all be computed in the input space or on PCA components. The map illustrates a result; it is not the evidence for it.</li>
+<li><strong>Do not read the arrangement of islands.</strong> Over 20 maps of four clusters, the correlation between the map’s distances between cluster centres and the data’s ran from −0.54 to 0.66.</li>
+<li><strong>Show a grid of settings and seeds.</strong> A feature that appears in some panels and not others belongs to the setting, not to the data.</li>
+<li><strong>Report the setting:</strong> <code>n_neighbors</code>, <code>min_dist</code>, initialisation and seed. Without them the picture cannot be reproduced.</li>
+<li><strong>Use densMAP when density is the claim,</strong> and expect to refit it for new data.</li>
+</ul>
+</section>
+<section id="constraints" class="level2" data-number="7">
+<h2 data-number="7" class="anchored" data-anchor-id="constraints"><span class="header-section-number">7</span> Constraints</h2>
+<ul>
+<li>The data are synthetic and small: four clusters at <img src="https://latex.codecogs.com/png.latex?n%20=%20720/240/240"> and one curve at <img src="https://latex.codecogs.com/png.latex?n%20=%201000">. Real data are skewed, nested and noisy in structured ways, which can only make selection harder.</li>
+<li>Settings were compared on one score family, trustworthiness at four values of <img src="https://latex.codecogs.com/png.latex?k">. Continuity, the companion score from <a href="../when-umap-lies/">Part 1</a>, would add columns to Table&nbsp;2, not a fixed target.</li>
+<li>Each map has six distances between cluster centres, so a single rank correlation is coarse. The range over 20 maps and the count of reversed pairs are the evidence, not any one value.</li>
+<li>Parametric UMAP (<a href="https://doi.org/10.1162/neco_a_01434">Sainburg, McInnes &amp; Gentner 2021</a>) trains a neural network as the encoder, so it does return a function of new data. Its loss is still the cross-entropy against a graph that <code>n_neighbors</code> builds, so the target still moves with the setting. It is not run here.</li>
+<li>t-SNE and the other neighbour-graph methods in <a href="../when-umap-lies/">Part 1</a> also fit a graph built by their own settings, and none of them has a loss on held-out data.</li>
+</ul>
+<p>Settings. Build. Targets. Dev. Sets. Cannot. Choose. Check. The. Data.</p>
+</section>
+<section id="references" class="level2" data-number="8">
+<h2 data-number="8" class="anchored" data-anchor-id="references"><span class="header-section-number">8</span> References</h2>
+<ul>
+<li>McInnes, L., Healy, J. &amp; Melville, J. (2018). <a href="https://arxiv.org/abs/1802.03426">UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction</a>. arXiv:1802.03426.</li>
+<li>Venna, J. &amp; Kaski, S. (2001). <a href="https://doi.org/10.1007/3-540-44668-0_68">Neighborhood preservation in nonlinear projection methods: an experimental study</a>. In <em>Artificial Neural Networks — ICANN 2001</em>.</li>
+<li>Kobak, D. &amp; Linderman, G. C. (2021). <a href="https://doi.org/10.1038/s41587-020-00809-z">Initialization is critical for preserving global data structure in both t-SNE and UMAP</a>. <em>Nature Biotechnology</em> 39(2).</li>
+<li>Narayan, A., Berger, B. &amp; Cho, H. (2021). <a href="https://doi.org/10.1038/s41587-020-00801-7">Assessing single-cell transcriptomic variability through density-preserving data visualization</a>. <em>Nature Biotechnology</em> 39(6).</li>
+<li>Sainburg, T., McInnes, L. &amp; Gentner, T. Q. (2021). <a href="https://doi.org/10.1162/neco_a_01434">Parametric UMAP embeddings for representation and semisupervised learning</a>. <em>Neural Computation</em> 33(11).</li>
+<li>Software: <a href="https://github.com/lmcinnes/umap">umap-learn</a> 0.6.0, <a href="https://scikit-learn.org">scikit-learn</a> 1.9.1.</li>
+<li><a href="../when-umap-lies/">When UMAP Lies, Part 1: The Map and the Territory</a>, <a href="../when-umap-lies-dimension/">Part 2: Ambient and Intrinsic Dimension</a>, <a href="../when-umap-lies-tuning/">Part 3: Settings, Seeds and Starting Points</a>, <a href="../when-umap-lies-gaps-density-holes/">Part 4: Gaps, Density and Holes</a>.</li>
+</ul>
+
+
+</section>
+
+ ]]></description>
+  <category>Machine Learning</category>
+  <category>Statistics</category>
+  <guid>https://project-delphi.github.io/ml-blog/posts/when-umap-limits/</guid>
+  <pubDate>Sat, 21 Nov 2026 05:00:00 GMT</pubDate>
+  <media:content url="https://project-delphi.github.io/ml-blog/posts/when-umap-limits/cover.png" medium="image" type="image/png" height="76" width="144"/>
+</item>
 <item>
   <title>When UMAP Lies, Part 4: Gaps, Density and Holes</title>
   <dc:creator>Ravi Kalia</dc:creator>
@@ -27777,75 +28628,6 @@ Table&nbsp;13: What each layer caught in the late-fee change.
   <guid>https://project-delphi.github.io/ml-blog/posts/code-review-at-agent-speed/</guid>
   <pubDate>Sat, 17 Oct 2026 05:00:00 GMT</pubDate>
   <media:content url="https://project-delphi.github.io/ml-blog/posts/code-review-at-agent-speed/cover.png" medium="image" type="image/png" height="76" width="144"/>
-</item>
-<item>
-  <title>Below the Prediction Iceberg</title>
-  <dc:creator>Ravi Kalia</dc:creator>
-  <link>https://project-delphi.github.io/ml-blog/posts/intrinsic-neural-timescales/</link>
-  <description><![CDATA[ 
-
-
-
-
-
-<div class="quarto-figure quarto-figure-center">
-<figure class="figure">
-<p><img src="https://project-delphi.github.io/ml-blog/posts/intrinsic-neural-timescales/cover.png" class="img-fluid figure-img"></p>
-<figcaption>Below the Prediction Iceberg</figcaption>
-</figure>
-</div>
-<p>A brain that predicts what comes next still has to settle a prior question — how much of the past counts as <em>now</em> — and the hierarchy of clocks that answers it is what keeps a self from flickering with every fresh sensation.</p>
-<section id="a-prediction-still-has-to-decide-how-long-now-is" class="level2">
-<h2 class="anchored" data-anchor-id="a-prediction-still-has-to-decide-how-long-now-is">A prediction still has to decide how long now is</h2>
-<p>Step out onto a noisy street and a car horn splits the air. Your ears jump at the edge of the sound in milliseconds, yet your sense of who is standing on the pavement and where you are walking does not reset when the horn blasts. The surprise registers, and you stay you.</p>
-<p>In <a href="../consciousness-recursive-prediction/">The One Thing Always in the Room</a>, we followed Karl Friston’s free energy principle to one account of where that self comes from: if perception is a stack of predictions correcting their own errors, the predictor itself is the one term that turns up in every frame, and the self is the compression that finally models that invariant. Yet a stack of predictions by itself has a missing piece. Nothing in the rule “update on prediction error” says why the top of the stack holds still when a horn goes off, instead of rewriting its estimate of who you are at the speed of the ear.</p>
-<p>When Georg Northoff came to Bogotá, we had a good conversation about where that stability lives. He described Karl Friston’s work and cognitive neuroscience as the tip of an iceberg — the visible part where beliefs update, actions fire, and tasks get done — while the bulk of the ice sits underneath the sea. What lies beneath the waterline, in his view, is the brain’s own spatiotemporal structure: a hierarchy of timescale priors that feeds continuously into the predicting self before a single task or thought gets underway.</p>
-</section>
-<section id="every-cortical-rung-listens-through-a-different-window" class="level2">
-<h2 class="anchored" data-anchor-id="every-cortical-rung-listens-through-a-different-window">Every cortical rung listens through a different window</h2>
-<p>Tap a guitar string in a dry closet and the note dies in a fraction of a second; tap it in a cathedral and the room holds the tone for seconds. Before any melody is played, the room already has an opinion about how long an event lasts.</p>
-<p>Cortical circuits differ in the same way even when nothing much is happening. Record from a patch of cortex at rest, compare its activity at one moment with its activity a short lag <img src="https://latex.codecogs.com/png.latex?%5CDelta%20t"> later, and the correlation drops off roughly as an exponential, <img src="https://latex.codecogs.com/png.latex?%5Cexp(-%5CDelta%20t%20/%20%5Ctau)">. That decay constant <img src="https://latex.codecogs.com/png.latex?%5Ctau"> is what Northoff and colleagues call an <em>intrinsic neural timescale</em> (and what John Murray’s macaque recordings mapped across the cortical sheet): the length of the window over which a neural population naturally pools its own recent past.</p>
-<p>Those windows are not uniform across the brain; they form a steep gradient. Primary sensory areas — visual, auditory, somatosensory cortex — run fast clocks, with <img src="https://latex.codecogs.com/png.latex?%5Ctau"> in the tens of milliseconds, because a circuit that lingered on the last phoneme would blur the next one. Climb up through association cortex toward transmodal hubs and the default mode network — the regions most consistently tied to self-referential thought and autobiographical continuity — and <img src="https://latex.codecogs.com/png.latex?%5Ctau"> stretches into hundreds of milliseconds and beyond. Each rung listens to the world through a window of a different width, which raises a mechanical question: what happens when a hierarchy of windows like that is wired into Friston’s prediction loop?</p>
-</section>
-<section id="slow-windows-act-as-priors-that-refuse-to-flicker" class="level2">
-<h2 class="anchored" data-anchor-id="slow-windows-act-as-priors-that-refuse-to-flicker">Slow windows act as priors that refuse to flicker</h2>
-<p>In active inference, every rung of the cortical hierarchy passes top-down predictions to the rung beneath it and receives bottom-up prediction errors in return. How much a rung moves when an error arrives depends on a prior over <em>rate of change</em>: if a level assumes its hidden cause changes slowly, a brief spike of error is treated as local weather rather than a shift in climate. Northoff’s intrinsic timescales turn that abstract prior into hardware. A rung with a long window <img src="https://latex.codecogs.com/png.latex?%5Ctau"> physically averages over dozens of fast cycles from the rung beneath it, so only errors that persist on the slow rung’s own timescale can bend its state.</p>
-<p>To see the two timescales pull apart, the interactive simulation generates a synthetic <img src="https://latex.codecogs.com/png.latex?2%7B,%7D000%5Ctext%7B%20ms%7D"> sensory stream sampled every <img src="https://latex.codecogs.com/png.latex?10%5Ctext%7B%20ms%7D">. The stream combines a slow sinusoidal baseline (standing in for an ongoing bodily and situational state), seeded zero-mean Gaussian noise (standing in for rapid sensory fluctuations), and a <img src="https://latex.codecogs.com/png.latex?120%5Ctext%7B%20ms%7D"> surprise burst starting at <img src="https://latex.codecogs.com/png.latex?t%20=%20900%5Ctext%7B%20ms%7D"> (standing in for a sudden transient disturbance like the horn on the street). We use a synthetic two-filter model here so the true underlying baseline and the isolated deflection from the burst are known at every millisecond; if a slow rung chased the raw noise in a real brain, the self-model would jitter with every saccade and acoustic edge. Two leaky integrators read that stream in parallel: a fast sensory rung fixed at <img src="https://latex.codecogs.com/png.latex?%5Ctau_%7B%5Ctext%7Bfast%7D%7D%20=%2040%5Ctext%7B%20ms%7D">, and a slow prior rung whose timescale <img src="https://latex.codecogs.com/png.latex?%5Ctau_%7B%5Ctext%7Bslow%7D%7D"> we can step from <img src="https://latex.codecogs.com/png.latex?40%5Ctext%7B%20ms%7D"> up to <img src="https://latex.codecogs.com/png.latex?600%5Ctext%7B%20ms%7D">.</p>
-<p>At the default setting (<img src="https://latex.codecogs.com/png.latex?%5Ctau_%7B%5Ctext%7Bslow%7D%7D%20=%20300%5Ctext%7B%20ms%7D">, sharp burst of <img src="https://latex.codecogs.com/png.latex?2.5">), the slow prior’s autocorrelation half-life is <img src="https://latex.codecogs.com/png.latex?208%5Ctext%7B%20ms%7D">, only <img src="https://latex.codecogs.com/png.latex?10%5C%25"> of the fast sensory noise passes into the slow state, and the <img src="https://latex.codecogs.com/png.latex?2.5">-unit surprise burst deflects the slow state by a peak of <img src="https://latex.codecogs.com/png.latex?0.88">. Step <img src="https://latex.codecogs.com/png.latex?%5Ctau_%7B%5Ctext%7Bslow%7D%7D"> down to <img src="https://latex.codecogs.com/png.latex?40%5Ctext%7B%20ms%7D"> so the slow rung matches the sensory clock: the half-life drops to <img src="https://latex.codecogs.com/png.latex?28%5Ctext%7B%20ms%7D">, passed noise jumps to <img src="https://latex.codecogs.com/png.latex?34%5C%25">, and the burst yanks the state by <img src="https://latex.codecogs.com/png.latex?2.40"> units — the two traces collapse onto each other and the baseline is lost in the spike. Now step <img src="https://latex.codecogs.com/png.latex?%5Ctau_%7B%5Ctext%7Bslow%7D%7D"> up through <img src="https://latex.codecogs.com/png.latex?120%5Ctext%7B%20ms%7D"> (half-life <img src="https://latex.codecogs.com/png.latex?83%5Ctext%7B%20ms%7D">, noise <img src="https://latex.codecogs.com/png.latex?18%5C%25">, peak deflection <img src="https://latex.codecogs.com/png.latex?1.65">) to <img src="https://latex.codecogs.com/png.latex?600%5Ctext%7B%20ms%7D">: the half-life reaches <img src="https://latex.codecogs.com/png.latex?416%5Ctext%7B%20ms%7D">, passed noise falls to <img src="https://latex.codecogs.com/png.latex?7%5C%25">, and the burst moves the slow state by just <img src="https://latex.codecogs.com/png.latex?0.49">. Toggling the surprise burst to moderate (<img src="https://latex.codecogs.com/png.latex?1.5">) or none (<img src="https://latex.codecogs.com/png.latex?0.0">) at <img src="https://latex.codecogs.com/png.latex?%5Ctau_%7B%5Ctext%7Bslow%7D%7D%20=%20300%5Ctext%7B%20ms%7D"> lowers the peak deflection to <img src="https://latex.codecogs.com/png.latex?0.53"> and <img src="https://latex.codecogs.com/png.latex?0.00"> while the <img src="https://latex.codecogs.com/png.latex?10%5C%25"> noise floor stays fixed.</p>
-<div id="widget-timescales">
-
-</div>
-<script src="widgets.js"></script>
-<p>That gap between the dashed sensory trace (<img src="https://latex.codecogs.com/png.latex?2.40"> units of deflection at <img src="https://latex.codecogs.com/png.latex?%5Ctau%20=%2040%5Ctext%7B%20ms%7D">) and the solid slow trace (<img src="https://latex.codecogs.com/png.latex?0.49"> units at <img src="https://latex.codecogs.com/png.latex?%5Ctau_%7B%5Ctext%7Bslow%7D%7D%20=%20600%5Ctext%7B%20ms%7D">) is what a hierarchy of timescale priors buys. The fast rung has to be jumpy so you do not step in front of the car; the slow rung has to be stubborn so the person stepping back on the kerb is still the person who left the house five minutes ago. Even so, a stubborn filter only explains so much.</p>
-</section>
-<section id="caveat-a-slow-clock-is-not-yet-a-someone" class="level2">
-<h2 class="anchored" data-anchor-id="caveat-a-slow-clock-is-not-yet-a-someone">Caveat: a slow clock is not yet a someone</h2>
-<p>A leaky integrator with <img src="https://latex.codecogs.com/png.latex?%5Ctau%20=%20600%5Ctext%7B%20ms%7D"> is five lines of arithmetic, and nobody thinks a low-pass filter on a circuit board has an inner life. Northoff’s hierarchy of intrinsic timescales explains why a self-model has <em>temporal thickness</em> — why the predictor’s estimate of itself spans seconds and scenes rather than resetting every forty milliseconds — just as recursive prediction explains why the boundary between self and world falls where action has reliable control. Neither mechanism, on its own, explains why that temporally thick model feels like anything from the inside. What the timescale hierarchy does settle is a constraint: whatever accounts for subjective continuity cannot be built out of fast clocks alone.</p>
-</section>
-<section id="the-water-holds-the-tip-up" class="level2">
-<h2 class="anchored" data-anchor-id="the-water-holds-the-tip-up">The water holds the tip up</h2>
-<p>Return to Northoff’s iceberg from that conversation in Bogotá. Friston’s free energy principle gives the calculus at the waterline — predictions flowing down, errors flowing up, action and perception trading off to keep surprise low. Underneath that calculus sits a physical commitment to time: a nested stack of integration windows, widening from tens of milliseconds at the sensory rim to hundreds of milliseconds and seconds in the networks that track the organism itself. Without those slow priors underneath the sea, a predictive brain would still correct its errors frame by frame, but it could never pool enough frames together to notice the one thing that never leaves the room.</p>
-<p>Fast. Senses. Flicker. Slow. Priors. Pool. Errors. Fade. Selves. Endure.</p>
-</section>
-<section id="references" class="level2">
-<h2 class="anchored" data-anchor-id="references">References</h2>
-<ul>
-<li>Georg Northoff on spatiotemporal neuroscience and intrinsic neural timescales (<em>The Spontaneous Brain</em>, MIT Press).</li>
-<li>Karl Friston on the free energy principle, active inference, and hierarchical temporal scales in cortex.</li>
-<li>John D. Murray et al.&nbsp;(2014), “A hierarchy of intrinsic timescales across primate cortex,” <em>Nature Neuroscience</em>.</li>
-<li><a href="../consciousness-recursive-prediction/">The One Thing Always in the Room</a> — the companion essay on recursive prediction and the self as an invariant.</li>
-</ul>
-
-
-</section>
-
- ]]></description>
-  <category>AI</category>
-  <category>Biology</category>
-  <category>Personal</category>
-  <guid>https://project-delphi.github.io/ml-blog/posts/intrinsic-neural-timescales/</guid>
-  <pubDate>Tue, 13 Oct 2026 05:00:00 GMT</pubDate>
-  <media:content url="https://project-delphi.github.io/ml-blog/posts/intrinsic-neural-timescales/cover.png" medium="image" type="image/png" height="76" width="144"/>
 </item>
 </channel>
 </rss>

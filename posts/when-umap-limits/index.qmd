@@ -1,12 +1,12 @@
 ---
-title: "When UMAP Lies, Part 5: No Loss Function, No Validation"
-subtitle: "UMAP is non-parametric, fits a graph rather than the data, and no held-out set can choose between its hyperparameters"
-description: "UMAP returns coordinates for the points it is given and nothing more. It minimises a cross-entropy between two fuzzy simplicial sets, not a reconstruction or prediction loss on the data. Every hyperparameter setting completes without error, no dev set can rank them, and infinitely many settings are equally acceptable. Demonstrated on train/dev/test splits of synthetic data."
+title: "When UMAP Lies, Part 5: Nothing to Validate Against"
+subtitle: "UMAP fits a target that its own settings build, so no held-out set can choose a setting or catch a misleading map"
+description: "Supervised learning picks hyperparameters on a dev set because the target and the loss stay fixed while the settings change. UMAP has neither: its parameters are the training points' own coordinates, and n_neighbors rebuilds the graph they are fitted to. On a train/dev/test split of synthetic clusters, the dev-set winner changes with the seed and with the score's own neighbourhood size, the arrangement of clusters on the map is uncorrelated with the data, and held-out points inherit the map's erased density instead of exposing it."
 author: "Ravi Kalia"
 date: "2026-11-21T00:00:00"
 categories: [Machine Learning, Statistics]
 image: "./cover.png"
-tags: [UMAP, dimensionality reduction, non-parametric, hyperparameters, validation, manifold learning, train-dev-test]
+tags: [UMAP, dimensionality reduction, non-parametric, hyperparameters, validation, manifold learning, train-dev-test, densMAP]
 jupyter: when-umap-limits-blog
 resources:
   - requirements.txt
@@ -21,16 +21,18 @@ execute:
   warning: false
 ---
 
-![When UMAP Lies, Part 5: No Loss Function, No Validation](./cover.png)
+![When UMAP Lies, Part 5: Nothing to Validate Against](./cover.png)
 
-A UMAP plot invites reading. Two islands look like two populations, the water between them like separation, a dense patch like a tight group. The standard way to decide which picture is right is to hold out data and score the fit. UMAP gives you nothing to score. This post shows what follows, on train/dev/test splits where the answer is known.
+A UMAP embedding cannot be checked the way a trained model is checked. It has no fixed target and no loss on held-out data, so a train/dev/test split can neither choose its settings nor catch a map that misleads.
 
-The series so far measured what a 2-D map keeps ([Part 1](../when-umap-lies/)), how dimension breaks it ([Part 2](../when-umap-lies-dimension/)), how settings and seeds move it ([Part 3](../when-umap-lies-tuning/)), and which visual features it can support ([Part 4](../when-umap-lies-gaps-density-holes/)). This part asks what kind of object a UMAP embedding is, then demonstrates the failures that follow from it.
+Anyone who has trained a classifier knows the routine. Hold some data back, score every candidate setting on a dev set, keep the best, and confirm it on a test set. The routine works for a linear regression and a language model alike, because two things stay put while the settings change: the target the model is trying to hit, and the loss that measures the miss. UMAP plots are read with the confidence that routine earns — two islands as two populations, open water as separation, a dense patch as a tight group — but the routine is never run on them, because UMAP gives it nothing to work with.
 
-The post covers one idea and three demonstrations of it:
+The first four parts of this series catalogued how a map misleads: what a 2-D map keeps ([Part 1](../when-umap-lies/)), how dimension breaks it ([Part 2](../when-umap-lies-dimension/)), how settings and seeds move it ([Part 3](../when-umap-lies-tuning/)), and which gaps, densities and holes it supports ([Part 4](../when-umap-lies-gaps-density-holes/)). This last part asks why the usual safeguard catches none of it, and runs the safeguard to show what happens.
 
-- **The idea:** a UMAP fit returns coordinates for the training points, not a function of the data. The graph objective never sees a held-out point, so there is no value on a dev or test set to choose settings or catch a bad map.
-- **The demonstrations:** a train/dev/test split that cannot decide between settings; four settings that all fit and disagree; three ways the map fails with no signal that it has.
+Two results carry the argument:
+
+- **No setting can be chosen.** UMAP's parameters are the training points' own coordinates, and `n_neighbors` rebuilds the graph those coordinates are fitted to. Two settings minimise two different objectives, and the dev-set score that might choose between them changes its verdict with the seed and with its own neighbourhood size.
+- **No failure shows up on held-out data.** UMAP's errors come from its objective, not from overfitting the training sample. Held-out points placed by `transform` inherit them.
 
 ```{python}
 #| label: setup
@@ -40,49 +42,56 @@ import matplotlib.pyplot as plt
 from sklearn.datasets import make_blobs
 from sklearn.model_selection import train_test_split
 from sklearn.decomposition import PCA
+from sklearn.manifold import trustworthiness
 from sklearn.neighbors import NearestNeighbors
 from sklearn.metrics.pairwise import pairwise_distances
 from scipy.stats import spearmanr
 import umap
 
-
-def _ranks(X):
-    D = pairwise_distances(X)
-    n = D.shape[0]
-    R = np.empty((n, n), dtype=int)
-    for i in range(n):
-        R[i, np.argsort(D[i], kind="mergesort")] = np.arange(n)
-    return R
-
-
-def trustworthiness(X, Y, n_neighbors=10):
-    n = X.shape[0]; k = n_neighbors
-    RX = _ranks(X); RY = _ranks(Y)
-    emb_nbrs = np.argsort(RY, axis=1)[:, 1:k + 1]
-    ranks = np.take_along_axis(RX, emb_nbrs, axis=1)
-    excess = np.clip(ranks - k, 0, None)
-    return 1.0 - (2.0 / (n * k * (2 * n - 3 * k - 1))) * excess.sum()
-
-
-def continuity(X, Y, n_neighbors=10):
-    return trustworthiness(Y, X, n_neighbors)
-
-
-def scores(emb, high, n=10):
-    return trustworthiness(high, emb, n_neighbors=n), continuity(high, emb, n_neighbors=n)
+SEEDS = range(5)
+KS = [5, 10, 30, 60]
+# Keyed by (n_neighbors, min_dist).
+SETTINGS = {
+    "(5, 0.1)": dict(n_neighbors=5, min_dist=0.1),
+    "(15, 0.1)": dict(n_neighbors=15, min_dist=0.1),
+    "(100, 0.1)": dict(n_neighbors=100, min_dist=0.1),
+    "(15, 0.5)": dict(n_neighbors=15, min_dist=0.5),
+}
+LETTERS = "ABCD"
 
 
 def local_density(Z, k=15):
     d, _ = NearestNeighbors(n_neighbors=k + 1).fit(Z).kneighbors(Z)
     return 1.0 / d[:, -1] ** 2
+
+
+def rho(a, b):
+    return spearmanr(a, b).statistic
+
+
+def num(x, nd=2):
+    return f"{x:.{nd}f}".replace("-", "−")
+
+
+def span(vals, nd=2):
+    lo, hi = num(min(vals), nd), num(max(vals), nd)
+    return lo if lo == hi else f"{lo} to {hi}"
+
+
+def setting_title(name):
+    kw = SETTINGS[name]
+    return f"n_neighbors={kw['n_neighbors']}, min_dist={kw['min_dist']}"
 ```
 
-## A split that decides nothing
+## Data
 
-Start with one draw of four clusters in ten dimensions, then split it into train, dev and test. The three parts come from the same distribution: same centres, same spread. Under supervised learning the dev set would pick the hyperparameters and the test set would confirm the choice.
+Both datasets are synthetic, so the true answer to every question asked of a map is known.
+
+- **Four clusters.** 1,200 points from four Gaussian clusters in ten dimensions (`make_blobs`: standard deviation 1, centres drawn at random in a box 20 units wide), split by stratified sampling into 720 train, 240 dev and 240 test points. The three parts share one distribution. The clusters stand in for the easiest real case, a few well-separated cell types or document topics: a validation method that fails here will not do better on harder data.
+- **A curve with uneven density.** 1,000 points along a gently bent curve in three dimensions, 900 of them packed into the first third of its length. It stands in for a population sampled unevenly, such as common cells beside rare ones.
 
 ```{python}
-#| label: split
+#| label: data
 #| echo: false
 X, y = make_blobs(
     n_samples=1200, centers=4, cluster_std=1.0, n_features=10, random_state=1
@@ -93,225 +102,289 @@ X_train, X_hold, y_train, y_hold = train_test_split(
 X_dev, X_test, y_dev, y_test = train_test_split(
     X_hold, y_hold, test_size=0.5, random_state=43, stratify=y_hold
 )
-print(f"train {X_train.shape[0]}  dev {X_dev.shape[0]}  test {X_test.shape[0]}")
-```
 
-Fit UMAP on train only, then place dev and test with `transform`. Both land near the cluster their label belongs to. But two settings put them in different places, and neither fit produces a number on the held-out points that could say which placement is better.
-
-```{python}
-#| label: split-fit
-#| echo: false
-settings = [
-    ("n_neighbors=5,  min_dist=0.10", dict(n_neighbors=5, min_dist=0.10)),
-    ("n_neighbors=15, min_dist=0.10", dict(n_neighbors=15, min_dist=0.10)),
-    ("n_neighbors=100, min_dist=0.10", dict(n_neighbors=100, min_dist=0.10)),
-    ("n_neighbors=15, min_dist=0.50", dict(n_neighbors=15, min_dist=0.50)),
-]
-FITS = {}
-for label, kw in settings:
-    model = umap.UMAP(random_state=0, **kw).fit(X_train)
-    FITS[label] = dict(
-        train=model.transform(X_train),
-        dev=model.transform(X_dev),
-        test=model.transform(X_test),
-    )
-
-dev_shift = np.linalg.norm(
-    FITS["n_neighbors=5,  min_dist=0.10"]["dev"]
-    - FITS["n_neighbors=100, min_dist=0.10"]["dev"],
-    axis=1,
-).mean()
-
-seed_shift = np.linalg.norm(
-    umap.UMAP(n_neighbors=15, min_dist=0.10, random_state=0).fit(X_train).transform(X_dev)
-    - umap.UMAP(n_neighbors=15, min_dist=0.10, random_state=1).fit(X_train).transform(X_dev),
-    axis=1,
-).mean()
-dev_shift_str = f"{dev_shift:.2f}"
-seed_shift_str = f"{seed_shift:.2f}"
-print(f"dev placement shift, n_neighbors 5 vs 100: {dev_shift_str}")
-print(f"dev placement shift, seed 0 vs 1: {seed_shift_str}")
-```
-
-```{python}
-#| label: fig-split
-#| fig-cap: "One train/dev/test split of the same four clusters, fitted on train only. Crosses are dev points placed by `transform`; squares are test points. Both land near their cluster under either setting, but the held-out points sit in different places under `n_neighbors=5` and `n_neighbors=100`. Neither map reports a value on them that ranks the two."
-#| fig-alt: "Two scatter plots. Each shows four coloured training clusters as small dots with dev and test points overlaid as crosses and squares. Under n_neighbors 5 the held-out points sit near compact training clusters; under n_neighbors 100 the same held-out points sit near tighter, more separated clusters."
-#| column: page
-fig, axes = plt.subplots(1, 2, figsize=(9, 3.4))
-for ax, label in zip(axes, ["n_neighbors=5,  min_dist=0.10", "n_neighbors=100, min_dist=0.10"]):
-    e = FITS[label]
-    ax.scatter(e["train"][:, 0], e["train"][:, 1], c=y_train, s=7, cmap="tab10", alpha=0.6, label="train")
-    ax.scatter(e["dev"][:, 0], e["dev"][:, 1], c=y_dev, s=26, cmap="tab10", marker="x", label="dev")
-    ax.scatter(e["test"][:, 0], e["test"][:, 1], c=y_test, s=26, cmap="tab10", marker="s", facecolors="none", label="test")
-    ax.set_title(label, fontsize=9)
-    ax.set_xticks([]); ax.set_yticks([])
-axes[0].legend(fontsize=7, loc="upper right", framealpha=0.9)
-fig.tight_layout()
-```
-
-The dev points move by `{python} dev_shift_str` units on average when `n_neighbors` changes from 5 to 100, and by `{python} seed_shift_str` when only the seed changes from 0 to 1 at the same setting. A dev set in supervised learning rejects the worse setting; here there is no quantity on dev to compare.
-
-## Four settings, all acceptable
-
-Fit the training data under four settings and score each map against the input space. Trustworthiness and continuity are computed on train; they are not held-out reconstruction losses.
-
-```{python}
-#| label: grid
-#| echo: false
-TABLE = {}
-for label, kw in settings:
-    model = umap.UMAP(random_state=0, **kw).fit(X_train)
-    emb = model.transform(X_train)
-    tw, cont = scores(emb, X_train)
-    TABLE[label] = (tw, cont)
-    print(f"{label:32} trustworthiness={tw:.3f} continuity={cont:.3f}")
-print(f"inverse_transform available: {hasattr(umap.UMAP(), 'inverse_transform')}")
-best_tw_label = max(TABLE, key=lambda k: TABLE[k][0])
-best_cont_label = max(TABLE, key=lambda k: TABLE[k][1])
-best_tw_str = f"{TABLE[best_tw_label][0]:.3f}"
-best_cont_str = f"{TABLE[best_cont_label][1]:.3f}"
-```
-
-```{python}
-#| label: fig-umap-grid
-#| fig-cap: "The same training clusters under four UMAP settings. All four complete, and four well-separated groups appear in every panel. The settings change how tight and how far apart the groups look; none of the four is rejected by a loss. The title of each panel is its full setting."
-#| fig-alt: "Four scatter plots of the same four coloured clusters projected by UMAP. Under n_neighbors 5 and 15 the groups are compact and clearly separated; under n_neighbors 100 they are tighter and further apart; under min_dist 0.5 they are larger and closer. All four show four groups."
-#| column: page
-fig, axes = plt.subplots(1, 4, figsize=(13, 3.0))
-for ax, (label, kw) in zip(axes, settings):
-    e = FITS[label]["train"]
-    ax.scatter(e[:, 0], e[:, 1], c=y_train, s=6, cmap="tab10", alpha=0.85)
-    ax.set_title(label, fontsize=8)
-    ax.set_xticks([]); ax.set_yticks([])
-fig.tight_layout()
-```
-
-All four maps keep neighbourhoods well, with scores between 0.938 and 0.960. They rank differently: trustworthiness is highest at `{python} best_tw_label` (`{python} best_tw_str`), continuity at `{python} best_cont_label` (`{python} best_cont_str`). No setting leads on both, and neither score is measured on dev or test. Now vary the settings beyond these four: `n_neighbors`, `min_dist`, `spread`, `metric`, `init` and `seed` each have ranges of acceptable values. Every combination that runs returns a layout, and no held-out loss rejects any of them.
-
-## What the fit returns
-
-UMAP builds a fuzzy simplicial set from the high-dimensional data — local connectivity controlled by `n_neighbors` — and a matching set from the 2-D coordinates, controlled by `min_dist` and `spread`. It minimises the cross-entropy between the two sets. That objective is defined over the training graph; it takes no dev or test point as input.
-
-There are no parameters beyond the coordinates themselves. UMAP is non-parametric: there is no function $f: \mathbb{R}^D \rightarrow \mathbb{R}^2$ learned from the data. `transform` places a new point by relating it to the training graph, an approximate extension rather than a fitted model. `inverse_transform` exists in umap-learn, but it is a graph-based approximation, not a parametric decoder: neither direction reconstructs the data through a learned function with a loss on new points.
-
-PCA minimises reconstruction error and an autoencoder minimises reconstruction error. UMAP has no equivalent. There is no reconstruction of a held-out point and no reconstruction error to report. "No loss on dev" is the consequence: trustworthiness and continuity can be computed on transformed dev points, but they are input-space diagnostics, not a loss the method optimises or a score that selects a setting.
-
-## Three failures with no signal
-
-Each failure below is a real experiment. Each produces a map that satisfies the graph objective and gives no indication on a held-out set that anything went wrong.
-
-### A varying density is flattened
-
-A curved sheet sampled with a nine-to-one change in density along its length stands in for a population collected unevenly. The true local sampling density of each point is known.
-
-```{python}
-#| label: density
-#| echo: false
 t = np.concatenate([
     np.random.default_rng(0).uniform(0, 0.33, 900),
     np.random.default_rng(1).uniform(0.33, 1.0, 100),
 ])
-sheet = np.column_stack([t, 0.1 * np.sin(6 * t), np.zeros_like(t)])
-sheet = sheet + np.random.default_rng(2).normal(0, 0.01, (1000, 3))
-truth_density = local_density(sheet)
-pca_map = PCA(2).fit_transform(sheet)
-umap_map = umap.UMAP(random_state=0).fit_transform(sheet)
-pca_rho = spearmanr(truth_density, local_density(pca_map)).statistic
-umap_rho = spearmanr(truth_density, local_density(umap_map)).statistic
-pca_rho_str = f"{pca_rho:.2f}"
-umap_rho_str = f"{umap_rho:.2f}"
-print(f"density correlation: PCA {pca_rho_str}  UMAP {umap_rho_str}")
+curve = np.column_stack([t, 0.1 * np.sin(6 * t), np.zeros_like(t)])
+curve = curve + np.random.default_rng(2).normal(0, 0.01, (1000, 3))
+density_ratio_str = f"{(900 / 0.33) / (100 / 0.67):.0f}"
+
+FITS = {}
+for seed in SEEDS:
+    for name, kw in SETTINGS.items():
+        FITS[name, seed] = umap.UMAP(random_state=seed, **kw).fit(X_train)
+
+n_params_str = f"{FITS['(15, 0.1)', 0].embedding_.size:,}"
+print(f"train {len(X_train)}  dev {len(X_dev)}  test {len(X_test)}")
+print(f"curve: density {density_ratio_str} times higher in the first third")
+```
+
+The density along the curve changes by a factor of `{python} density_ratio_str`. Every UMAP map of the clusters is fitted on the 720 training points only, under four settings and five seeds: 20 maps.
+
+## What a UMAP fit contains
+
+UMAP does two things ([McInnes, Healy & Melville 2018](https://arxiv.org/abs/1802.03426)).
+
+1. **It builds a graph from the data.** Each point is joined to its `n_neighbors` nearest points, with weights $v_{ij}$ that fall off with distance. Each point's weights are then rescaled so that its neighbourhood carries the same total weight, whether the region around it is dense or sparse.
+2. **It places the points in 2-D to match that graph.** Map positions $y_i$ give weights $w_{ij}$ through a curve whose shape `min_dist` and `spread` set, and the optimiser moves the $y_i$ to minimise the cross-entropy between the two graphs:
+
+$$
+L = \sum_{i \neq j} \left[ v_{ij} \log \frac{v_{ij}}{w_{ij}} + (1 - v_{ij}) \log \frac{1 - v_{ij}}{1 - w_{ij}} \right],
+\qquad
+w_{ij} = \frac{1}{1 + a \lVert y_i - y_j \rVert^{2b}}.
+$$
+
+The optimiser moves the $y_i$ and nothing else. A fit on 720 training points has `{python} n_params_str` parameters: two coordinates per point. Three consequences follow.
+
+- **New points need a separate procedure.** `transform` finds a new point's neighbours among the training points, starts it at their weighted average position, and runs a few more rounds of optimisation with the training map held still. It is a placement rule added to the fit, not a function the fit learned.
+- **Nothing maps back to the data.** PCA and an autoencoder reconstruct a new point from its coordinates, and the reconstruction error on held-out points scores them. umap-learn's `inverse_transform` interpolates between the training points near a map location; no part of the fit was trained to make it accurate.
+- **No loss exists on held-out data.** $L$ sums over pairs of training points. A dev point appears in no term of it, and umap-learn does not report $L$ at the end of a fit.
+
+| What validation needs | Supervised model | UMAP |
+|---|---|---|
+| A target fixed before fitting | the labels | the graph $v_{ij}$, rebuilt by `n_neighbors` |
+| Parameters that apply to new data | the weights of a function | one 2-D position per training point |
+| A loss on held-out points | the error on the dev set | none |
+
+: The three things a train/dev/test split relies on, and what UMAP supplies for each. {#tbl-needs}
+
+### The target moves with the setting
+
+The first row of @tbl-needs is the one that rules out choosing a setting. A dev-set loss can rank settings only when they all aim at the same target. UMAP's target is the graph, and `n_neighbors` builds it.
+
+```{python}
+#| label: graph
+#| echo: false
+def edge_set(model):
+    G = model.graph_.tocoo()
+    return set(zip(np.minimum(G.row, G.col), np.maximum(G.row, G.col)))
+
+
+EDGES = {name: edge_set(FITS[name, 0]) for name in SETTINGS}
+
+
+def jaccard(a, b):
+    return len(EDGES[a] & EDGES[b]) / len(EDGES[a] | EDGES[b])
+
+
+for name in SETTINGS:
+    print(f"{setting_title(name):30} {len(EDGES[name]):>7,} edges")
+for a, b in [("(5, 0.1)", "(15, 0.1)"), ("(5, 0.1)", "(100, 0.1)"), ("(15, 0.1)", "(15, 0.5)")]:
+    print(f"shared edges, {a} vs {b}: {jaccard(a, b):.2f}")
+
+edges5_str = f"{len(EDGES['(5, 0.1)']):,}"
+edges100_str = f"{len(EDGES['(100, 0.1)']):,}"
+shared_5_100_str = f"{100 * jaccard('(5, 0.1)', '(100, 0.1)'):.0f}"
+shared_md_str = f"{jaccard('(15, 0.1)', '(15, 0.5)'):.2f}"
+```
+
+The `n_neighbors=5` graph has `{python} edges5_str` edges and the `n_neighbors=100` graph has `{python} edges100_str`. Only `{python} shared_5_100_str`% of the edges in either graph appear in both. `min_dist` leaves the graph alone (shared fraction `{python} shared_md_str`) but changes $a$ and $b$, the curve that turns map distances into $w_{ij}$, so it changes the loss function itself. Comparing the final $L$ of two settings compares scores on two different exams.
+
+## Choosing a setting on a dev set
+
+With no loss to read, the nearest substitute is a score of how well the map keeps neighbours, computed on dev points placed by `transform`. Trustworthiness is that score ([Venna & Kaski 2001](https://doi.org/10.1007/3-540-44668-0_68)). It is 1 when every point's nearest neighbours on the map were also among its nearest in the data, and it falls as the map brings in points that were far away. It has a setting of its own: the neighbourhood size $k$.
+
+```{python}
+#| label: fig-split
+#| fig-cap: "One train/dev/test split of four clusters, fitted on train only. Dots are training points, crosses are dev points placed by `transform`, and squares are test points. Held-out points land on their own cluster under both settings."
+#| fig-alt: "Two scatter plots, each with four coloured clusters labelled A to D. Small dots are training points; crosses and open squares, the dev and test points, sit on top of the cluster of the same colour in both panels."
+#| column: page
+DEV_EMB, DEV_TW = {}, {}
+for (name, seed), model in FITS.items():
+    DEV_EMB[name, seed] = model.transform(X_dev)
+    for k in KS:
+        DEV_TW[name, seed, k] = trustworthiness(X_dev, DEV_EMB[name, seed], n_neighbors=k)
+
+
+def label_islands(ax, Z, labels):
+    for c in range(4):
+        cx, cy = Z[labels == c].mean(0)
+        ax.annotate(LETTERS[c], (cx, cy), xytext=(0, 14), textcoords="offset points",
+                    ha="center", fontsize=10, fontweight="bold")
+
+
+fig, axes = plt.subplots(1, 2, figsize=(9, 3.4))
+for ax, name in zip(axes, ["(5, 0.1)", "(100, 0.1)"]):
+    model = FITS[name, 0]
+    tr, dv, te = model.embedding_, DEV_EMB[name, 0], model.transform(X_test)
+    ax.scatter(tr[:, 0], tr[:, 1], c=y_train, s=7, cmap="tab10", vmin=0, vmax=9, alpha=0.5, label="train")
+    ax.scatter(dv[:, 0], dv[:, 1], c=y_dev, s=26, cmap="tab10", vmin=0, vmax=9, marker="x", label="dev")
+    ax.scatter(te[:, 0], te[:, 1], edgecolors=plt.cm.tab10(y_test), s=26, marker="s", facecolors="none", label="test")
+    label_islands(ax, tr, y_train)
+    ax.set_title(setting_title(name), fontsize=9)
+    ax.set_xticks([]); ax.set_yticks([])
+    ax.margins(0.12)
+axes[0].legend(fontsize=7, loc="lower left", framealpha=0.9)
+fig.tight_layout()
+```
+
+Fit all four settings with five seeds, place the dev points, and score them at four values of $k$. @tbl-winners shows which setting scores highest in each case.
+
+```{python}
+#| label: tbl-winners
+#| tbl-cap: "The setting with the highest dev-set trustworthiness, by seed and by the score's neighbourhood size $k$. Each setting is written as (n_neighbors, min_dist)."
+#| output: asis
+WINNERS = {
+    (seed, k): max(SETTINGS, key=lambda n: DEV_TW[n, seed, k])
+    for seed in SEEDS for k in KS
+}
+print("| seed | " + " | ".join(f"$k = {k}$" for k in KS) + " |")
+print("|---|" + "---|" * len(KS))
+for seed in SEEDS:
+    print(f"| {seed} | " + " | ".join(WINNERS[seed, k] for k in KS) + " |")
+
+n_winners = len(set(WINNERS.values()))
+n_winners_str = "All four" if n_winners == 4 else f"{n_winners} of the four"
+gaps = [
+    max(DEV_TW[n, s, k] for n in SETTINGS) - min(DEV_TW[n, s, k] for n in SETTINGS)
+    for s in SEEDS for k in KS
+]
+gap_str = num(np.mean(gaps), 3)
+tw10 = [DEV_TW[n, s, 10] for n in SETTINGS for s in SEEDS]
+tw10_str = span(tw10, 3)
+```
+
+`{python} n_winners_str` settings win somewhere in @tbl-winners. Changing only the seed changes the winner, and so does changing only $k$. The margins are thin as well: the best and worst setting differ by `{python} gap_str` on average. A dev set that names a different winner each time it is asked has not chosen anything.
+
+Supervised learning tolerates a noisy dev score because the score measures what the model is for. Trustworthiness measures one property of the map, and readers look at others: which island sits next to which, and how tightly each one is packed.
+
+## Cluster arrangement
+
+Every map in @fig-umap-grid draws four clean islands, and dev-set trustworthiness at $k = 10$ runs from `{python} tw10_str` over all 20 maps. By the score, every map is good. The arrangement of the islands is another matter.
+
+```{python}
+#| label: fig-umap-grid
+#| fig-cap: "The training clusters under four settings, seed 0, with each cluster labelled at its centre. All four draw four clean islands. In the data, C and D are the two clusters furthest apart; under n_neighbors=100 they are drawn closest together."
+#| fig-alt: "Four scatter plots of the same four coloured clusters, labelled A to D, under four UMAP settings. Each panel shows four compact islands. The islands sit in a different arrangement in every panel; in the n_neighbors=100 panel, islands C and D are the nearest pair."
+#| column: page
+fig, axes = plt.subplots(1, 4, figsize=(13, 3.2))
+for ax, name in zip(axes, SETTINGS):
+    e = FITS[name, 0].embedding_
+    ax.scatter(e[:, 0], e[:, 1], c=y_train, s=6, cmap="tab10", vmin=0, vmax=9, alpha=0.85)
+    label_islands(ax, e, y_train)
+    ax.set_title(setting_title(name), fontsize=8)
+    ax.set_xticks([]); ax.set_yticks([])
+    ax.margins(0.12)
+fig.tight_layout()
+```
+
+```{python}
+#| label: arrangement
+#| echo: false
+iu = np.triu_indices(4, 1)
+
+
+def centre_distances(Z, labels):
+    C = np.array([Z[labels == c].mean(0) for c in range(4)])
+    return pairwise_distances(C)[iu]
+
+
+true_cd = centre_distances(X_train, y_train)
+far = int(np.argmax(true_cd))
+far_pair = LETTERS[iu[0][far]] + " and " + LETTERS[iu[1][far]]
+ARR = {}
+for (name, seed), model in FITS.items():
+    cd = centre_distances(model.embedding_, y_train)
+    ARR[name, seed] = (rho(true_cd, cd), int(np.argmin(cd)) == far)
+
+arr_rho_str = span([r for r, _ in ARR.values()])
+n_negative_str = str(sum(r < 0 for r, _ in ARR.values()))
+n_flipped_str = str(sum(f for _, f in ARR.values()))
+far_str = f"{true_cd.max():.1f}"
+near_str = f"{true_cd.min():.1f}"
+for name in SETTINGS:
+    print(f"{setting_title(name):30} rank correlation by seed: "
+          + "  ".join(num(ARR[name, s][0]) for s in SEEDS))
+```
+
+In the data, `{python} far_pair` are `{python} far_str` units apart and the closest pair is `{python} near_str`. Compare the six distances between cluster centres in the data with the same six on each map. The rank correlation runs from `{python} arr_rho_str` over the 20 maps, and it is negative in `{python} n_negative_str` of them. The pair furthest apart in the data is drawn closest together in `{python} n_flipped_str` of the 20.
+
+Two points that are not neighbours in the graph get $v_{ij} = 0$, whether they are 20 units apart in the data or 30. The objective pushes every such pair apart by the same rule, so it has no preference about where one island sits relative to another, and the starting layout and the seed decide it ([Part 3](../when-umap-lies-tuning/); [Kobak & Linderman 2021](https://doi.org/10.1038/s41587-020-00809-z)). A dev point lands on its own cluster's island wherever that island was drawn, so the held-out set repeats whatever arrangement it is given.
+
+## Density on held-out points
+
+The rescaling in step 1 of the fit gives every neighbourhood the same total weight, which removes density from the graph before the layout starts. The curve measures how much survives. Each point's local density is one over the squared distance to its 15th nearest neighbour, and the score is the rank correlation between density in the data and density on the map.
+
+```{python}
+#| label: density
+#| echo: false
+truth = local_density(curve)
+pca_map = PCA(2).fit_transform(curve)
+pca_rho = rho(truth, local_density(pca_map))
+umap_rhos, dens_rhos = [], []
+for seed in SEEDS:
+    um = umap.UMAP(random_state=seed).fit_transform(curve)
+    dm = umap.UMAP(densmap=True, random_state=seed).fit_transform(curve)
+    umap_rhos.append(rho(truth, local_density(um)))
+    dens_rhos.append(rho(truth, local_density(dm)))
+    if seed == 0:
+        umap_map, dens_map = um, dm
+
+c_train, c_dev = train_test_split(curve, test_size=0.3, random_state=0)
+dev_truth = local_density(c_dev)
+pca_dev_rho = rho(dev_truth, local_density(PCA(2).fit(c_train).transform(c_dev)))
+dev_rhos = [
+    rho(dev_truth, local_density(umap.UMAP(random_state=s).fit(c_train).transform(c_dev)))
+    for s in SEEDS
+]
+try:
+    umap.UMAP(densmap=True, random_state=0).fit(c_train).transform(c_dev)
+    densmap_transform = "runs"
+except NotImplementedError as err:
+    densmap_transform = f"NotImplementedError: {err}"
+
+pca_rho_str, pca_dev_rho_str = num(pca_rho), num(pca_dev_rho)
+umap_rho_str, dens_rho_str, dev_rho_str = span(umap_rhos), span(dens_rhos), span(dev_rhos)
+print(f"all 1,000 points  PCA {pca_rho_str}  UMAP {umap_rho_str}  densMAP {dens_rho_str}")
+print(f"held-out 300      PCA {pca_dev_rho_str}  UMAP {dev_rho_str}")
+print(f"densMAP transform: {densmap_transform}")
 ```
 
 ```{python}
 #| label: fig-density
-#| fig-cap: "A sheet sampled unevenly along its length, coloured by true sampling density. PCA shows the dense end crowded and the sparse end spread out; UMAP fills both ends evenly. The rank correlation with the true density falls sharply from PCA to UMAP (values in the text)."
-#| fig-alt: "Two maps of a curved sheet coloured by sampling density. The PCA panel has a dense cluster of dark points at one end that thins out toward the other. The UMAP panel is filled uniformly from one end to the other."
+#| fig-cap: "The unevenly sampled curve, coloured by true local density (yellow is dense), seed 0. PCA keeps the crowded end crowded. UMAP gives every point about the same spacing, so the crowded end stretches into the long arm and the sparse end shrinks to a short, broken tail. densMAP, which adds a density term to UMAP's objective, puts the crowding back and scatters the sparse end. Each title gives the rank correlation with the true density."
+#| fig-alt: "Three maps of the same curve coloured from purple (sparse) to yellow (dense). In the PCA and densMAP panels the yellow points are packed tightly at one end and the purple points spread out at the other. In the UMAP panel the yellow points are spread along a long arm at even spacing, and the purple points form a short tail broken into pieces."
 #| column: page
-fig, axes = plt.subplots(1, 2, figsize=(8, 3.2))
-for ax, (e, name) in zip(axes, [(pca_map, "PCA"), (umap_map, "UMAP")]):
-    ax.scatter(e[:, 0], e[:, 1], c=np.log(truth_density), s=6, cmap="viridis", alpha=0.8)
-    ax.set_title(name, fontsize=10); ax.set_xticks([]); ax.set_yticks([])
-fig.tight_layout()
-```
-
-The correlation drops from `{python} pca_rho_str` to `{python} umap_rho_str`: UMAP erases the density difference. A tight-looking region on the map is not evidence of a tight population. No loss on dev flags the erasure, because the graph objective was met.
-
-### Overlapping populations drift together
-
-Two Gaussians that overlap in the input space are the case where a sample's group membership is genuinely uncertain.
-
-```{python}
-#| label: overlap
-#| echo: false
-Xo, yo = make_blobs(
-    n_samples=800, centers=2, cluster_std=3.0, center_box=(-3, 3),
-    n_features=10, random_state=1,
-)
-sep = {}
-for nn in [5, 100]:
-    e = umap.UMAP(n_neighbors=nn, random_state=0).fit_transform(Xo)
-    sep[nn] = np.linalg.norm(e[yo == 0].mean(0) - e[yo == 1].mean(0))
-sep5_str = f"{sep[5]:.2f}"
-sep100_str = f"{sep[100]:.2f}"
-print(f"centroid separation on the map: n_neighbors=5 {sep5_str}, n_neighbors=100 {sep100_str}")
-```
-
-```{python}
-#| label: fig-overlap
-#| fig-cap: "Two overlapping Gaussians under two settings. With `n_neighbors=5` the clouds sit further apart on the map; with `n_neighbors=100` the same groups sit closer together (separations in the text). A larger neighbourhood pulls overlapping populations together. No held-out loss chooses between the two pictures."
-#| fig-alt: "Two scatter plots of overlapping blue and orange clouds. Under n_neighbors 5 the two coloured groups have clearly different centres; under n_neighbors 100 their centres are much closer and the groups overlap more."
-#| column: page
-fig, axes = plt.subplots(1, 2, figsize=(8, 3.2))
-for ax, nn in zip(axes, [5, 100]):
-    e = umap.UMAP(n_neighbors=nn, random_state=0).fit_transform(Xo)
-    ax.scatter(e[:, 0], e[:, 1], c=yo, s=6, cmap="tab10", alpha=0.85)
-    ax.set_title(f"n_neighbors={nn}", fontsize=10)
+fig, axes = plt.subplots(1, 3, figsize=(11, 3.2))
+for ax, (e, name) in zip(axes, [(pca_map, "PCA"), (umap_map, "UMAP"), (dens_map, "densMAP")]):
+    ax.scatter(e[:, 0], e[:, 1], c=np.log(truth), s=6, cmap="viridis", alpha=0.8)
+    ax.set_title(f"{name}   ρ = {num(rho(truth, local_density(e)))}", fontsize=10)
     ax.set_xticks([]); ax.set_yticks([])
 fig.tight_layout()
 ```
 
-The separation falls from `{python} sep5_str` to `{python} sep100_str`, a third of its former value, by changing one setting. Both maps are acceptable to the objective. A reader who sees two groups in one figure and one blended group in the other has no held-out number to decide which reading to keep.
+On all 1,000 points, the correlation is `{python} pca_rho_str` for PCA and `{python} umap_rho_str` for UMAP over five seeds. UMAP draws the crowded third and the sparse two-thirds with roughly the same spacing between points. The 900 crowded points stretch into a long arm, and the 100 sparse points shrink into a short tail with gaps that are not in the data. A tight-looking island on a UMAP map is no evidence of a tight population.
 
-### A single population grows gaps
+A held-out set does not catch this. Fit on 700 points and place the other 300 with `transform`: the held-out points correlate with their true density at `{python} dev_rho_str`, against `{python} pca_dev_rho_str` for PCA on the same points. They land where the training map's even spacing puts them, so they carry the erasure rather than expose it.
 
-A single Gaussian has one population by construction. At a small neighbourhood it draws as loose strands with visible gaps; at a large one it draws as a filled disk.
-
-```{python}
-#| label: fig-single
-#| fig-cap: "One Gaussian in ten dimensions under two settings. With `n_neighbors=5` the points form strands with gaps through the cloud; with `n_neighbors=100` they form a filled disk. The map gains structure the data do not have, with no loss on dev or test to flag it."
-#| fig-alt: "Two scatter plots of one blue point cloud. Under n_neighbors 5 the points form curved strands separated by thin gaps. Under n_neighbors 100 the same points form an even, filled disk."
-#| column: page
-G, _ = make_blobs(n_samples=600, centers=1, cluster_std=3.0, n_features=10, random_state=1)
-fig, axes = plt.subplots(1, 2, figsize=(8, 3.2))
-for ax, nn in zip(axes, [5, 100]):
-    e = umap.UMAP(n_neighbors=nn, random_state=0).fit_transform(G)
-    ax.scatter(e[:, 0], e[:, 1], s=6, alpha=0.85)
-    ax.set_title(f"single Gaussian, n_neighbors={nn}", fontsize=10)
-    ax.set_xticks([]); ax.set_yticks([])
-fig.tight_layout()
-```
-
-The gaps are a property of a small neighbourhood, not of the sample. Earlier parts trace this to UMAP's start and neighbourhood scale ([Part 3](../when-umap-lies-tuning/), [Part 4](../when-umap-lies-gaps-density-holes/)); the point here is that no held-out value tells you the gaps are an artefact.
+densMAP ([Narayan, Berger & Cho 2021](https://doi.org/10.1038/s41587-020-00801-7)) adds a term to the objective that preserves each point's local radius, and it restores the correlation to `{python} dens_rho_str`. It cannot place new points: in umap-learn 0.6.0, `transform` on a densMAP fit raises `NotImplementedError`.
 
 ## What to do
 
-- **Check a claim in the data, not the map.** Recompute density, separation and neighbours in the input space before reporting what a plot appears to show.
-- **Show more than one setting and seed.** The dev placement moves by `{python} seed_shift_str` units between two seeds at the same setting; one run is one drawing, not an answer.
-- **Report the setting.** `n_neighbors` and `min_dist` change the picture enough that a plot without them is not reproducible.
-- **Show PCA beside it** when density or large distances matter, and use densMAP when density is the claim.
+- **Test a claim in the data, not on the map.** Distances between groups, density and overlap can all be computed in the input space or on PCA components. The map illustrates a result; it is not the evidence for it.
+- **Do not read the arrangement of islands.** Over 20 maps of four clusters, the correlation between the map's distances between cluster centres and the data's ran from `{python} arr_rho_str`.
+- **Show a grid of settings and seeds.** A feature that appears in some panels and not others belongs to the setting, not to the data.
+- **Report the setting:** `n_neighbors`, `min_dist`, initialisation and seed. Without them the picture cannot be reproduced.
+- **Use densMAP when density is the claim,** and expect to refit it for new data.
 
 ## Constraints
 
-- The data are synthetic, small and clean: Gaussian draws at $n = 1200/240/240$, a noisy sheet at $n = 1000$, and one Gaussian at $n = 600$. Real populations are skewed, nested and noisy in structured ways.
-- Only UMAP (umap-learn 0.6.0) is shown. Other graph-based manifold learners fit a graph rather than a reconstruction and share the absence of a held-out loss.
-- Trustworthiness and continuity are input-space diagnostics on training points. They describe which kind of mistake a map makes; they do not validate a setting on held-out data.
-- Separation and density are each measured one way. The sheet is flat and curved only slightly; a curved, unevenly sampled surface would test PCA and Isomap properly.
+- The data are synthetic and small: four clusters at $n = 720/240/240$ and one curve at $n = 1000$. Real data are skewed, nested and noisy in structured ways, which can only make selection harder.
+- Settings were compared on one score family, trustworthiness at four values of $k$. Continuity, the companion score from [Part 1](../when-umap-lies/), would add columns to @tbl-winners, not a fixed target.
+- Each map has six distances between cluster centres, so a single rank correlation is coarse. The range over 20 maps and the count of reversed pairs are the evidence, not any one value.
+- Parametric UMAP ([Sainburg, McInnes & Gentner 2021](https://doi.org/10.1162/neco_a_01434)) trains a neural network as the encoder, so it does return a function of new data. Its loss is still the cross-entropy against a graph that `n_neighbors` builds, so the target still moves with the setting. It is not run here.
+- t-SNE and the other neighbour-graph methods in [Part 1](../when-umap-lies/) also fit a graph built by their own settings, and none of them has a loss on held-out data.
 
-Embed. Fit. Transform. Test. Generalise. None. Reconstruct. Nothing. Accept. Fail.
+Settings. Build. Targets. Dev. Sets. Cannot. Choose. Check. The. Data.
 
 ## References
 
-- McInnes, Healy & Melville (2018), "UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction."
-- umap-learn documentation: `transform` and `inverse_transform` are approximate graph-based extensions, not parametric decoders.
+- McInnes, L., Healy, J. & Melville, J. (2018). [UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction](https://arxiv.org/abs/1802.03426). arXiv:1802.03426.
+- Venna, J. & Kaski, S. (2001). [Neighborhood preservation in nonlinear projection methods: an experimental study](https://doi.org/10.1007/3-540-44668-0_68). In *Artificial Neural Networks — ICANN 2001*.
+- Kobak, D. & Linderman, G. C. (2021). [Initialization is critical for preserving global data structure in both t-SNE and UMAP](https://doi.org/10.1038/s41587-020-00809-z). *Nature Biotechnology* 39(2).
+- Narayan, A., Berger, B. & Cho, H. (2021). [Assessing single-cell transcriptomic variability through density-preserving data visualization](https://doi.org/10.1038/s41587-020-00801-7). *Nature Biotechnology* 39(6).
+- Sainburg, T., McInnes, L. & Gentner, T. Q. (2021). [Parametric UMAP embeddings for representation and semisupervised learning](https://doi.org/10.1162/neco_a_01434). *Neural Computation* 33(11).
+- Software: [umap-learn](https://github.com/lmcinnes/umap) 0.6.0, [scikit-learn](https://scikit-learn.org) 1.9.1.
+- [When UMAP Lies, Part 1: The Map and the Territory](../when-umap-lies/), [Part 2: Ambient and Intrinsic Dimension](../when-umap-lies-dimension/), [Part 3: Settings, Seeds and Starting Points](../when-umap-lies-tuning/), [Part 4: Gaps, Density and Holes](../when-umap-lies-gaps-density-holes/).
