@@ -5,9 +5,11 @@ The candidates mirror the 1976 design: days t, t-1 and t-2 of PM2.5 and eight
 ERA5 surface readings (27 columns), plus season and a weekend flag, 30 in all.
 
 The years run November to October, so each holds one winter. Split by the
-forecast day t: November 2016 to October 2022 trains, November 2022 to October
-2023 is the dev year, and November 2023 to October 2026 is the test period.
-The models and grids are `modern`'s, unchanged.
+forecast day t: the test period is November 2023 to October 2026. Model settings
+are chosen by expanding-window walk-forward CV on the earlier years (four
+November-October validation blocks, a three-day embargo at each edge); the
+chosen models are refit on every pre-test day before being scored. The models
+and grids are `modern`'s, unchanged.
 
 Chronos-2's forecasts come from `src/chronos_forecast.py delhi`, as for ozone.
 """
@@ -34,8 +36,8 @@ WEATHER = [
 BASE = ["pm25"] + WEATHER
 LAGS = (0, 1, 2)
 ALERT = 250  # India's National AQI "Severe" band for a 24-hour PM2.5 mean (250+ µg/m³)
-CACHE_TAG = "delhi_v2"  # the cache.frame name for run(); bump it when run() changes
-CHRONOS_FILE = Path("cache") / "chronos2_delhi_v2.parquet"
+CACHE_TAG = "delhi_v3"  # the cache.frame name for run(); bump it when run() changes
+CHRONOS_FILE = Path("cache") / "chronos2_delhi_v3.parquet"
 
 
 def daily() -> pd.DataFrame:
@@ -64,6 +66,12 @@ def day_of(ts: pd.Timestamp) -> int:
     return int((ts - START).days)
 
 
+# Four expanding-window validation blocks: Nov 2019-Oct 2020 ... Nov 2022-Oct 2023.
+FOLD_EDGES = tuple(
+    day_of(pd.Timestamp(f"{y}-11-01")) for y in (2019, 2020, 2021, 2022, 2023)
+)
+
+
 def masks(df: pd.DataFrame):
     """Boolean train, dev and test masks over the rows of `design()`."""
     t = df.index.to_numpy()
@@ -77,7 +85,13 @@ def dates(days) -> pd.DatetimeIndex:
 
 def run() -> pd.DataFrame:
     df = design()
-    return modern.fit_all(df, *masks(df), persist="pm25_lag0", key="day")
+    return modern.fit_all(
+        df,
+        *masks(df),
+        persist="pm25_lag0",
+        key="day",
+        folds=modern.folds_from_edges(df.index.to_numpy(), FOLD_EDGES),
+    )
 
 
 def chronos() -> pd.DataFrame:
