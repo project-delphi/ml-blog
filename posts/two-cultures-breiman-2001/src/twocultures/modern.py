@@ -32,16 +32,13 @@ from . import ozone
 DEV_DOY = 183  # 1 July 1976 (a leap year)
 SEEDS = range(5)
 CACHE_TAG = (
-    "ozone_modern_v3"  # the cache.frame name for run(); bump it when run() changes
+    "ozone_modern_v4"  # the cache.frame name for run(); bump it when run() changes
 )
-CHRONOS_FILE = Path("cache") / "chronos2_v1.parquet"
+CHRONOS_FILE = Path("cache") / "chronos2_v3.parquet"
 EMBARGO = 3  # two lag days plus the next-day target, dropped at each fold edge
-OZONE_FOLD_EDGES = (
-    61,
-    122,
-    183,
-    244,
-)  # three validation blocks, March-August (doy 61-243)
+# Three validation blocks: March-April, May-June, July-August (1 March is doy 61
+# in 1976). The last edge is the test boundary, so every pre-test day is validated.
+OZONE_FOLD_EDGES = (61, 122, DEV_DOY, ozone.SPLIT_DOY)
 
 
 def _grid(**kw):
@@ -195,6 +192,16 @@ def folds_from_edges(index, edges, embargo=EMBARGO):
         )
         for v0, v1 in zip(edges[:-1], edges[1:])
     ]
+
+
+def fold_span(df: pd.DataFrame, edges) -> np.ndarray:
+    """Boolean mask of the rows inside the validation blocks of `edges`.
+
+    These are the days `fit_all` predicts out of fold, so Chronos-2's dev
+    forecasts (`src/chronos_forecast.py`) are scored on the same days.
+    """
+    t = df.index.to_numpy()
+    return (t >= edges[0]) & (t < edges[-1])
 
 
 def masks(df: pd.DataFrame):

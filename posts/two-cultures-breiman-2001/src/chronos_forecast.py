@@ -13,9 +13,10 @@ not have (torch is too heavy for the series' shared venv):
 Zero-shot, rolling origin: the forecast made on day t sees the raw daily record
 from its first day to day t (missing days left as NaN, which Chronos-2 masks) and
 predicts day t + 1. The point forecast is the median of the predicted
-distribution. Rows are the dev and test forecast days of `twocultures.modern`
-(ozone, written to cache/chronos2_v1.parquet) or `twocultures.delhi` (PM2.5,
-cache/chronos2_delhi_v2.parquet).
+distribution. Dev rows are the days inside the walk-forward validation blocks,
+the days the tabular models predict out of fold (`modern.fold_span`); test rows
+are the test days. Ozone is written to cache/chronos2_v3.parquet, PM2.5 to
+cache/chronos2_delhi_v3.parquet.
 """
 
 import sys
@@ -81,12 +82,14 @@ if __name__ == "__main__":
     )
     if sys.argv[1:] == ["delhi"]:
         df, m, key, path = delhi.design(), delhi_daily(), "day", delhi.CHRONOS_FILE
-        _, dv, te = delhi.masks(df)
+        _, _, te = delhi.masks(df)
+        dv = modern.fold_span(df, delhi.FOLD_EDGES)
         kw = {"target": "pm25", "cov": delhi.WEATHER}
         names = [("chronos_pm25", False), ("chronos_weather", True)]
     else:
         df, m, key, path = ozone.design(), daily(), "doy", modern.CHRONOS_FILE
-        _, dv, te = modern.masks(df)
+        _, _, te = modern.masks(df)
+        dv = modern.fold_span(df, modern.OZONE_FOLD_EDGES)
         kw = {}
         names = [("chronos_ozone", False), ("chronos_weather", True)]
     out = []
