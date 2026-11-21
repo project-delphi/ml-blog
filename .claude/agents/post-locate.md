@@ -24,7 +24,7 @@ slugs, paths, line numbers, and one-line quotes, never a post body.**
 - `docs/` is rendered output, 109 MB. **Never search it** unless the caller explicitly
   asks about rendered output — and then say so, because `docs-inspect` is the agent for
   that.
-- `scripts/check_posts.py` holds two exemption lists worth knowing: `LEGACY_NO_ENV` (five
+- `scripts/check_posts.py` holds two exemption lists worth knowing: `LEGACY_NO_ENV` (four
   posts that cannot be re-rendered at all) and `STALE_FREEZE_OK`.
 
 ## How to search
