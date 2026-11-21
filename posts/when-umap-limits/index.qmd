@@ -93,6 +93,7 @@ Both datasets are synthetic, so the true answer to every question asked of a map
 ```{python}
 #| label: data
 #| echo: false
+#| output: false
 X, y = make_blobs(
     n_samples=1200, centers=4, cluster_std=1.0, n_features=10, random_state=1
 )
@@ -190,30 +191,30 @@ The first row of @tbl-needs is the one that rules out choosing a setting. A dev-
 ```{python}
 #| label: graph
 #| echo: false
-def edge_set(model):
+#| output: false
+def edge_weights(model):
+    # Edge (i, j), i < j, mapped to its weight v_ij in the fitted graph.
     G = model.graph_.tocoo()
-    return set(zip(np.minimum(G.row, G.col), np.maximum(G.row, G.col)))
+    keep = G.row < G.col
+    return dict(zip(zip(G.row[keep], G.col[keep]), G.data[keep]))
 
 
-EDGES = {name: edge_set(FITS[name, 0]) for name in SETTINGS}
+V = {name: edge_weights(FITS[name, 0]) for name in SETTINGS}
+small, big = V["(5, 0.1)"], V["(100, 0.1)"]
+contained = sum(e in big for e in small) / len(small)
+new_edges = [e for e in big if e not in small]
+new_weight_share = sum(big[e] for e in new_edges) / sum(big.values())
 
-
-def jaccard(a, b):
-    return len(EDGES[a] & EDGES[b]) / len(EDGES[a] | EDGES[b])
-
-
-for name in SETTINGS:
-    print(f"{setting_title(name):30} {len(EDGES[name]):>7,} edges")
-for a, b in [("(5, 0.1)", "(15, 0.1)"), ("(5, 0.1)", "(100, 0.1)"), ("(15, 0.1)", "(15, 0.5)")]:
-    print(f"shared edges, {a} vs {b}: {jaccard(a, b):.2f}")
-
-edges5_str = f"{len(EDGES['(5, 0.1)']):,}"
-edges100_str = f"{len(EDGES['(100, 0.1)']):,}"
-shared_5_100_str = f"{100 * jaccard('(5, 0.1)', '(100, 0.1)'):.0f}"
-shared_md_str = f"{jaccard('(15, 0.1)', '(15, 0.5)'):.2f}"
+edges5_str = f"{len(small):,}"
+edges100_str = f"{len(big):,}"
+contained_str = f"{100 * contained:.0f}"
+new_edges_str = f"{len(new_edges):,}"
+new_weight_str = f"{100 * new_weight_share:.0f}"
+same_graph_md = V["(15, 0.1)"].keys() == V["(15, 0.5)"].keys()
+assert same_graph_md, "min_dist changed the graph; revise the prose"
 ```
 
-The `n_neighbors=5` graph has `{python} edges5_str` edges and the `n_neighbors=100` graph has `{python} edges100_str`. Only `{python} shared_5_100_str`% of the edges in either graph appear in both. `min_dist` leaves the graph alone (shared fraction `{python} shared_md_str`) but changes $a$ and $b$, the curve that turns map distances into $w_{ij}$, so it changes the loss function itself. Comparing the final $L$ of two settings compares scores on two different exams.
+The `n_neighbors=5` graph has `{python} edges5_str` edges and the `n_neighbors=100` graph has `{python} edges100_str`. The larger graph contains `{python} contained_str`% of the smaller one's edges and adds `{python} new_edges_str` more, which carry `{python} new_weight_str`% of its total weight. For each of those pairs the two targets give opposite instructions. Under `n_neighbors=5` the pair has $v_{ij} = 0$, so the second term of $L$ pushes the two points apart. Under `n_neighbors=100` it has a positive weight, so the first term pulls them together. `min_dist` leaves the graph unchanged but changes $a$ and $b$, the curve that turns map distances into $w_{ij}$, so it changes the loss function itself. Comparing the final $L$ of two settings compares scores on two different exams.
 
 ## Choosing a setting on a dev set
 
@@ -282,7 +283,7 @@ assert all(len({WINNERS[s, k] for s in SEEDS}) > 1 for k in KS), "a k column has
 assert any(len({WINNERS[s, k] for k in KS}) > 1 for s in SEEDS), "no seed row changes with k"
 ```
 
-`{python} n_winners_str` settings win somewhere in @tbl-winners. Changing only the seed changes the winner, and so does changing only $k$. The margins are thin as well: the best and worst setting differ by `{python} gap_str` on average. A dev set that names a different winner each time it is asked has not chosen anything.
+`{python} n_winners_str` settings win somewhere in @tbl-winners. Changing only the seed changes the winner, and so does changing only $k$. The margins are thin as well: the best and worst setting differ by `{python} gap_str` on average. A dev set that names a different winner each time it is asked has not chosen anything. The test set waits for the last step of the routine, confirming the dev set's choice, and with no choice made it has nothing to confirm.
 
 Supervised learning tolerates a noisy dev score because the score measures what the model is for. Trustworthiness measures one property of the map, and readers look at others: which island sits next to which, and how tightly each one is packed.
 
@@ -309,6 +310,7 @@ fig.tight_layout()
 ```{python}
 #| label: arrangement
 #| echo: false
+#| output: false
 iu = np.triu_indices(4, 1)
 
 
@@ -356,6 +358,7 @@ The rescaling in step 1 of the fit gives every neighbourhood the same total weig
 ```{python}
 #| label: density
 #| echo: false
+#| output: false
 truth = local_density(curve)
 pca_map = PCA(2).fit_transform(curve)
 pca_rho = rho(truth, local_density(pca_map))
@@ -432,6 +435,7 @@ Practitioners who know UMAP has no held-out loss tune it on proxies instead: sco
 ```{python}
 #| label: proxies
 #| echo: false
+#| output: false
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import silhouette_score
 
