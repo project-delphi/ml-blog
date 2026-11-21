@@ -93,7 +93,7 @@ def _get(key: str, tries: int = 6) -> bytes:
 
 
 def _read(raw: bytes, name: str) -> pd.DataFrame:
-    # Five header layouts across the years; the value is `Raw Conc.` where present
+    # Four header layouts across the years; the value is `Raw Conc.` where present
     # (never the NowCast), else `Value` (Dec 2015 - Feb 2016 monthly files).
     lines = raw.decode("ascii").replace("\r\n", "\n").strip("\n").split("\n")
     header = next(csv.reader([lines[0]]))

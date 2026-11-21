@@ -438,6 +438,10 @@ dnames = {
     "stack": "Stack of all models, weights ≥ 0",
 }
 assert set(dnames) == set(T_d["model"])
+# Every model's CV rows are the same out-of-fold days, Chronos-2's included.
+dev_days = {m: frozenset(g["day"]) for m, g in res_d[res_d["split"] == "dev"].groupby("model")}
+assert set(dev_days) == set(dnames) and len(set(dev_days.values())) == 1
+assert len(next(iter(dev_days.values()))) == int(modern.fold_span(ddf, delhi.FOLD_EDGES).sum())
 linear_d = list(E.LINEAR)
 flex_d = [*E.TREES, "quantile_boost", "blend", "stack"]
 by_d = T_d.groupby("model")
@@ -645,7 +649,7 @@ for key, label, hi, f in METRICS_D:
     rows_m.append({"Metric": label, "Best model": cell(T_d, dnames, k_all, key, f),
                    "Best linear model": cell(T_d, dnames, k_lin, key, f)})
 # A flexible model wins every metric.
-assert all(k not in linear_d for k, _ in best_d.values())
+assert all(k in flex_d for k, _ in best_d.values())
 mean_d = T_d.groupby("model").mean(numeric_only=True)
 md(pd.DataFrame(rows_m))
 ```
@@ -695,7 +699,7 @@ assert n_tte == 6533
 
 ```{python}
 #| label: tbl-traffic
-#| tbl-cap: "Hourly westbound I-94 volume, forecast at midnight for each hour of the next day, January–September 2018, in vehicles per hour. CV RMSE is out of fold over the four quarters of 2017. Test RMSE and the other test columns are ranges over five seeds for the seeded models. The percentage is test RMSE relative to the careful linear model, with a 95% interval from seven-day blocks of test hours (lowest lower end to highest upper end over the seeds); below zero means better than it."
+#| tbl-cap: "Hourly westbound I-94 volume, forecast at midnight for each hour of the next day, January–September 2018, in vehicles per hour. CV RMSE is out of fold over the four quarters of 2017. Test RMSE and the other test columns are ranges over five seeds for the seeded models. The blend's CV RMSE is scored on the same folds that chose its two trees, so it flatters the blend slightly. The percentage is test RMSE relative to the careful linear model, with a 95% interval from seven-day blocks of test hours (lowest lower end to highest upper end over the seeds); below zero means better than it."
 tres, tprobe = TR.run(), TR.probe()
 tnames = {
     "seasonal_naive": "Same hour last week",
@@ -857,7 +861,7 @@ md(pd.DataFrame(gain_rows))
 ```{python}
 #| label: fig-gain
 #| fig-cap: "Test RMSE against the years of training data before the test period (for I-94, years of hours with a count), with each model's settings fixed at its full-data choice; bands are the range over five seeds. Left: New Delhi PM2.5, trained on the last 1 to 8 November–October years before November 2023. Right: I-94 traffic, trained on the last 6, 12, 24 and 36 calendar months before 2018 and on every earlier hour; the 2014–15 stop leaves the last two windows with fewer hours than their span."
-#| fig-alt: "Two line charts. For Delhi, plain linear regression flattens near 36 after two years, while the spline regression on log PM2.5 and boosting fall together to about 33 to 34. For I-94, the two careful linear models stop improving after one year, near 390 to 410 vehicles per hour, while the tree blend keeps falling with every added year, to about 353."
+#| fig-alt: "Two line charts. For Delhi, plain linear regression flattens near 36 after two years, while the spline regression on log PM2.5 and boosting fall together to about 33 to 34. For I-94, the two careful linear models stop improving after one year, near 390 to 410 vehicles per hour, while the tree blend keeps falling with every added year, to about 357."
 L = E.learning_curve()
 L["err"] = (L["pred"] - yd.loc[L["day"]].to_numpy()) ** 2
 lc_d = L.groupby(["years", "model", "seed"])["err"].mean().pow(0.5).rename("rmse").reset_index()
@@ -954,6 +958,7 @@ win_rows = pd.DataFrame([window_row(R[R["window"] == w], f"{w}–{(w + 3) % 100:
                          for w in E.ROLL_STARTS])
 n_clear = int(win_rows["_clear"].sum())
 assert n_clear == 2 and list(win_rows["_clear"]) == [True, True, False, False, False]
+assert win_rows.loc[2, "Best on test"] == dnames["linear_quad"]
 D = E.designs()
 des = {k: window_row(D[D["design"] == k], k) for k in E.DESIGNS}
 assert [des[k]["_clear"] for k in ["nextwx", "eng", "eng+nextwx+blh"]] == [False, True, False]

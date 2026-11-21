@@ -10,7 +10,8 @@ is for, over more training years, more test windows and richer designs.
 Every setting, threshold and weight is chosen on walk-forward out-of-fold
 predictions inside the pre-test years, never on test days. Seeded models run
 five seeds; tables report the range. Results are cached under `cache/` by
-`cache.frame` (tags `delhi_*_v1`); `src/check_delhi.py` prints every number.
+`cache.frame` (tags `delhi_zoo_v2`, `delhi_designs_v2`, and `_v1` for the
+learning curve, CV comparison and rolling windows); `src/check_delhi.py` prints every number.
 
 - `zoo()`: dev (out-of-fold) and test predictions for every model, same long
   format as `modern.fit_all`; `extras()` is the subset `delhi.run` lacks.
@@ -534,9 +535,17 @@ def score_table(res, y=None) -> pd.DataFrame:
     yt = y.loc[per.index].to_numpy()
     top_cut = float(np.quantile(yt, 0.9))
     rows = []
+    # A model with out-of-fold rows for seed 0 only (`delhi.run`'s quantile boosting)
+    # takes seed 0's threshold and CV score for every seed.
+    dev0 = {
+        m: g.set_index("day")["pred"]
+        for m, g in res[(res["split"] == "dev") & (res["seed"] == 0)].groupby("model")
+    }
     for (m, s), g in res.groupby(["model", "seed"], sort=False):
         te = g[g["split"] == "test"].set_index("day")["pred"].loc[per.index]
         dv = g[g["split"] == "dev"].set_index("day")["pred"]
+        if not len(dv) and m in dev0:
+            dv = dev0[m]
         tau = tune_tau(dv, y.loc[dv.index]) if len(dv) else None
         r = scores(te, yt, per.to_numpy(), top_cut, tau)
         r["oof_rmse"] = modern.rmse(dv, y.loc[dv.index]) if len(dv) else np.nan

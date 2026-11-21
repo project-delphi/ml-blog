@@ -15,7 +15,7 @@ Writes `data/raw/metro_traffic.csv.gz`: every source row and column, byte for by
 the CSV inside the zip, re-compressed with gzip mtime 0 so a rerun rebuilds the same
 bytes. No cleaning happens here. Duplicate timestamps, the "None" holiday label, the
 0 K temperatures, the 9831 mm rain hour and the ten-month stop are all left in and
-handled, visibly, in `twocultures.traffic.load`.
+handled, visibly, in `twocultures.traffic.clean`.
 
 A zip already in the download directory is reused; every file is checked against
 the SHA-256 values pinned below, and a mismatch stops the run.

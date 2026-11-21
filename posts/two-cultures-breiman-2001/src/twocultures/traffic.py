@@ -39,8 +39,8 @@ chosen on the pooled validation RMSE at seed 0 and on nothing else.
 - `probe()`: CL++, a post-hoc linear model (see its docstring).
 - `scores()`, `gap()`, `breakdown()`: the numbers `src/check_traffic.py` prints.
 
-Results are cached by `cache.frame` (tags `traffic_v1`, `traffic_lc_v1`,
-`traffic_probe_v1`). Run with OMP_NUM_THREADS=1: models are single-threaded and
+Results are cached by `cache.frame` (tags `traffic_v2`, `traffic_lc_v2`,
+`traffic_probe_v2`). Run with OMP_NUM_THREADS=1: models are single-threaded and
 joblib spreads them over cores, which also keeps every number reproducible.
 """
 
