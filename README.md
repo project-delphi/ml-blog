@@ -56,13 +56,14 @@ AGENTS.md         the working rules for coding agents; CLAUDE.md points at it
 ```bash
 make install       # base dev/lint toolchain into .venv, from uv.lock
 make kernels-stub  # register every kernel name the posts pin
+make quarto        # the pinned Quarto (1.6.40), beside any system copy
 make render        # rebuild docs/ from _freeze/ (log in render.log)
 make serve         # read it at localhost:8000
 ```
 
 That builds the whole site from the committed frozen output with no ML dependencies
-installed. Previewing a *single* post is a different thing: `quarto preview
-posts/<slug>/index.qmd` always executes that post's code, so it needs the post's own
+installed. Previewing a *single* post is a different thing: `make preview
+SLUG=<slug>` always executes that post's code, so it needs the post's own
 `.venv-<slug>` built first (see [Rendering](#rendering)). Out of the box it works only
 for the four `blog-base` posts, which run nothing.
 
@@ -71,16 +72,21 @@ while it indexes the project — *before* it consults `_freeze/` — so one miss
 name fails the entire site build, frozen output or not. The stubs point at `.venv` and
 carry no ML dependencies; they exist to satisfy the lookup.
 
+`make quarto` matters because a newer Quarto rewrites the shared `docs/site_libs/`
+runtime. It installs 1.6.40 under `~/.local/share/quarto/`, leaves the system copy alone,
+and every render target then uses it; without it they refuse any other version.
+
 CI renders every pull request the same way, from the committed `_freeze/` with stub
 kernels, and runs the checks below. It does not publish: `docs/` is rendered locally
 and committed, and CI reports how far the committed copy is from a fresh render.
 
 ### Rendering
 
-**One post** — `quarto render posts/<slug>/index.qmd`. Narrow blast radius, but it
+**One post** — `make render-post SLUG=<slug>`. Narrow blast radius, but it
 *always executes* that post's code, so it needs the post's real venv.
 
-**The whole site** — `QUARTO_PYTHON="$(pwd)/.venv/bin/python" quarto render .`. This
+**The whole site** — `make render`, which runs
+`QUARTO_PYTHON="$(pwd)/.venv/bin/python" quarto render .` with the pinned Quarto. This
 respects `freeze: auto` and re-executes only posts whose source md5 changed. It's the
 right tool for anything site-wide: nav, theme, `_quarto.yml`, a stale `search.json`.
 

@@ -1,6 +1,11 @@
-# Nothing pins Quarto, and a newer one rewrites docs/site_libs/ (see AGENTS.md).
-# `make render` refuses to run on any other version.
+# Nothing pins the system Quarto, and a newer one rewrites docs/site_libs/ (see
+# AGENTS.md). So the Makefile runs its own copy when it has one: `make quarto`
+# installs $(QUARTO_VERSION) under ~/.local/share/quarto/, beside whatever the
+# system has, and every target below then uses it. Without that copy they use
+# `quarto` from PATH, and the render targets refuse any version but this one.
 QUARTO_VERSION := 1.6.40
+QUARTO_HOME := $(HOME)/.local/share/quarto/$(QUARTO_VERSION)
+QUARTO ?= $(if $(wildcard $(QUARTO_HOME)/bin/quarto),$(QUARTO_HOME)/bin/quarto,quarto)
 
 # setup blog virtual environment (--allow-existing keeps this idempotent;
 # without it uv exits non-zero when .venv already exists)
@@ -89,9 +94,28 @@ test:
 check: lint spell test check-posts
 
 # ---- rendering --------------------------------------------------------------
+# Install the pinned Quarto from its release tarball into $(QUARTO_HOME): no
+# admin rights, and the system copy is left alone. It unpacks into a scratch
+# directory first, so an interrupted download never looks like an install. CI
+# installs its own copy through quarto-actions.
+quarto:
+	@if test -x "$(QUARTO_HOME)/bin/quarto"; then echo "quarto $(QUARTO_VERSION) is already in $(QUARTO_HOME)"; exit 0; fi; \
+	  test "$$(uname -s)" = Darwin || { echo "make quarto knows only the macOS tarball; install $(QUARTO_VERSION) from https://github.com/quarto-dev/quarto-cli/releases/tag/v$(QUARTO_VERSION)"; exit 1; }; \
+	  mkdir -p "$(dir $(QUARTO_HOME))" && tmp=$$(mktemp -d "$(dir $(QUARTO_HOME)).partial.XXXXXX") && \
+	  curl -fL --retry 3 -o "$$tmp/quarto.tar.gz" \
+	    https://github.com/quarto-dev/quarto-cli/releases/download/v$(QUARTO_VERSION)/quarto-$(QUARTO_VERSION)-macos.tar.gz && \
+	  mkdir "$$tmp/q" && tar -xzf "$$tmp/quarto.tar.gz" -C "$$tmp/q" && \
+	  test "$$("$$tmp/q/bin/quarto" --version)" = "$(QUARTO_VERSION)" && \
+	  mv "$$tmp/q" "$(QUARTO_HOME)" && rm -rf "$$tmp" && \
+	  echo "installed quarto $(QUARTO_VERSION) in $(QUARTO_HOME)" \
+	  || { rm -rf "$$tmp"; echo "make quarto failed; nothing was installed"; exit 1; }
 check-quarto:
-	@v=$$(quarto --version); test "$$v" = "$(QUARTO_VERSION)" \
-	  || { echo "quarto $$v found, $(QUARTO_VERSION) required (a newer one rewrites docs/site_libs/)"; exit 1; }
+	@v=$$("$(QUARTO)" --version 2>/dev/null); test "$$v" = "$(QUARTO_VERSION)" \
+	  || { echo "$(QUARTO) is $${v:-missing}; $(QUARTO_VERSION) is required (a newer one rewrites docs/site_libs/). Run make quarto to install it beside the system copy."; exit 1; }
+# Print the Quarto these targets use, for a command that has to call it directly:
+#   "$(make -s which-quarto)" render posts/<slug>/slides.qmd
+which-quarto:
+	@echo "$(QUARTO)"
 # Render-time assets that are ignored at the source but tracked under docs/
 # (the third .gitignore trap in AGENTS.md). A full render rebuilds docs/ from
 # source and so drops them unless the post re-executed; `render` puts back
@@ -104,7 +128,7 @@ RENDER_KEEP := docs/posts/uses-of-tensor-factorizations/media
 # Python that cannot see --user kernelspecs and dies after deleting docs/.
 render: check-quarto
 	python3 scripts/check_posts.py --no-listing
-	@QUARTO_PYTHON="$(CURDIR)/.venv/bin/python" quarto render . > render.log 2>&1; \
+	@QUARTO_PYTHON="$(CURDIR)/.venv/bin/python" "$(QUARTO)" render . > render.log 2>&1; \
 	  status=$$?; tail -40 render.log; \
 	  grep -inE 'error|not found|traceback' render.log || true; \
 	  test $$status -eq 0 || { echo "render failed (see render.log); restore with: git checkout -- docs"; exit $$status; }
@@ -116,7 +140,11 @@ render: check-quarto
 # `make render`, which is what refreshes search.json and listings.json.
 render-post: check-quarto
 	@test -n "$(SLUG)" || { echo "usage: make render-post SLUG=<slug>"; exit 2; }
-	QUARTO_PYTHON="$(CURDIR)/.venv/bin/python" quarto render posts/$(SLUG)/index.qmd
+	QUARTO_PYTHON="$(CURDIR)/.venv/bin/python" "$(QUARTO)" render posts/$(SLUG)/index.qmd
+# Live preview of one post, through the same pinned Quarto as the renders.
+preview: check-quarto
+	@test -n "$(SLUG)" || { echo "usage: make preview SLUG=<slug>"; exit 2; }
+	QUARTO_PYTHON="$(CURDIR)/.venv/bin/python" "$(QUARTO)" preview posts/$(SLUG)/index.qmd
 # A project render deletes docs/ and rebuilds it from source, so an asset that
 # is ignored at the source but tracked under docs/ (see .gitignore) vanishes.
 # Lists such deletions and fails; restore them with `git checkout -- <path>`.
@@ -141,9 +169,12 @@ help:
 	@echo "spell - codespell over prose"
 	@echo "test - pytest over scripts/"
 	@echo "check - lint + spell + test + check-posts"
+	@echo "quarto - install the pinned Quarto ($(QUARTO_VERSION)) beside the system copy"
+	@echo "which-quarto - print the Quarto the render targets use"
 	@echo "render - full project render to render.log, then the docs/ deletion check"
 	@echo "render-post SLUG=<slug> - execute and render one post"
+	@echo "preview SLUG=<slug> - live preview of one post with the pinned Quarto"
 	@echo "docs-deleted - list tracked docs/ files a render removed"
 	@echo "serve - static server for docs/ on :8000"
 
-.PHONY: venv install lock kernel kernels-stub check-posts docs-query freeze-realign lint fmt spell test check check-quarto render render-post docs-deleted serve help
+.PHONY: venv install lock kernel kernels-stub check-posts docs-query freeze-realign lint fmt spell test check quarto check-quarto which-quarto render render-post preview docs-deleted serve help
