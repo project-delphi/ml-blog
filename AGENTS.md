@@ -69,7 +69,7 @@ allow/block matrix; run the matching one after touching a hook.
    review reports nothing Critical — so use it when the change is meant to land, and do
    the steps by hand when the user asked only for a PR to look at.
 
-The five legacy posts (`LEGACY_NO_ENV` in `scripts/check_posts.py`) are the exception:
+The four legacy posts (`LEGACY_NO_ENV` in `scripts/check_posts.py`) are the exception:
 they cannot be re-rendered at all. See [Why `_freeze/` is committed](#why-_freeze-is-committed).
 
 ## Adding a new post
@@ -277,7 +277,7 @@ executing post gets its own `.venv-<slug>` plus a named kernel. See `ENVIRONMENT
 
 ### Why `_freeze/` is committed
 
-`_freeze/` is **tracked**. Five posts predate the venv-per-post convention
+`_freeze/` is **tracked**. Four posts predate the venv-per-post convention
 (`LEGACY_NO_ENV` in `scripts/check_posts.py`): no pinned kernel, no pinned versions,
 dependencies pinned to nothing. Their frozen record is the only reproducible copy of
 what they compute, and it is what lets the CI render job build the site with no ML

@@ -72,7 +72,6 @@ LEGACY_NO_ENV = {
     "features-importance-after-clustering",
     "poor-persons-bayesian",
     "post-with-code",
-    "working-with-quarto",
 }
 
 # Frozen output that is knowingly stale. Both are prose posts with no code
