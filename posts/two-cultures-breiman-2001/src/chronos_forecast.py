@@ -1,4 +1,4 @@
-"""Write Chronos-2's next-day forecasts: ozone (1976) or New Delhi PM2.5 (2016-2026).
+"""Write Chronos-2's next-day forecasts: ozone (1976) or New Delhi PM2.5 (2015-2026).
 
 Run from the post directory with the Chronos venv, which the post's kernel does
 not have (torch is too heavy for the series' shared venv):
@@ -16,7 +16,7 @@ predicts day t + 1. The point forecast is the median of the predicted
 distribution. Dev rows are the days inside the walk-forward validation blocks,
 the days the tabular models predict out of fold (`modern.fold_span`); test rows
 are the test days. Ozone is written to cache/chronos2_v3.parquet, PM2.5 to
-cache/chronos2_delhi_v3.parquet.
+cache/chronos2_delhi_v4.parquet.
 """
 
 import sys

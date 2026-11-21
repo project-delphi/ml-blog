@@ -6,8 +6,8 @@ a header row (gzip `mtime` set to 0, so a rebuild is byte-identical). Columns ke
 source's order. Missing-value codes (`?` in UCI files, `NA` in R) are empty cells. Where
 the source ships a train/test split, it is kept as two files.
 
-Access date for sections 1–7: **2026-11-18**; section 8 gives its own. The SHA-256 values are for the files as
-downloaded, before any conversion. Sections 1–7 were converted with pandas and pyreadr by `../src/convert_raw.py`, which reads only the downloads (kept outside the repo) and writes `raw/`; section 8's files come from `../src/fetch_delhi.py`. Nothing was
+Access date for sections 1–7: **2026-11-18**; sections 8 and 9 give their own. The SHA-256 values are for the files as
+downloaded, before any conversion. Sections 1–7 were converted with pandas and pyreadr by `../src/convert_raw.py`, which reads only the downloads (kept outside the repo) and writes `raw/`; section 8's files come from `../src/fetch_delhi.py` and section 9's from `../src/fetch_traffic.py`. Nothing was
 imputed, recoded, deduplicated or reordered unless the section says so.
 
 ## Summary
@@ -32,10 +32,11 @@ imputed, recoded, deduplicated or reordered unless the section says so.
 | `default_credit.csv.gz` | 30,000 × 25 | 2 (0: 23,364, 1: 6,636) | 0 | 979,797 | UCI 350 |
 | `lalonde_nsw.csv.gz` | 445 × 11 | `treat` 1: 185, 0: 260 | 0 | 4,820 | Dehejia (NBER) |
 | `lalonde_psid.csv.gz` | 2,490 × 11 | `treat` 0: 2,490 | 0 | 25,423 | Dehejia (NBER) |
-| `delhi_pm25_daily.csv.gz` | 3,652 × 4 | regression (`pm25`) | 1,490 (745 days without a daily mean) | 26,727 | US Embassy New Delhi via OpenAQ |
-| `delhi_era5_daily.csv.gz` | 3,652 × 15 | (predictors) | 543 (`blh_*`, 181 days) | 131,971 | ERA5 via Open-Meteo |
+| `delhi_pm25_daily.csv.gz` | 4,018 × 4 | regression (`pm25`) | 358 (179 days without a daily mean) | 30,207 | US Embassy New Delhi via AirNow-Tech |
+| `delhi_era5_daily.csv.gz` | 4,018 × 15 | (predictors) | 543 (`blh_*`, 181 days) | 145,320 | ERA5 via Open-Meteo |
+| `metro_traffic.csv.gz` | 48,204 × 9 | regression (`traffic_volume`) | 0 cells (11,976 hours absent from the record) | 405,331 | UCI 492 (MN DoT ATR 301) |
 
-All of `raw/` together, documentation and section 8's files included, is 4,940,278 bytes (about 4.9 MB).
+All of `raw/` together, documentation and sections 8–9's files included, is 5,362,438 bytes (about 5.4 MB).
 
 **Mapping to Breiman's Table 1.** The column counts there are covariates only. To get
 them, drop `Sample_code_number` and `Class` from Cancer (9 covariates), `Id` and `Type`
@@ -361,40 +362,96 @@ the Wayback Machine.
 - **Experimental benchmark:** mean re78 is 6,349.14 for the treated and 4,554.80 for the
   controls, a difference of **$1,794.34**. The `.txt` files give 1,794.34 as well.
 
-## 8. New Delhi PM2.5 and weather, November 2016 to October 2026
+## 8. New Delhi PM2.5 and weather, November 2015 to October 2026
 
 Unlike sections 1–7, these two files are written by a script in the repo,
 `../src/fetch_delhi.py`, which downloads the hourly sources into a directory outside
-the repo and writes the daily files here. Access date **2026-11-19**. One row per local
-(India Standard Time) calendar day, 2016-11-01 to 2026-10-31.
+the repo and writes the daily files here. Access date **2026-11-21**. One row per local
+(India Standard Time) calendar day, 2015-11-01 to 2026-10-31 (4,018 days).
 
 ### `delhi_pm25_daily.csv.gz`
 
-- Source: the US Embassy monitor in New Delhi (28.63576 N, 77.22445 E), reported to
-  AirNow by the US Department of State, as archived by OpenAQ: location 8118,
-  "US Diplomatic Post: New Delhi", sensor 23534, one gzip CSV per day under
-  `s3://openaq-data-archive/records/csv.gz/locationid=8118/` (public bucket, no key).
-  OpenAQ's archive of this monitor starts on 2016-11-09; AirNow's own files reach back
-  further but `dosairnowdata.org` did not resolve on the access date.
-- Terms: OpenAQ passes through the original source's terms and asks for attribution to
-  both the original provider and OpenAQ (<https://docs.openaq.org/docs/data-policy>).
-  AirNow describes embassy data as provisional, not fully verified or validated.
-- Section 8's SHA-256 values are of the CSVs `fetch_delhi.py` writes from the downloads (pandas 3.1.1), not of the raw responses, so a different pandas, an OpenAQ backfill or ERA5's late revisions can change them while the daily files stay the same.
-- SHA-256 of the concatenated hourly download (`openaq_8118_hourly_2016-11-01_to_2026-10-31.csv`, 79,677 rows,
-  stamped 2016-11-09 23:00 to 2026-11-01 00:00; the script cuts the download at the last
-  day, so a later run gives the same file): `481df96f2278d128245c1419131f0ca406982e847dcb0d3dc31fce381390e95b`.
-- Hourly cleaning: 6,157 hours coded `-999`, 191 other negative values and 22 zeros are
-  missing; 321 hours at exactly 1985 µg/m³ are the instrument's fault code (they come in
-  runs, next to ordinary readings) and are missing too. OpenAQ stamps each hour at its
-  end (a day's file runs 01:00 to the next 00:00), so an hour counts on the day it
-  started. July–November 2023 carries half-hour stamps as well. They get the same
-  one-hour shift and are averaged with the hour they land in, so a stamp from 00:30 to
-  00:59 counts on the previous day. The archive does not say which half hour these
-  stamps cover.
+- Source: the US Embassy monitor in New Delhi (28.63576 N, 77.22445 E), hourly, from
+  the US Department of State's own historical files on AirNow-Tech's public S3 bucket,
+  `https://s3-us-west-1.amazonaws.com/files.airnowtech.org/airnow/EmbassyHistorical/NewDelhi/`
+  (no key): one CSV per year (`NewDelhi_PM2.5_<year>_YTD.csv`) and per month
+  (`…_<year>_<month>_MTD.csv`). The script takes every PM2.5 file under that prefix
+  (146 files, 2015–2026) and keeps the union of their hours.
+- Terms: AirNow describes embassy data as provisional, not fully verified or validated,
+  and asks that it be credited to the US Department of State.
+- SHA-256: `fetch_delhi.py` writes `airnow_sha256.txt` in the download directory, a hash
+  for each of the 146 files as served. The SHA-256 of that manifest is
+  `c554a6abbd37be4ebdb4e1ca176b7e7004c4b314a51372187d6971d72262d4a8`. A later run in
+  the same directory reads its file list from the manifest and checks each file
+  against it, so it rebuilds this file byte for byte without the network. The 2026
+  files were still growing on the access date; a fresh download will hash differently
+  but gives the same hours up to 2026-10-31.
+- Daily-file SHA-256 (pandas 3.1.1): `2ba2feecf6808ab48fd24ca9d9d56545e4e13122997d0abd9e5aa3f5cd09f9ea`.
+- Which value: `Raw Conc.`, the hour's own reading, where the file has it, else `Value`
+  (the December 2015 to February 2016 monthly files). Never `NowCast Conc.`, which is a
+  weighted 12-hour average.
+- Hourly cleaning. The window holds 94,343 distinct hourly stamps (of 96,432 possible).
+  Only hours a file marks `Valid` count: 1,592 stamps have no `Valid` row in any file
+  (819 `Invalid`, 773 `Missing`; one `Suspect` row is dropped too). Of the 92,751 `Valid`
+  stamps, 213 carry `-999`, 43 another negative value, 25 a zero and one the 1985 µg/m³
+  fault code; all are missing. That leaves 92,469 hours. A stamp in both a year file and
+  a month file has the same value whenever both mark it `Valid`; the year file is read
+  first.
+- Day boundaries: the stamps mark the end of the hour (a year file runs 01:00 to the
+  next year's 00:00 through 2019), so an hour counts on the day it started, the same
+  one-hour shift the OpenAQ copy needed. They coincide with OpenAQ's stamps wherever
+  OpenAQ is undamaged.
+- Traps in the files, all handled by the script:
+  - four column layouts across the years, and October 2016's monthly file writes every
+    row as a quoted Python list (`"[New Delhi, PM2.5 - Principal, …]"`);
+  - December 2015 to September 2016 monthly files mark `-999` hours as `Valid` (the
+    year files mark the same hours `Missing`), so the value filter is needed as well as
+    the QC filter;
+  - December files are misfiled a folder early under the next year's name
+    (`2017/NewDelhi_PM2.5_2018_12_MTD.csv` holds December 2017), and the correctly named
+    December files stop a day short;
+  - from 2020 the year files run 02:00 to the next year's 01:00, so the 01:00 stamp of
+    1 January comes from the month files, or is absent (1 January 2020);
+  - on the US spring-forward Sunday (2016-03-13, 2017-03-12, 2018-03-11 in this span) a
+    file has no 02:00 and two 03:00 rows, though India keeps no daylight saving; the
+    first 03:00 is put back at 02:00.
 - Columns: `date`, `pm25` (24-hour mean, µg/m³), `pm25_max` (highest hour),
-  `n_hours`. A day with fewer than 18 valid hours has no mean (366 days), and 379 days
-  have no valid hour at all: 745 days, 20% of the record, without `pm25`. The longest
-  gap is 10 May to 21 September 2022 (135 days).
+  `n_hours`. A day with fewer than 18 valid hours has no mean (73 days), and 106 days
+  have no valid hour at all: 179 days, 4.5% of the record, without `pm25`. The longest
+  gap is 11 February to 18 March 2019 (36 days). The highest daily mean is 931 µg/m³.
+- Coverage by November–October year (days with a daily mean; mean of those days, µg/m³;
+  days at or above 250 µg/m³, India's "Severe" band):
+
+  | Year | Days with a mean | Mean | Severe days |
+  |---|---|---|---|
+  | Nov 2015 – Oct 2016 | 349 of 366 | 121 | 51 |
+  | Nov 2016 – Oct 2017 | 332 of 365 | 114 | 23 |
+  | Nov 2017 – Oct 2018 | 340 of 365 | 116 | 27 |
+  | Nov 2018 – Oct 2019 | 320 of 365 | 102 | 21 |
+  | Nov 2019 – Oct 2020 | 365 of 366 | 91 | 20 |
+  | Nov 2020 – Oct 2021 | 361 of 365 | 98 | 25 |
+  | Nov 2021 – Oct 2022 | 336 of 365 | 100 | 20 |
+  | Nov 2022 – Oct 2023 | 365 of 365 | 89 | 13 |
+  | Nov 2023 – Oct 2024 | 366 of 366 | 105 | 34 |
+  | Nov 2024 – Oct 2025 | 362 of 365 | 91 | 22 |
+  | Nov 2025 – Oct 2026 | 343 of 365 | 96 | 19 |
+
+- **Why not OpenAQ.** The previous version of this file read OpenAQ's archive of the
+  same monitor (location 8118, `s3://openaq-data-archive/records/csv.gz/locationid=8118/`,
+  which starts on 2016-11-09). Set hour by hour against AirNow's files, it is damaged:
+  - November 2016 to February 2017 it carries the NowCast, not the hourly value: 98.6–100%
+    of its hours equal AirNow's `NowCast Conc.` each month, and at most 0.4% equal
+    `Raw Conc.`. March 2017 is about half and half; from April 2017 it is the raw value.
+  - Hours are dropped, repeated and shifted in October 2017 – October 2018, November
+    2019 – December 2021 (in most months only 43–68% of hours match AirNow at the same
+    stamp, and another 35–63% match one hour off) and June 2023 – November 2024 (August
+    2023 to February 2024 sits a whole hour early, 100% matching at one hour's offset).
+  - 111 hours it reports are hours AirNow marks only `Invalid`.
+
+  On the 3,652 days the two versions share, AirNow gives a daily mean on 586 days
+  OpenAQ's copy lacks, and OpenAQ on 3 that AirNow marks invalid, a net gain of 583
+  (OpenAQ had 745 days without one), and on the 2,904 days both have a mean, 168
+  differ by more than 5 µg/m³ (at most 45.8).
 
 ### `delhi_era5_daily.csv.gz`
 
@@ -403,9 +460,13 @@ the repo and writes the daily files here. Access date **2026-11-19**. One row pe
   `timezone=Asia/Kolkata`) at the monitor's coordinates. The nearest ERA5 grid point,
   which the API returns, is 28.75 N, 77.25 E, about 13 km north of the monitor.
   Open-Meteo's data are CC BY 4.0; ERA5 is Copernicus Climate Change Service data.
-- SHA-256 of the hourly download (`era5_era5_ef4413f6_hourly_2016-11-01_to_2026-10-31.csv`):
-  `5f83a80fa0d23912a991aa4e4212d327e7bdab84f53b13e80211ff26520deb47`. The request runs
-  one day either side of the span (2016-10-31 to 2026-11-01).
+- SHA-256 of the hourly download (`era5_era5_ef4413f6_hourly_2015-11-01_to_2026-10-31.csv`,
+  96,480 hours): `80b6ed80fb5c2c5c1c4e88396787ebbb0bfa83636c28ce2cde15b4a8c87d8417`.
+  The request runs one day either side of the span (2015-10-31 to 2026-11-01). On the
+  ten years the previous download covered, the daily values are identical cell for cell.
+- Daily-file SHA-256 (pandas 3.1.1): `7708edc967f3591cc39421cc6b71d270c76db892d9050ef2798492eef74928c1`.
+  ERA5's late revisions can change the hourly download while the daily file stays the
+  same, or the reverse.
 - Day boundaries: instantaneous values (temperature, humidity, pressure, wind,
   boundary-layer height) are labelled at their hour and grouped by that hour's date.
   Precipitation and shortwave radiation are totals or means over the hour ending at the
@@ -419,4 +480,72 @@ the repo and writes the daily files here. Access date **2026-11-19**. One row pe
 - Missing: boundary-layer height is null in the API for every hour from 2024-01-02 to
   2024-06-30 (181 days) under `era5` and `era5_seamless` alike, and the archive serves no
   pressure-level fields to rebuild it from. Part 1 therefore does not use the `blh_*`
-  columns. Every other column is complete.
+  columns in its main design. Every other column is complete.
+
+---
+
+## 9. Metro Interstate Traffic Volume, I-94 Minneapolis–St Paul (UCI 492)
+
+### `metro_traffic.csv.gz`
+
+- Source: <https://archive.ics.uci.edu/static/public/492/metro+interstate+traffic+volume.zip>,
+  landing page <https://archive.ics.uci.edu/dataset/492/metro+interstate+traffic+volume>,
+  DOI 10.24432/C5X60B. Creator John Hogue, donated 6 May 2019. Accessed 2026-11-21 by
+  `src/fetch_traffic.py`. Licence: "This dataset is licensed under a Creative Commons
+  Attribution 4.0 International (CC BY 4.0) license."
+- What it is: "Hourly I-94 ATR 301 reported westbound traffic volume" (MN DoT automatic
+  traffic recorder 301, about midway between Minneapolis and St Paul), with hourly
+  weather and a holiday label, 2 October 2012 09:00 to 30 September 2018 23:00. The
+  page describes `date_time` as "Hour of the data collected in local CST time". In
+  practice it is local clock time with daylight saving: 02:00 is absent on every
+  spring-forward day, and fall-back days have 24 hours.
+- SHA-256: zip `b99aeabcbd6cc86f642da3a79d90883425798f58abd3b3302da2fa19dda73768`;
+  member `Metro_Interstate_Traffic_Volume.csv.gz`
+  `0b3679ac15173f79c6dc6c5ef8a0798d806fa5c5d7f05c84a5fa711bd1b05f07`; the CSV inside it
+  `749c90d720360a4215bb15345526073c079ba4cc95e3fa558796d083f85fce9e`; the written
+  `metro_traffic.csv.gz` (gzip mtime 0, level 9, 405,331 bytes)
+  `66285ae530617844f71bd9d408e38ba1617e218adc2f3c2f529efa5c47db29c5`.
+- Written: 48,204 × 9, every source row and column, byte for byte the source CSV
+  (`holiday, temp, rain_1h, snow_1h, clouds_all, weather_main, weather_description,
+  date_time, traffic_volume`). Nothing is cleaned in the file. All cleaning is in
+  `twocultures.traffic.clean`, so each fix below is visible in code.
+- Missing: no empty cells (the page says "Missing Values? No"). Missing *hours* are a
+  different matter. After de-duplication there are 40,575 distinct hours on a grid of
+  52,551, so 11,976 hours are absent. Most of that is one stop.
+
+**Traps, and what the module does with each.**
+
+- **"None" is a holiday name that pandas reads as missing.** Every non-holiday row
+  carries the literal string `None`. `pd.read_csv` turns `None` into NaN by default
+  (48,143 rows), and then a test of `holiday != "None"` is true everywhere: every day
+  is a holiday and no working day survives. The module reads with
+  `keep_default_na=False`.
+- **A holiday is labelled on its 00:00 row only.** The module spreads the label to the
+  whole calendar day, then unions it with `pandas`' US federal holiday calendar.
+  The labels cover 53 distinct days, 5 of them the Minnesota State Fair (not federal).
+  Twelve federal holidays inside the observed span are unlabelled: 2013-01-21,
+  2014-07-04, 2014-09-01, 2014-10-13, 2014-11-11, 2014-11-27, 2014-12-25, 2015-01-01,
+  2015-01-19, 2015-02-16, 2015-05-25 and 2016-01-18. Most of them fall in the stop
+  below. The calendar is fixed years ahead, so this uses nothing a forecaster would
+  lack.
+- **7,629 duplicate timestamps.** There is one row per concurrent weather label (e.g.
+  Rain and Mist in the same hour). Volume agrees within every duplicate set, which the
+  module asserts. Weather numbers occasionally differ. The first row in file order is
+  kept.
+- **Ten hours read 0 K** (31 January to 2 February 2014). They are set to missing and
+  linearly interpolated from neighbouring hours.
+- **One hour reads 9,831.3 mm of rain** (2016-07-11 17:00). The next-largest value is
+  55.6 mm, and the neighbouring hours read 0. It is set to 0.
+- **The counter stops** from 2014-08-08 01:00 to 2015-06-11 20:00 (307 days). Shorter
+  stops last 2 to 10 days (e.g. 2013-10-27 to 2013-11-06). The module invents no hours:
+  an absent hour is absent. A lag that lands in a gap is NaN. The trees take NaN
+  natively, and the linear models fill it with the training window's hour-of-week
+  median plus a missing-lag indicator.
+- **Two zero-volume hours** (2016-07-23 18:00 and 23:00) look like sensor dropouts.
+  Both are in training and left as recorded.
+
+**Design used by the post.** A midnight forecast for each hour of the next day. Inputs:
+calendar, the weather observed at the target hour (perfect prognosis), and volume up to
+23:00 the day before (same hour 1, 2 and 7 days back, the 7-day same-hour mean, and the
+previous day's total). Train runs from 2012-10-10, the first day whose every hour has a count from seven days before, validation is four quarterly
+walk-forward folds in 2017, and test is 2018-01-01 to 2018-09-30 (6,533 hours).

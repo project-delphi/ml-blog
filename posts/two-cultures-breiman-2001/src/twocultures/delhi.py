@@ -1,4 +1,4 @@
-"""Part 1's next-day design on ten years of New Delhi PM2.5 (November 2016 to October 2026).
+"""Part 1's next-day design on eleven years of New Delhi PM2.5 (November 2015 to October 2026).
 
 The target is day t+1's 24-hour mean PM2.5 at the US Embassy monitor, in µg/m³.
 The candidates mirror the 1976 design: days t, t-1 and t-2 of PM2.5 and eight
@@ -7,7 +7,8 @@ ERA5 surface readings (27 columns), plus season and a weekend flag, 30 in all.
 The years run November to October, so each holds one winter. Split by the
 forecast day t: the test period is November 2023 to October 2026. Model settings
 are chosen by expanding-window walk-forward CV on the earlier years (four
-November-October validation blocks, a three-day embargo at each edge); the
+November-October validation blocks, November 2019 to October 2023, a three-day
+embargo at each edge; the first fold trains on November 2015 to October 2019); the
 chosen models are refit on every pre-test day before being scored. The models
 and grids are `modern`'s, unchanged.
 
@@ -21,7 +22,7 @@ import pandas as pd
 
 from . import data, modern
 
-START = pd.Timestamp("2016-11-01")
+START = pd.Timestamp("2015-11-01")
 DEV_START, TEST_START = pd.Timestamp("2022-11-01"), pd.Timestamp("2023-11-01")
 WEATHER = [
     "temp_max",
@@ -36,12 +37,12 @@ WEATHER = [
 BASE = ["pm25"] + WEATHER
 LAGS = (0, 1, 2)
 ALERT = 250  # India's National AQI "Severe" band for a 24-hour PM2.5 mean (250+ µg/m³)
-CACHE_TAG = "delhi_v3"  # the cache.frame name for run(); bump it when run() changes
-CHRONOS_FILE = Path("cache") / "chronos2_delhi_v3.parquet"
+CACHE_TAG = "delhi_v4"  # the cache.frame name for run(); bump it when run() changes
+CHRONOS_FILE = Path("cache") / "chronos2_delhi_v4.parquet"
 
 
 def daily() -> pd.DataFrame:
-    """One row per day, indexed by days since 1 November 2016 (`day`)."""
+    """One row per day, indexed by days since 1 November 2015 (`day`)."""
     pm = pd.read_csv(data.RAW / "delhi_pm25_daily.csv.gz", parse_dates=["date"])
     wx = pd.read_csv(data.RAW / "delhi_era5_daily.csv.gz", parse_dates=["date"])
     d = pm.merge(wx, on="date", how="inner", validate="one_to_one")
