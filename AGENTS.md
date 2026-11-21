@@ -82,9 +82,11 @@ they cannot be re-rendered at all. See [Why `_freeze/` is committed](#why-_freez
    kernel name to `kernels-stub` in the `Makefile` (`ENVIRONMENTS.md`).
 5. If it reads a data file at render time, un-ignore that directory in `.gitignore`
    (both the directory and `/**`, copying an existing carve-out). The pre-commit
-   hooks already skip every `posts/*/data/` through the top-level `exclude` in
-   `.pre-commit-config.yaml`, so the 500 kB cap and the whitespace fixers never touch
-   cached upstream bytes; nothing to add there.
+   hooks already skip every `posts/*/data/`, `posts/*/widget-data/` and
+   `posts/*/cache/` (results a post's own scripts write) through the top-level
+   `exclude` in `.pre-commit-config.yaml`, so the 500 kB cap and the whitespace fixers
+   never touch them; nothing to add there. Because the cap does not apply under
+   `cache/`, check sizes there yourself and keep each file to what the posts read.
 6. **Finish with a project render.** A single-document render writes only
    `docs/posts/<slug>/`, so the post goes live at its own URL while staying invisible on
    the home page and in search. `make check-posts` fails when a post is missing from
@@ -367,6 +369,10 @@ written by a fetch script under `src/` (`graph-data.js`, from
 `src/fetch_citation_graph.js`), and the slide quotes the snapshot's date. Re-fetching
 changes the numbers, so re-run `src/check_model.js` afterwards and update any slide text
 that quotes them.
+
+The first post with `lightbox: true` (the When UMAP Lies series) added
+`docs/site_libs/quarto-contrib/glightbox/` the same way; later lightbox posts should
+change nothing there.
 
 The first deck added `docs/site_libs/revealjs/` and three files under
 `docs/site_libs/quarto-html/`. Later decks should change nothing under `site_libs/`.
