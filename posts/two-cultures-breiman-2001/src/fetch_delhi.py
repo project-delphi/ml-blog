@@ -1,4 +1,4 @@
-"""Download ten years of New Delhi PM2.5 and weather, and write the daily files.
+"""Download eleven years of New Delhi PM2.5 and weather, and write the daily files.
 
 Run from the post directory with the series venv, naming a download directory
 outside the repo (the hourly downloads are kept there, not committed):
@@ -8,18 +8,25 @@ outside the repo (the hourly downloads are kept there, not committed):
 
 Sources, both open and keyless:
 
-- PM2.5: the US Embassy monitor in New Delhi (AirNow's "US Diplomatic Post:
-  New Delhi"), hourly, as archived by OpenAQ in its public S3 bucket
-  (location 8118, one gzip CSV per day).
-- Weather: ERA5 reanalysis at the monitor's coordinates, hourly, from the
-  Open-Meteo historical archive API (`models=era5`).
+- PM2.5: the US Embassy monitor in New Delhi, hourly, from the US State Department's
+  own historical files on AirNow-Tech's public S3 bucket
+  (`files.airnowtech.org/airnow/EmbassyHistorical/NewDelhi/`, one CSV per year and per
+  month). This replaces OpenAQ location 8118, which mirrors the same feed but carries
+  the NowCast instead of the hourly value until mid-March 2017, drops, repeats and
+  shifts hours in several later stretches, and passes through hours AirNow marks
+  Invalid (`data/README.md` has the evidence).
+- Weather: ERA5 reanalysis at the monitor's coordinates, hourly, from the Open-Meteo
+  historical archive API (`models=era5`), unchanged from the OpenAQ version.
 
 Writes `data/raw/delhi_pm25_daily.csv.gz` and `data/raw/delhi_era5_daily.csv.gz`,
-one row per local (India Standard Time) calendar day, 1 November 2016 to 31 October
-2026 (OpenAQ's archive of the monitor starts on 9 November 2016, so the first eight
-days have no readings), and prints the SHA-256 of both hourly downloads for `data/README.md`.
+one row per local (India Standard Time) calendar day, 1 November 2015 to 31 October
+2026, and `airnow_sha256.txt` in the download directory, a SHA-256 for every AirNow
+file. A later run in the same directory reads its file list from that manifest and
+checks every file against it instead of listing the bucket again, so it rebuilds the
+same two daily files offline; delete the manifest to fetch afresh.
 """
 
+import csv
 import gzip
 import hashlib
 import io
@@ -36,9 +43,10 @@ import requests
 if not Path("index.qmd").exists() or not Path("data/raw").is_dir():
     sys.exit("run from posts/two-cultures-breiman-2001 (it writes data/raw/)")
 
-LOCATION, LAT, LON = 8118, 28.63576, 77.22445
-START, END = "2016-11-01", "2026-10-31"
-BUCKET = "https://openaq-data-archive.s3.amazonaws.com"
+LAT, LON = 28.63576, 77.22445
+START, END = "2015-11-01", "2026-10-31"
+AIRNOW = "https://s3-us-west-1.amazonaws.com/files.airnowtech.org"
+PREFIX = "airnow/EmbassyHistorical/NewDelhi/"
 ERA5 = "https://archive-api.open-meteo.com/v1/archive"
 MODEL = "era5"
 HOURLY = [
@@ -54,28 +62,28 @@ HOURLY = [
 ]
 MIN_HOURS = 18  # a day's mean needs 75% of its hours, the usual completeness rule
 FAULT = 1985.0  # the monitor's error code, not a reading
+MANIFEST = "airnow_sha256.txt"  # in the download directory: the file list, pinned
 
 
-def _keys(year: int) -> list[str]:
-    prefix = f"records/csv.gz/locationid={LOCATION}/year={year}/"
+def _keys() -> list[str]:
     keys, token = [], None
     while True:
-        params = {"list-type": "2", "prefix": prefix}
+        params = {"list-type": "2", "prefix": PREFIX}
         if token:
             params["continuation-token"] = token
-        r = requests.get(BUCKET, params=params, timeout=60)
+        r = requests.get(AIRNOW, params=params, timeout=60)
         r.raise_for_status()
         keys += re.findall(r"<Key>([^<]+)</Key>", r.text)
         m = re.search(r"<NextContinuationToken>([^<]+)</NextContinuationToken>", r.text)
         if not m:
-            return keys
+            return [k for k in keys if k.endswith(".csv") and "PM2.5" in k]
         token = m.group(1)
 
 
 def _get(key: str, tries: int = 6) -> bytes:
     for i in range(tries):
         try:
-            r = requests.get(f"{BUCKET}/{key}", timeout=60)
+            r = requests.get(f"{AIRNOW}/{key}", timeout=60)
             r.raise_for_status()
             return r.content
         except requests.RequestException:
@@ -84,32 +92,62 @@ def _get(key: str, tries: int = 6) -> bytes:
             time.sleep(2**i)
 
 
-def _save(df: pd.DataFrame, path: Path) -> None:
-    # Write then rename, so an interrupted run never leaves a partial file to reuse.
-    tmp = path.with_suffix(".tmp")
-    df.to_csv(tmp, index=False)
-    tmp.rename(path)
+def _read(raw: bytes, name: str) -> pd.DataFrame:
+    # Five header layouts across the years; the value is `Raw Conc.` where present
+    # (never the NowCast), else `Value` (Dec 2015 - Feb 2016 monthly files).
+    lines = raw.decode("ascii").replace("\r\n", "\n").strip("\n").split("\n")
+    header = next(csv.reader([lines[0]]))
+    rows = [
+        # Oct 2016's monthly file writes each row as a quoted Python list
+        [c.strip() for c in ln[2:-2].split(",")]
+        if ln.startswith('"[')
+        else next(csv.reader([ln]))
+        for ln in lines[1:]
+    ]
+    df = pd.DataFrame(rows, columns=header)
+    assert (df["Site"] == "New Delhi").all() and (df["Duration"] == "1 Hr").all()
+    x = pd.DataFrame(
+        {
+            # local time, 12-hour clock
+            "t": pd.to_datetime(df["Date (LT)"], format="%Y-%m-%d %I:%M %p"),
+            "value": pd.to_numeric(df["Raw Conc." if "Raw Conc." in df else "Value"]),
+            "qc": df["QC Name"],
+            "ytd": name.endswith("_YTD.csv"),
+        }
+    )
+    # On the US spring-forward Sunday (2015-03-08 to 2018-03-11) a file has no 02:00
+    # and two 03:00 rows: put the first back at 02:00.
+    dup = x["t"].duplicated(keep="last")
+    prev = x["t"] - pd.Timedelta(hours=1)
+    fix = dup & ~prev.isin(set(x["t"]))
+    assert dup.sum() == fix.sum() <= 1, name
+    x.loc[fix, "t"] = prev[fix]
+    return x
 
 
 def pm25_hourly(out: Path):
-    # The window is in the name, so a download for another span is never reused.
-    path = out / f"openaq_{LOCATION}_hourly_{START}_to_{END}.csv"
-    if not path.exists():
-        # A day's file runs 01:00 to the next 00:00, so END's file holds its last hour.
-        # Cutting at END keeps the download, and its SHA-256, fixed after END.
-        first, last = START.replace("-", ""), END.replace("-", "")
-        keys = [
-            k
-            for y in range(int(START[:4]), int(END[:4]) + 1)
-            for k in _keys(y)
-            if (m := re.search(r"-(\d{8})\.csv\.gz$", k))
-            and first <= m.group(1) <= last
-        ]
-        with ThreadPoolExecutor(6) as ex:
-            parts = list(ex.map(_get, keys))
-        frames = [pd.read_csv(io.BytesIO(gzip.decompress(b))) for b in parts]
-        _save(pd.concat(frames, ignore_index=True), path)
-    return pd.read_csv(path), path
+    # One folder per year, but some files sit a folder early under the next year's
+    # name (`2017/NewDelhi_PM2.5_2018_12_MTD.csv` holds December 2017), and the
+    # correctly named December files stop a day short. Everything is fetched and
+    # deduplicated by stamp, so neither matters.
+    manifest = out / MANIFEST
+    if manifest.exists():
+        pinned = dict(ln.split("  ")[::-1] for ln in manifest.read_text().splitlines())
+        keys = [PREFIX + k[len("airnow/") :] for k in pinned]
+    else:
+        keys = _keys()
+    paths = [out / "airnow" / k[len(PREFIX) :] for k in keys]
+    todo = [(k, p) for k, p in zip(keys, paths) if not p.exists()]
+    with ThreadPoolExecutor(6) as ex:
+        for (k, p), b in zip(todo, ex.map(_get, [k for k, _ in todo])):
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.with_suffix(".tmp").write_bytes(b)
+            p.with_suffix(".tmp").rename(p)
+    if manifest.exists():
+        bad = [k for k, p in zip(pinned, paths) if _sha(p) != pinned[k]]
+        assert not bad, f"{len(bad)} files differ from {MANIFEST}, e.g. {bad[0]}"
+    h = pd.concat([_read(p.read_bytes(), p.name) for p in paths], ignore_index=True)
+    return h, paths
 
 
 def era5_hourly(out: Path):
@@ -136,28 +174,25 @@ def era5_hourly(out: Path):
         r.raise_for_status()
         j = r.json()
         print(f"ERA5 grid point {j['latitude']}, {j['longitude']}")
-        _save(pd.DataFrame(j["hourly"]), path)
+        tmp = path.with_suffix(".tmp")
+        pd.DataFrame(j["hourly"]).to_csv(tmp, index=False)
+        tmp.rename(path)
     return pd.read_csv(path), path
 
 
 def pm25_daily(h: pd.DataFrame) -> pd.DataFrame:
-    h = h[h["parameter"] == "pm25"].copy()
-    assert h["sensors_id"].nunique() == 1, "expected one PM2.5 sensor at the location"
-    assert (h["datetime"].str[19:] == "+05:30").all(), (
-        "expected India Standard Time stamps"
-    )
-    # OpenAQ stamps each hour at its end (a local day's file runs 01:00 to 00:00),
-    # so an hour is counted on the day it started.
-    t = pd.to_datetime(h["datetime"].str[:19]) - pd.Timedelta(hours=1)
-    h["date"] = t.dt.normalize()
-    h["hour"] = t.dt.hour
-    # The feed codes a missing hour as -999 (or a small negative number) and an
-    # instrument fault as 1985, often for several hours in a row.
-    h = h[(h["value"] > 0) & (h["value"] != FAULT)]
-    # July-November 2023 also carries half-hour stamps. Each is shifted back an hour
-    # too and averaged with the hour it falls in; for stamps from 00:30 to 00:59 that
-    # moves the reading to the previous day.
-    h = h.groupby(["date", "hour"], as_index=False)["value"].mean()
+    # Only hours AirNow marks Valid count. -999 (missing; it also appears marked Valid
+    # in the 2015-16 monthly files), small negatives, zeros and the 1985 fault code
+    # are dropped.
+    h = h[(h["qc"] == "Valid") & (h["value"] > 0) & (h["value"] != FAULT)]
+    # A stamp appears in a year file and a month file, with the same value.
+    h = h.sort_values(["t", "ytd"], ascending=[True, False], kind="stable")
+    h = h.drop_duplicates("t")
+    # The stamps coincide with OpenAQ's, which mark the hour's end (a year's file runs
+    # 01:00 to the next 00:00 through 2019, 02:00 to 01:00 after), so an hour is
+    # counted on the day it started.
+    t = h["t"] - pd.Timedelta(hours=1)
+    h = h.assign(date=t.dt.normalize())
     d = h.groupby("date")["value"].agg(pm25="mean", pm25_max="max", n_hours="size")
     d.loc[d["n_hours"] < MIN_HOURS, ["pm25", "pm25_max"]] = np.nan
     days = pd.date_range(START, END, freq="D")
@@ -221,12 +256,21 @@ if __name__ == "__main__":
         sys.exit("usage: fetch_delhi.py <download directory outside the repo>")
     out = Path(sys.argv[1]).expanduser()
     out.mkdir(parents=True, exist_ok=True)
-    pm_h, pm_path = pm25_hourly(out)
+    pm_h, pm_paths = pm25_hourly(out)
     wx_h, wx_path = era5_hourly(out)
     pm, wx = pm25_daily(pm_h), era5_daily(wx_h)
     _write(pm, "delhi_pm25_daily.csv.gz")
     _write(wx, "delhi_era5_daily.csv.gz")
-    for f in (pm_path, wx_path):
-        print(f"{f.name}  sha256 {_sha(f)}")
-    yr = pm.assign(y=pm["date"].dt.year).groupby("y")["pm25"]
+    # The AirNow files are the raw responses, so their hashes change only if the State
+    # Department revises a file (the current year's files grow until it ends).
+    manifest = "".join(f"{_sha(p)}  {p.relative_to(out)}\n" for p in pm_paths)
+    (out / MANIFEST).write_text(manifest)
+    print(
+        f"{len(pm_paths)} AirNow files, {MANIFEST} sha256 "
+        f"{hashlib.sha256(manifest.encode()).hexdigest()}"
+    )
+    print(f"{wx_path.name}  sha256 {_sha(wx_path)}")
+    # Days with a mean per November-October year, labelled by the year it ends in.
+    year = (pm["date"] + pd.DateOffset(months=2)).dt.year
+    yr = pm.groupby(year.rename("y"))["pm25"]
     print(pd.DataFrame({"days": yr.count(), "mean": yr.mean().round(0)}))
