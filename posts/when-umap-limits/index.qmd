@@ -277,6 +277,9 @@ gaps = [
 gap_str = num(np.mean(gaps), 3)
 tw10 = [DEV_TW[n, s, 10] for n in SETTINGS for s in SEEDS]
 tw10_str = span(tw10, 3)
+# The prose says the winner moves with the seed alone and with k alone.
+assert all(len({WINNERS[s, k] for s in SEEDS}) > 1 for k in KS), "a k column has one winner"
+assert any(len({WINNERS[s, k] for k in KS}) > 1 for s in SEEDS), "no seed row changes with k"
 ```
 
 `{python} n_winners_str` settings win somewhere in @tbl-winners. Changing only the seed changes the winner, and so does changing only $k$. The margins are thin as well: the best and worst setting differ by `{python} gap_str` on average. A dev set that names a different winner each time it is asked has not chosen anything.
@@ -327,6 +330,16 @@ n_negative_str = str(sum(r < 0 for r, _ in ARR.values()))
 n_flipped_str = str(sum(f for _, f in ARR.values()))
 far_str = f"{true_cd.max():.1f}"
 near_str = f"{true_cd.min():.1f}"
+# The fig-umap-grid caption states this flip for seed 0.
+assert ARR["(100, 0.1)", 0][1], "seed-0 n_neighbors=100 map no longer flips the far pair; revise the caption"
+
+# Spread over seeds within each setting, for the stability proxy.
+seed_spread = {n: [ARR[n, s][0] for s in SEEDS] for n in SETTINGS}
+all_settings_both_signs = all(min(v) < 0 < max(v) for v in seed_spread.values())
+assert all_settings_both_signs, "some setting's seeds agree in sign; revise the stability bullet"
+narrowest = min(seed_spread, key=lambda n: max(seed_spread[n]) - min(seed_spread[n]))
+narrowest_spread_str = span(seed_spread[narrowest])
+narrowest_name_str = setting_title(narrowest)
 for name in SETTINGS:
     print(f"{setting_title(name):30} rank correlation by seed: "
           + "  ".join(num(ARR[name, s][0]) for s in SEEDS))
@@ -355,24 +368,42 @@ for seed in SEEDS:
     if seed == 0:
         umap_map, dens_map = um, dm
 
+def density_among(query, ref, k=15):
+    # Local density of `query` points, with neighbours taken from all of `ref`.
+    d, _ = NearestNeighbors(n_neighbors=k + 1).fit(ref).kneighbors(query)
+    return 1.0 / d[:, -1] ** 2
+
+
+# Train/held-out split of the curve. Every density is measured against all
+# 1,000 points, in the data and on the map, so train and held-out scores
+# compare like with like.
 c_train, c_dev = train_test_split(curve, test_size=0.3, random_state=0)
-dev_truth = local_density(c_dev)
-pca_dev_rho = rho(dev_truth, local_density(PCA(2).fit(c_train).transform(c_dev)))
-dev_rhos = [
-    rho(dev_truth, local_density(umap.UMAP(random_state=s).fit(c_train).transform(c_dev)))
-    for s in SEEDS
-]
+c_all = np.vstack([c_train, c_dev])
+n_tr = len(c_train)
+truth_tr, truth_dev = density_among(c_train, c_all), density_among(c_dev, c_all)
+pca_c = PCA(2).fit(c_train)
+pca_all = np.vstack([pca_c.transform(c_train), pca_c.transform(c_dev)])
+pca_dev_rho = rho(truth_dev, density_among(pca_all[n_tr:], pca_all))
+tr_rhos, dev_rhos = [], []
+for s in SEEDS:
+    m = umap.UMAP(random_state=s).fit(c_train)
+    m_all = np.vstack([m.embedding_, m.transform(c_dev)])
+    tr_rhos.append(rho(truth_tr, density_among(m_all[:n_tr], m_all)))
+    dev_rhos.append(rho(truth_dev, density_among(m_all[n_tr:], m_all)))
+
 try:
     umap.UMAP(densmap=True, random_state=0).fit(c_train).transform(c_dev)
-    densmap_transform = "runs"
-except NotImplementedError as err:
-    densmap_transform = f"NotImplementedError: {err}"
+    densmap_transform_raises = False
+except NotImplementedError:
+    densmap_transform_raises = True
+assert densmap_transform_raises, "densMAP transform now runs; revise the prose"
 
 pca_rho_str, pca_dev_rho_str = num(pca_rho), num(pca_dev_rho)
-umap_rho_str, dens_rho_str, dev_rho_str = span(umap_rhos), span(dens_rhos), span(dev_rhos)
-print(f"all 1,000 points  PCA {pca_rho_str}  UMAP {umap_rho_str}  densMAP {dens_rho_str}")
-print(f"held-out 300      PCA {pca_dev_rho_str}  UMAP {dev_rho_str}")
-print(f"densMAP transform: {densmap_transform}")
+umap_rho_str, dens_rho_str = span(umap_rhos), span(dens_rhos)
+tr_rho_str, dev_rho_str = span(tr_rhos), span(dev_rhos)
+print(f"all 1,000 points    PCA {pca_rho_str}  UMAP {umap_rho_str}  densMAP {dens_rho_str}")
+print(f"split 700/300       UMAP train {tr_rho_str}  UMAP held-out {dev_rho_str}  PCA held-out {pca_dev_rho_str}")
+print(f"densMAP transform raises NotImplementedError: {densmap_transform_raises}")
 ```
 
 ```{python}
@@ -390,13 +421,13 @@ fig.tight_layout()
 
 On all 1,000 points, the correlation is `{python} pca_rho_str` for PCA and `{python} umap_rho_str` for UMAP over five seeds. UMAP draws the crowded third and the sparse two-thirds with roughly the same spacing between points. The 900 crowded points stretch into a long arm, and the 100 sparse points shrink into a short tail with gaps that are not in the data. A tight-looking island on a UMAP map is no evidence of a tight population.
 
-A held-out set does not catch this. Fit on 700 points and place the other 300 with `transform`: the held-out points correlate with their true density at `{python} dev_rho_str`, against `{python} pca_dev_rho_str` for PCA on the same points. They land where the training map's even spacing puts them, so they carry the erasure rather than expose it.
+A held-out set does not catch this. Fit on 700 points, place the other 300 with `transform`, and measure every density among all 1,000 points, in the data and on the map. The held-out points correlate with their true density at `{python} dev_rho_str`, against `{python} tr_rho_str` for the training points on the same maps and `{python} pca_dev_rho_str` for PCA on the held-out points. They land where the training map's even spacing puts them, so they carry the erasure rather than expose it.
 
 densMAP ([Narayan, Berger & Cho 2021](https://doi.org/10.1038/s41587-020-00801-7)) adds a term to the objective that preserves each point's local radius, and it restores the correlation to `{python} dens_rho_str`. It cannot place new points: in umap-learn 0.6.0, `transform` on a densMAP fit raises `NotImplementedError`.
 
 ## Proxies used in practice
 
-Practitioners who know UMAP has no held-out loss tune it on proxies instead: scores of the map that stand in for a loss. Three are common, and the clusters and the curve already test all three.
+Practitioners who know UMAP has no held-out loss tune it on proxies instead: scores of the map that stand in for a loss. Four are common, and the clusters and the curve already test all four.
 
 ```{python}
 #| label: proxies
@@ -421,16 +452,18 @@ input_sil_str = num(input_sil)
 sil_best_str = setting_title(max(sil_mean, key=sil_mean.get))
 sil_worst_str = setting_title(min(sil_mean, key=sil_mean.get))
 n_sil_above_str = str(sum(v > input_sil for v in SIL.values()))
+assert sil_mean["(100, 0.1)"] > sil_mean["(15, 0.1)"] > sil_mean["(15, 0.5)"], \
+    "silhouette no longer rises with n_neighbors and falls with min_dist; revise the bullet"
 for name in SETTINGS:
     print(f"{setting_title(name):30} kNN accuracy {span([KNN_ACC[name, s] for s in SEEDS])}"
           f"   silhouette {span([SIL[name, s] for s in SEEDS], 3)}")
 print(f"{'input space':30} kNN accuracy {input_knn_str}   silhouette {num(input_sil, 3)}")
 ```
 
-- **Held-out trustworthiness and continuity.** @tbl-winners is this proxy at work. Its winner depends on the seed and on its own $k$.
+- **Held-out trustworthiness.** @tbl-winners is this proxy at work. Its winner depends on the seed and on its own $k$.
 - **Downstream accuracy.** A 10-nearest-neighbour classifier trained on the training map labels the dev points with accuracy `{python} knn_str` under every setting and seed; the same classifier in the input space scores `{python} input_knn_str`. Clusters this well separated put every setting at the ceiling. The score reads only which island a point lands on, so it cannot see where the islands sit or how tightly they are packed.
-- **Silhouette.** On the dev points, the map's silhouette runs from `{python} sil_str`, against `{python} input_sil_str` in the input space, and `{python} n_sil_above_str` of the 20 maps score above the data they draw. It is highest at `{python} sil_best_str` and lowest at `{python} sil_worst_str`: it ranks how tightly the drawing packs each island, which `min_dist` sets by design. A proxy that rewards exaggerated separation selects for it.
-- **Stability over seeds.** It catches the arrangement, whose correlation with the data ranges from `{python} arr_rho_str` over seeds and settings. It passes the density error, because UMAP's density correlation stays within `{python} umap_rho_str` over five seeds. A map can be stably wrong.
+- **Silhouette.** On the dev points, the map's silhouette runs from `{python} sil_str`, against `{python} input_sil_str` in the input space, and `{python} n_sil_above_str` of the 20 maps score above the data they draw. It is highest at `{python} sil_best_str` and lowest at `{python} sil_worst_str`. Raising `n_neighbors` from 15 to 100 raises it, and raising `min_dist` from 0.1 to 0.5 lowers it. It ranks how compact and far apart the drawn islands are, which the settings choose, not how closely the map matches the data. A proxy that rewards exaggerated separation selects for it.
+- **Stability over seeds.** It catches the arrangement: within every setting, the five seeds give arrangement correlations of both signs, and the narrowest spread is `{python} narrowest_spread_str`, at `{python} narrowest_name_str`. It passes the density error, because UMAP's density correlation stays within `{python} umap_rho_str` over five seeds. A map can be stably wrong.
 
 Every proxy scores one property of the map, and a reader of the map may be reading another. None of them is a loss against a fixed target, which is what PCA's reconstruction error is.
 
