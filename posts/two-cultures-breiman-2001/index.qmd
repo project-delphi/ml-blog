@@ -376,7 +376,7 @@ assert n_days == 4018 and int(gap_runs.max()) == 36
 ```
 
 - **Source.** Hourly PM2.5 from the US Embassy monitor in New Delhi, from the archive AirNow-Tech keeps of the State Department's embassy feeds, averaged to 24-hour means; and ERA5 reanalysis weather (Hersbach et al. 2020) at the monitor's coordinates, from the Open-Meteo archive. Both are open and need no key. `src/fetch_delhi.py` downloads them and writes the two daily files. Access date, cleaning rules and checksums are in [`data/README.md`](https://github.com/project-delphi/ml-blog/tree/main/posts/two-cultures-breiman-2001/data), section 8.
-- **A correction.** The first version of this part read the same monitor through OpenAQ's archive. That copy holds the NowCast, a smoothed index, instead of the hourly reading from November 2016 to mid-March 2017, and drops, repeats or shifts hours in three later stretches. AirNow-Tech's copy gives a daily mean on 586 more days of the ten years the two share, and starts a year earlier. Every Delhi number in this part comes from it, and the first version's finding that the forest beats the 1970s route did not survive the change (@sec-delhi-result).
+- **A correction.** The first version of this part read the same monitor through OpenAQ's archive. That copy holds the NowCast, a smoothed index, instead of the hourly reading from November 2016 to mid-March 2017, and drops, repeats or shifts hours in three later stretches. Over the ten years the two share, AirNow-Tech's copy gives a daily mean on 586 days that OpenAQ's lacks, and it starts a year earlier. Every Delhi number in this part comes from it, and the first version's finding that the forest beats the 1970s route did not survive the change (@sec-delhi-result).
 - **Span.** `{python} f"{n_days:,}"` days, 1 November 2015 to 31 October 2026, eleven years that each run November to October and so hold one winter. A day has a mean when at least 18 of its hours are valid: `{python} f"{n_pm:,}"` days (`{python} f"{n_pm / n_days:.0%}"`). The longest gap is `{python} int(gap_runs.max())` days, in February–March 2019.
 - **Why not twenty years.** The embassy monitor's first valid hour is 24 February 2015. The government's continuous stations in the city start a few months later in the public archives, with 2019–2024 filed under other station names. A twenty-year series exists only as model output (CAMS and MERRA-2 reanalyses), which needs a registered account, and would test the reanalysis, not the city's air.
 - **Variables.** The target is the next day's 24-hour mean PM2.5, in µg/m³. The eight weather readings are daily maximum and minimum temperature, mean humidity, mean surface pressure, total rainfall, mean wind speed, and the mean east–west and north–south wind components. ERA5 also gives boundary-layer height, the closest match to Los Angeles's inversion base height, but it is missing from the archive for January–June 2024, so the main design leaves it out.
@@ -445,7 +445,9 @@ d_test = {k: by_d.get_group(k)["rmse"].to_numpy() for k in dnames}
 d_cv = {k: float(by_d.get_group(k).query("seed == 0")["oof_rmse"].iloc[0]) for k in dnames}
 d_mean = {k: float(v.mean()) for k, v in d_test.items()}
 lin_d, flex_pick_d = min(linear_d, key=d_cv.get), min(flex_d, key=d_cv.get)
-assert (lin_d, flex_pick_d) == ("spline_ridge_log", "stack") and lin_d == E.cv_picks(z)[0]
+assert (lin_d, flex_pick_d) == ("spline_ridge_log", "hgb_log") and E.cv_picks(z) == (lin_d, flex_pick_d)
+# The stack is CV's second choice overall, behind boosting on log PM2.5.
+assert sorted(dnames, key=d_cv.get)[:2] == ["hgb_log", "stack"]
 
 
 def dgap(a, b):
@@ -469,7 +471,7 @@ for k, label in dnames.items():
         "False alarms": span(s["false_alarms"], "{:.0f}")})
 
 # Every tree model and the blend tie the careful linear model on every seed;
-# only the stack, CV's first choice, clears it, and not on every seed.
+# only the stack, CV's second choice, clears it, and not on every seed.
 assert all(ties(d_vs[k]) for k in [*E.TREES, "quantile_boost", "blend"])
 n_stack = int((d_vs["stack"]["hi"] < 0).sum())
 assert n_stack == 4
@@ -548,7 +550,7 @@ md(pd.DataFrame(rows_d))
 ```
 
 - **Against a careful linear model the flexible models tie.** Among the linear models, CV ranks splines with a ridge penalty on log PM2.5 first, and it scores `{python} f"{d_mean[lin_d]:.1f}"` on the test years. Every tree model and the equal blend land inside the noise of it on all five seeds. The best on test, extra trees (`{python} span(d_test['extra_trees'])`), is `{python} f"{pct_d['extra_trees']:.0f}"`% lower, with an interval that still crosses zero.
-- **The stack is the one exception, and it is small.** CV ranks the stack first of all models (`{python} f"{d_cv['stack']:.1f}"`). On test it scores `{python} span(d_test['stack'])` and is clear of the spline regression on `{python} n_stack` seeds of five, by `{python} f"{pct_d['stack']:.0f}"`%. Its weights mix the two cultures: `{python} stack_text`.
+- **The stack is the one exception, and it is small.** CV ranks the stack second of all models (`{python} f"{d_cv['stack']:.1f}"`), just behind boosting on log PM2.5 (`{python} f"{d_cv['hgb_log']:.1f}"`). Its validation forecasts use weights fitted on earlier years only, as every other model's do. On test it scores `{python} span(d_test['stack'])` and is clear of the spline regression on `{python} n_stack` seeds of five, by `{python} f"{pct_d['stack']:.0f}"`%. Its weights mix the two cultures: `{python} stack_text`.
 - **Against plain regression the gap is real, and still modest.** Extra trees is `{python} f"{pct_ols_d:.0f}"`% below OLS on all 30 columns, clear on every seed (`{python} f"{g_ols['lo'].min():+.1f}"` to `{python} f"{g_ols['hi'].max():+.1f}"` µg/m³). The spline regression on log PM2.5 closes more than half of that gap with no trees at all.
 - **The 1970s tie does not break.** The untuned forest scores `{python} span(d_test['forest'])` against `{python} f"{d_mean['linear_quad']:.1f}"` for the selected quadratic regression, and the interval on the difference crosses zero on all five seeds. The first version of this part, on OpenAQ's damaged copy, found the forest clear of it on every seed.
 - **Every model beats persistence**, on every seed. Persistence scores `{python} f"{d_mean['persistence']:.1f}"`.
@@ -673,7 +675,7 @@ assert n_tte == 6533
 ```
 
 - **Source.** UCI Machine Learning Repository dataset 492, Metro Interstate Traffic Volume (Hogue 2019): hourly westbound volume on I-94 at the Minnesota Department of Transportation's automatic traffic recorder 301, about midway between Minneapolis and St Paul, with hourly weather and a holiday label. Licence CC BY 4.0. `src/fetch_traffic.py` downloads it and checks its checksums; [`data/README.md`](https://github.com/project-delphi/ml-blog/tree/main/posts/two-cultures-breiman-2001/data) section 9 has them and the cleaning rules.
-- **Span.** 2 October 2012 to 30 September 2018. The counter stops from August 2014 to June 2015 and for days at a time elsewhere. From 9 October 2012, the first day with a week of history, `{python} f"{len(tdf):,}"` hours have a count.
+- **Span.** 2 October 2012 to 30 September 2018. The counter stops from August 2014 to June 2015 and for days at a time elsewhere. From 10 October 2012, the first day whose every hour has a count from a week before, `{python} f"{len(tdf):,}"` hours have a count.
 - **Variables.** The target is the number of vehicles in an hour. Inputs are the calendar (hour, weekday, month, holiday), the weather at that hour (temperature, rain, snow, cloud cover, a weather label), and counts already known at midnight.
 - **Who collected it and why.** The state's traffic recorders count vehicles for road planning and operations; the dataset's creator joined one recorder's counts with weather and holidays and published them for forecasting research.
 - **Cleaning.** The holiday label sits on each holiday's midnight row only and some years lack it, so it is spread to the whole day and joined with the US federal calendar. Duplicate rows, ten hours at 0 K and one hour of 9,831 mm of rain are fixed in `twocultures/traffic.py`, where each rule is visible.
@@ -684,7 +686,7 @@ assert n_tte == 6533
 ### Design {#sec-traffic-design}
 
 - **Forecast.** Issued at midnight, for each hour of the coming day. It may use the calendar, the weather observed at the target hour (a perfect weather forecast, the same for every model), and counts up to 23:00 the day before: the same hour one, two and seven days back, the seven-day mean for that hour, and yesterday's total.
-- **Split.** By time. Training runs from 9 October 2012, settings are chosen by walk-forward CV on the four quarters of 2017, each validated on a model trained on everything before it, and the test period is 1 January to 30 September 2018 (`{python} f"{n_tte:,}"` hours). The chosen model is refit on all `{python} f"{n_tpre:,}"` pre-test hours.
+- **Split.** By time. Training runs from 10 October 2012, settings are chosen by walk-forward CV on the four quarters of 2017, each validated on a model trained on everything before it, and the test period is 1 January to 30 September 2018 (`{python} f"{n_tte:,}"` hours). The chosen model is refit on all `{python} f"{n_tpre:,}"` pre-test hours.
 - **Linear models.** OLS on the raw inputs. A careful linear model: indicator columns for hour × working day, weekday, month, weather label and holiday, smooth curves for temperature and cloud cover, a ridge penalty, and a log or square-root target, all chosen by CV. And the careful model plus interactions, written down before any result was seen: hour × weather, hour × season, temperature × working day, and lag slopes that vary by hour and working day.
 - **Flexible models.** Random forest, extra trees, gradient boosting on volume and on log volume, and an equal blend of the two trees CV ranks first.
 - **Scores.** RMSE in vehicles per hour, RMSE on the busiest 10% of test hours, and F1 for congestion hours, the hours at or above the 80th percentile of pre-test volume (`{python} f"{cong:,.0f}"` vehicles), a threshold fixed before any model was scored.
@@ -752,10 +754,10 @@ g_bpp = tgap("blend", "cl_pp")
 assert all(x["pct_hi"] < 0 for x in g_bl + g_blp)
 assert all(x["pct_lo"] < 0 < x["pct_hi"] for x in g_bpp)
 assert all(x["pct_hi"] < 0 for m in ["rf", "et", "hgb"] for x in tgap(m, "cl"))
-# CV and test order the ladder alike, apart from extra trees and boosting.
+# CV and test order the ladder alike, apart from two neighbouring pairs.
 cv_order, test_order = sorted(tnames, key=tcv.get), sorted(tnames, key=tmean.get)
 swapped = [a for a, b in zip(cv_order, test_order) if a != b]
-assert sorted(swapped) == ["et", "hgb"], (cv_order, test_order)
+assert sorted(swapped) == ["cl_plus", "et", "hgb", "hgb_log"], (cv_order, test_order)
 o = tmean["ols"]
 closed = {m: (o - tmean[m]) / (o - tmean["blend"]) for m in ["cl", "cl_plus", "cl_pp"]}
 pct_t = {m: 100 * (1 - tmean[m] / tmean["cl"]) for m in TP}
@@ -768,13 +770,13 @@ for name in ["working day", "weekend", "holiday"]:
                    "share": float(np.sum((ty[k] - TP["cl"][0][k]) ** 2) / np.sum((ty - TP["cl"][0]) ** 2)),
                    **{m: float(np.mean([TR.rmse(ty[k], p[k]) for p in TP[m].values()]))
                       for m in ["cl", "cl_plus", "cl_pp", "blend"]}}
-assert dtype["holiday"]["blend"] < 0.6 * dtype["holiday"]["cl"]
+assert dtype["holiday"]["blend"] < 0.7 * dtype["holiday"]["cl"]
 md(pd.DataFrame(rows_t))
 ```
 
 - **Here the trees win clearly.** The blend of extra trees and gradient boosting, CV's first choice, scores `{python} tspan('blend', 'rmse')` against `{python} f"{tmean['cl']:.0f}"` for the careful linear model, `{python} f"{pct_t['blend']:.0f}"`% lower, and the interval is clear of zero on every seed. Against the careful model plus interactions, CV's first linear choice at `{python} f"{tmean['cl_plus']:.0f}"`, it is `{python} f"{-np.mean([x['pct'] for x in g_blp]):.0f}"`% lower and clear again.
 - **The gap is widest at the busiest hours.** On the top 10% of test hours, the blend's RMSE is `{python} f"{top_blend:.0f}"` against `{python} f"{np.mean([s['rmse_top10'] for s in tsc['cl_plus']]):.0f}"` for the careful model plus interactions, `{python} f"{100 * (1 - top_blend / np.mean([s['rmse_top10'] for s in tsc['cl_plus']])):.0f}"`% lower. Those are the hours a forecast exists for.
-- **CV ranks the models as the test does.** The order by CV RMSE and the order on test agree from the blend down to persistence, with one swap between extra trees and boosting.
+- **CV ranks the models as the test does.** The order by CV RMSE and the order on test agree from the blend down to persistence, apart from two neighbouring pairs that trade places: extra trees and boosting, and boosting on log volume and the careful model plus interactions.
 - **Most of the distance from naive regression is covered by care.** OLS on the raw inputs scores `{python} f"{tmean['ols']:.0f}"`. Of the distance from it down to the blend, the careful linear model covers `{python} f"{closed['cl']:.0%}"` and the careful model plus interactions `{python} f"{closed['cl_plus']:.0%}"`. The trees find the rest on their own.
 
 ```{python}
@@ -821,6 +823,7 @@ The two records give opposite answers to the same question, and the difference i
 #| label: tbl-gain
 #| tbl-cap: "The linear and flexible models CV ranks first on each record, against OLS on the same inputs. Test RMSE in µg/m³ for Delhi and vehicles per hour for I-94; ranges over five seeds where the seeds differ. The gain is the percentage drop in mean test RMSE; the interval is for the flexible model's test RMSE minus the careful linear model's, from seven-day blocks, lowest lower end to highest upper end over the seeds."
 g_pick_d = dgap(flex_pick_d, lin_d)
+assert ties(g_pick_d)
 top_d = {k: T_d.loc[T_d["model"] == k, "top10_rmse"].mean() for k in [lin_d, flex_pick_d]}
 gain_rows = [
     {"": "Linear, all inputs (OLS)", "New Delhi PM2.5": f"{d_mean['ols']:.1f}",
@@ -848,18 +851,19 @@ md(pd.DataFrame(gain_rows))
 ```
 
 - **Against naive regression, flexible models win on both records**: `{python} f"{100 * (1 - d_mean[flex_pick_d] / d_mean['ols']):.0f}"`% on Delhi, `{python} f"{100 * (1 - tmean[flex_pick_t] / tmean['ols']):.0f}"`% on I-94. That comparison flatters them, since nobody who knows the data fits OLS on raw inputs.
-- **Against a careful linear model, the answer splits.** On Delhi the gain is `{python} f"{100 * (1 - d_mean[flex_pick_d] / d_mean[lin_d]):.0f}"`%, and on the worst days there is none. On I-94 it is `{python} f"{100 * (1 - tmean[flex_pick_t] / tmean[lin_t]):.0f}"`%, and `{python} f"{100 * (1 - top_blend / np.mean([s['rmse_top10'] for s in tsc[lin_t]])):.0f}"`% at the busiest hours.
+- **Against a careful linear model, the answer splits.** On Delhi the gain is `{python} f"{100 * (1 - d_mean[flex_pick_d] / d_mean[lin_d]):.0f}"`%, inside the noise on every seed, and `{python} f"{100 * (1 - top_d[flex_pick_d] / top_d[lin_d]):.0f}"`% on the worst days. On I-94 it is `{python} f"{100 * (1 - tmean[flex_pick_t] / tmean[lin_t]):.0f}"`%, and `{python} f"{100 * (1 - top_blend / np.mean([s['rmse_top10'] for s in tsc[lin_t]])):.0f}"`% at the busiest hours.
 - **What separates the two is interaction.** Tomorrow's PM2.5 is close to an additive function of today's level and the weather on a log scale, so a careful linear model leaves little for a tree to find. Tomorrow's traffic at 8 a.m. depends on the hour, the kind of day and yesterday's count jointly, and a careful linear model misses what nobody wrote into it.
 
 ```{python}
 #| label: fig-gain
-#| fig-cap: "Test RMSE against the years of training data before the test period, with each model's settings fixed at its full-data choice; bands are the range over five seeds. Left: New Delhi PM2.5, trained on the last 1 to 8 November–October years before November 2023. Right: I-94 traffic, trained on the last 6, 12, 24 and 36 months before 2018 and on every earlier hour (3.9 years of counts, after the 2014–15 stop)."
+#| fig-cap: "Test RMSE against the years of training data before the test period (for I-94, years of hours with a count), with each model's settings fixed at its full-data choice; bands are the range over five seeds. Left: New Delhi PM2.5, trained on the last 1 to 8 November–October years before November 2023. Right: I-94 traffic, trained on the last 6, 12, 24 and 36 calendar months before 2018 and on every earlier hour; the 2014–15 stop leaves the last two windows with fewer hours than their span."
 #| fig-alt: "Two line charts. For Delhi, plain linear regression flattens near 36 after two years, while the spline regression on log PM2.5 and boosting fall together to about 33 to 34. For I-94, the two careful linear models stop improving after one year, near 390 to 410 vehicles per hour, while the tree blend keeps falling with every added year, to about 353."
 L = E.learning_curve()
 L["err"] = (L["pred"] - yd.loc[L["day"]].to_numpy()) ** 2
 lc_d = L.groupby(["years", "model", "seed"])["err"].mean().pow(0.5).rename("rmse").reset_index()
 lc_t = TR.learning_curve()
-lc_t["years"] = np.where(lc_t["months"] == -1, lc_t["n_train"] / (24 * 365.25), lc_t["months"] / 12)
+# Years of hours with a count, so the 2014-15 stop does not stretch the axis.
+lc_t["years"] = lc_t["n_train"] / (24 * 365.25)
 fig, (a1, a2) = plt.subplots(1, 2, figsize=(7.5, 3.0))
 panels = [
     (a1, lc_d, [("ols", "linear, all columns", MUTED, "--"),
@@ -891,6 +895,8 @@ assert (lcd.loc[2:, ["forest", "hgb_log"]].min(axis=1) < lcd.loc[2:, ["ols", "li
 assert lct.loc[6, "cl"] < lct.loc[6, ["et", "hgb", "blend"]].min()
 assert (lct.loc[[24, 36, -1], "blend"] < lct.loc[[24, 36, -1], ["cl", "cl_plus"]].min(axis=1)).all()
 lin_flat_t = lct.loc[[12, 24, 36, -1], "cl_plus"]
+# The blend's lead over the careful model plus interactions is still widening at the end.
+assert lct.loc[-1, "cl_plus"] - lct.loc[-1, "blend"] > lct.loc[36, "cl_plus"] - lct.loc[36, "blend"]
 ```
 
 - **With little data, linear wins.** On one year of Delhi data, OLS scores `{python} f"{lcd.loc[1, 'ols']:.1f}"` and boosting `{python} f"{lcd.loc[1, 'hgb_log']:.1f}"`; on six months of I-94 the careful linear model scores `{python} f"{lct.loc[6, 'cl']:.0f}"` and the blend `{python} f"{lct.loc[6, 'blend']:.0f}"`. A tree needs examples of a situation before it can treat it differently.
@@ -1127,7 +1133,7 @@ None of these families is run here. Extra trees and quantile boosting, the two t
 | Experiment | Paper's data | Data used here | Paper's result | Our result | Notes |
 |---|---|---|---|---|---|
 | Ozone forecast (§3.1) | 7 years, 450+ variables, LA Basin | 1976 LA record (`mlbench::Ozone`), 30 candidate predictors | selected regression; false-alarm rate too high | forest RMSE `{python} f"{rf_lo:.2f}"`–`{python} f"{rf_hi:.2f}"` vs selected regression `{python} f"{rmse['quad']:.2f}"`; all methods issued false alarms; lasso, boosting, extra trees, quantile boosting and Chronos-2 within noise of the forest | stand-in; original data not public |
-| Next-day air-quality forecast, long record (§3.1 design) | 7 years, 450+ variables, LA Basin | 11 years of New Delhi PM2.5 (US Embassy) and ERA5 weather, 30 candidate predictors | selected regression; false-alarm rate too high | forest RMSE `{python} span(d_test['forest'])` vs selected regression `{python} f"{d_mean['linear_quad']:.1f}"` µg/m³, a tie on all five seeds; every tree model ties the spline regression on log PM2.5 (`{python} f"{d_mean[lin_d]:.1f}"`); the stack, CV's first choice, is `{python} f"{pct_d['stack']:.0f}"`% better on `{python} n_stack` seeds of five; the models miss most Severe days at 250 | different city and pollutant; same design |
+| Next-day air-quality forecast, long record (§3.1 design) | 7 years, 450+ variables, LA Basin | 11 years of New Delhi PM2.5 (US Embassy) and ERA5 weather, 30 candidate predictors | selected regression; false-alarm rate too high | forest RMSE `{python} span(d_test['forest'])` vs selected regression `{python} f"{d_mean['linear_quad']:.1f}"` µg/m³, a tie on all five seeds; every tree model ties the spline regression on log PM2.5 (`{python} f"{d_mean[lin_d]:.1f}"`); the stack is `{python} f"{pct_d['stack']:.0f}"`% better on `{python} n_stack` seeds of five; the models miss most Severe days at 250 | different city and pollutant; same design |
 | Hourly traffic forecast (not in the paper) | — | I-94 westbound, 2012–2018, calendar, weather and lagged counts | — | tree blend `{python} f"{100 * (1 - tmean[flex_pick_t] / tmean[lin_t]):.0f}"`% below the careful linear model with interactions, clear on all five seeds, `{python} f"{100 * (1 - top_blend / np.mean([s['rmse_top10'] for s in tsc[lin_t]])):.0f}"`% at the busiest hours; a linear model written after the test ties it | added as a record whose inputs interact |
 | Chlorine (§3.2) | 30,000 mass spectra | none | tree on 1,500 questions, 95% accuracy | not attempted | data not public; not simulated |
 | Goodness of fit (§5.2) | 7-D simulation, setup not given | 7 real meteorological columns, simulated response | tests did not reject until nonlinearity extreme | product term: tests reject before the forest gains; sine term: tests miss what the forest gains | outcome depends on the shape of the nonlinearity |

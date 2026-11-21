@@ -29,7 +29,7 @@ same flattering weather), and target values up to 23:00 on D-1. The lags are the
 same hour 1, 2 and 7 days back, the 7-day same-hour mean, and D-1's daily total.
 No same-day volume enters any feature.
 
-Splits by time: train from 9 Oct 2012 (the first week has no 7-day lag), four
+Splits by time: train from 10 Oct 2012 (the source starts at 09:00 on 2 Oct, so earlier hours lack a 7-day lag), four
 quarterly walk-forward validation folds in 2017 (each trained on everything before
 it), test 1 Jan to 30 Sep 2018, refit once on all pre-test hours. Every setting is
 chosen on the pooled validation RMSE at seed 0 and on nothing else.
@@ -64,9 +64,9 @@ from sklearn.preprocessing import OneHotEncoder, SplineTransformer, StandardScal
 from . import cache, modern
 
 RAW = Path("data/raw/metro_traffic.csv.gz")
-CACHE_TAG, LC_TAG, PROBE_TAG = "traffic_v1", "traffic_lc_v1", "traffic_probe_v1"
+CACHE_TAG, LC_TAG, PROBE_TAG = "traffic_v2", "traffic_lc_v2", "traffic_probe_v2"
 SEEDS = tuple(modern.SEEDS)
-START = "2012-10-09"
+START = "2012-10-10"
 FOLDS = (
     ("2017-01-01", "2017-04-01"),
     ("2017-04-01", "2017-07-01"),
@@ -134,7 +134,10 @@ def _lags(grid: pd.Series) -> pd.DataFrame:
     out["lag48"] = grid.shift(48)
     out["lag168"] = grid.shift(168)
     out["sh7"] = pd.concat([grid.shift(24 * k) for k in range(1, 8)], axis=1).mean(1)
-    day = grid.groupby(grid.index.normalize()).sum(min_count=18)
+    # A day with 18-23 counted hours is scaled up to 24, so a gap does not read as
+    # light traffic; fewer than 18 hours is missing.
+    g = grid.groupby(grid.index.normalize())
+    day = g.sum(min_count=18) * 24 / g.count()
     out["ytot"] = day.shift(1, freq="D").reindex(grid.index.normalize()).to_numpy()
     return out
 

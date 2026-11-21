@@ -448,7 +448,8 @@ the repo and writes the daily files here. Access date **2026-11-21**. One row pe
     2023 to February 2024 sits a whole hour early, 100% matching at one hour's offset).
   - 111 hours it reports are hours AirNow marks only `Invalid`.
 
-  On the 3,652 days the two versions share, AirNow gives 586 more days a daily mean
+  On the 3,652 days the two versions share, AirNow gives a daily mean on 586 days
+  OpenAQ's copy lacks, and OpenAQ on 3 that AirNow marks invalid, a net gain of 583
   (OpenAQ had 745 days without one), and on the 2,904 days both have a mean, 168
   differ by more than 5 µg/m³ (at most 45.8).
 
@@ -546,5 +547,5 @@ the repo and writes the daily files here. Access date **2026-11-21**. One row pe
 **Design used by the post.** A midnight forecast for each hour of the next day. Inputs:
 calendar, the weather observed at the target hour (perfect prognosis), and volume up to
 23:00 the day before (same hour 1, 2 and 7 days back, the 7-day same-hour mean, and the
-previous day's total). Train runs from 2012-10-09, validation is four quarterly
+previous day's total). Train runs from 2012-10-10, the first day whose every hour has a count from seven days before, validation is four quarterly
 walk-forward folds in 2017, and test is 2018-01-01 to 2018-09-30 (6,533 hours).

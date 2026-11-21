@@ -137,7 +137,10 @@ def pm25_hourly(out: Path):
     else:
         keys = _keys()
     paths = [out / "airnow" / k[len(PREFIX) :] for k in keys]
-    todo = [(k, p) for k, p in zip(keys, paths) if not p.exists()]
+    # Without a manifest every file is fetched again: the current year's YTD and
+    # MTD files keep growing, so a copy on disk may be stale.
+    fresh = not manifest.exists()
+    todo = [(k, p) for k, p in zip(keys, paths) if fresh or not p.exists()]
     with ThreadPoolExecutor(6) as ex:
         for (k, p), b in zip(todo, ex.map(_get, [k for k, _ in todo])):
             p.parent.mkdir(parents=True, exist_ok=True)

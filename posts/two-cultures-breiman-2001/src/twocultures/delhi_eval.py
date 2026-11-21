@@ -405,9 +405,11 @@ def pred(res, model, seed, split):
 def _combine(res, y, folds_dev_days):
     """The equal-weight blend of `BLEND` and the NNLS stack of `STACK`, per seed.
 
-    Stack weights for test days are fitted on every out-of-fold day; its own dev
-    rows use weights fitted on the other validation blocks, so its CV score is
-    out of fold too. Weights are non-negative with no intercept.
+    Stack weights for test days are fitted on every out-of-fold day. Its own dev
+    rows are walk-forward like every other model's: a validation block is
+    forecast with weights fitted on the earlier blocks only, and the first block,
+    which has none before it, with equal weights. Weights are non-negative with
+    no intercept.
     """
     out = []
     for s in sorted(set(res.loc[res["split"] == "dev", "seed"])):
@@ -423,9 +425,14 @@ def _combine(res, y, folds_dev_days):
         out.append(_rows("blend", s, "test", td, bl_t, {"params": " + ".join(BLEND)}))
         w, _ = nnls(Dm, yd)
         sd = np.empty(len(dd))
-        for blk in folds_dev_days:
+        for k, blk in enumerate(folds_dev_days):
             m = np.isin(dd, blk)
-            wk, _ = nnls(Dm[~m], yd[~m])
+            past = np.isin(dd, np.concatenate(folds_dev_days[:k])) if k else None
+            wk = (
+                nnls(Dm[past], yd[past])[0]
+                if k
+                else np.full(len(STACK), 1 / len(STACK))
+            )
             sd[m] = Dm[m] @ wk
         lab = ", ".join(f"{n}={v:.2f}" for n, v in zip(STACK, w) if v > 0.005)
         out.append(_rows("stack", s, "dev", dd, sd, {"params": lab}))
@@ -446,7 +453,7 @@ def _run_zoo(design="base"):
 
 def zoo() -> pd.DataFrame:
     """Every model on the 30-column design: dev (OOF) and test rows, five seeds."""
-    return cache.frame("delhi_zoo_v1", _run_zoo)
+    return cache.frame("delhi_zoo_v2", _run_zoo)
 
 
 def extras() -> pd.DataFrame:
@@ -698,18 +705,22 @@ def rolling() -> pd.DataFrame:
 
 
 def _run_designs():
+    # Test rows only: they carry each model's CV score, which is all the post reads.
     out = []
     for name in DESIGNS:
-        if name == "base":
-            r = zoo()
-            r = r[r["model"].isin(list(MODELS) + ["persistence"])]
-        else:
+        if name != "base":
             df = build(**DESIGNS[name])
             r = evaluate(df, *splits(df), list(MODELS), oof_seeds=())
-        out.append(r.assign(design=name))
+            out.append(r[r["split"] == "test"].assign(design=name))
     return pd.concat(out, ignore_index=True).fillna({"params": "", "settings": ""})
 
 
 def designs() -> pd.DataFrame:
-    """Test predictions on the four 1-day designs (`DESIGNS`), settings by walk-forward CV."""
-    return cache.frame("delhi_designs_v1", _run_designs)
+    """Test predictions on the four 1-day designs (`DESIGNS`), settings by walk-forward CV.
+
+    The base design is `zoo()`'s test rows; the other three are cached here.
+    """
+    z = zoo()
+    base = z[(z["split"] == "test") & z["model"].isin(list(MODELS) + ["persistence"])]
+    rest = cache.frame("delhi_designs_v2", _run_designs)
+    return pd.concat([base.assign(design="base"), rest], ignore_index=True)
