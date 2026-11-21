@@ -339,9 +339,12 @@ beside it as `…/<slug>/slides.html` and linked from the post's opening.
 obvious:
 
 - **The home listing takes only post entry files**: the root `index.qmd` lists
-  `posts/*/index.qmd` and `posts/*/index.ipynb`, not the whole `posts` folder. Listing
+  `/posts/*/index.qmd` and `/posts/*/index.ipynb`, not the whole `posts` folder. Listing
   the folder would put a deck, or any other page in a post's folder, on the home page as
-  its own post, in the feed and in the category facets.
+  its own post, in the feed and in the category facets. Keep the leading `/`: Quarto
+  matches an unanchored listing glob at any depth, so `posts/*/index.qmd` also listed
+  every post of a git worktree checked out inside the repo. `_quarto.yml` also excludes
+  `wt-*/` from the render for the same reason.
 - **`posts/_metadata.yml` reaches the deck.** Its `toc: true` inserts a contents slide,
   so a deck sets `toc: false`. Its kit.js include is wanted. A deck also sets
   `search: false` so the post stays the search hit.
