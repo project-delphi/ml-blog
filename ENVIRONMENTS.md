@@ -147,6 +147,88 @@ Re-render both posts when you bump this venv. Their widgets load `model.js` and
 `node posts/<slug>/src/check_model.js` after touching `model.js`, since the prose
 quotes its numbers.
 
+## The Two Cultures posts share one venv, one data folder and one module
+
+The five parts of the Breiman series (`two-cultures-breiman-2001`, `-rashomon`,
+`-occam-and-bellman`, `-black-box-information`, `-pushback-and-causality`) pin the
+kernel **`two-cultures-blog`** over `.venv-two-cultures`. Every data set lives in Part 1's
+`data/raw/` (provenance in its `data/README.md`), and every experiment lives in Part 1's
+`src/twocultures/` package, which each post imports from `../two-cultures-breiman-2001/src`.
+
+```bash
+uv venv .venv-two-cultures --python 3.12
+uv pip install --python .venv-two-cultures/bin/python \
+  numpy pandas scipy scikit-learn statsmodels matplotlib tabulate pyarrow \
+  ipykernel jupyter nbclient nbformat pyyaml
+.venv-two-cultures/bin/python -m ipykernel install --user --name two-cultures-blog
+```
+
+Four things are not obvious:
+
+- **Expensive results are cached in each post's `cache/`** (parquet or JSON, committed), by
+  `twocultures.cache`. A render reads a cached file whenever it exists, so changing an
+  experiment means bumping its version tag in the post (`table2_small_v1` → `_v2`) or
+  deleting the file. Part 3's `src/warm_cache.py` fills its slowest caches ahead of a
+  render (Table 2, the SVMs and the credit models take about ten minutes).
+- **Quarto hashes `index.qmd` alone**, so an edit to `src/twocultures/` re-executes nothing.
+  Re-render every post that imports the changed function, or a stale cache keeps serving.
+- **Widget data are exported from the caches** by each post's `src/export_widget_data.py`,
+  run from the post directory before the render that copies them.
+- **Part 5's reproduction table reads what Parts 1–4 last wrote.** Each of those posts
+  ends with a hidden cell that writes `cache/status.json` (`twocultures.status`), and
+  Part 5 loads the four files. Freeze never re-executes Part 5 because a sibling
+  changed, so after re-rendering any of Parts 1–4, re-render Part 5 as well.
+
+Re-render all five posts when you bump this venv.
+
+Part 1's Chronos-2 forecasts need torch, which stays out of this venv so that adding
+it is not a bump of all five. `src/chronos_forecast.py` runs in its own
+`.venv-two-cultures-chronos`, with no kernel, built from `src/requirements-chronos.txt`.
+It writes the committed `cache/chronos2_v1.parquet`, which the post only reads. The
+recipe is in the script's docstring.
+
+## The When UMAP Lies posts share one venv, one module and one results cache
+
+The four parts (`when-umap-lies`, `-dimension`, `-tuning`, `-gaps-density-holes`) pin
+the kernel **`umap-blog`** over `.venv-umap`. Every experiment lives in Part 1's
+`src/umaplab/` package (contract in `notes/lab-spec.md`), and every result in Part 1's
+`cache/`, which the four posts only read.
+
+```bash
+uv venv .venv-umap --python 3.12
+uv pip install --python .venv-umap/bin/python numpy scipy pandas pyarrow scikit-learn \
+  umap-learn openTSNE pacmap phate ripser matplotlib scanpy tabulate pytest \
+  ipykernel jupyter nbclient nbformat pyyaml
+SDK=$(xcrun --show-sdk-path)
+CXXFLAGS="-isysroot $SDK -I$SDK/usr/include/c++/v1" CFLAGS="-isysroot $SDK" \
+  uv pip install --python .venv-umap/bin/python trimap
+.venv-umap/bin/python -m ipykernel install --user --name umap-blog
+```
+
+Four things are not obvious:
+
+- **TriMap's `annoy` dependency has no arm64 wheel, and the source build is broken.**
+  It compiles only with the SDK flags above, and the result returns just the query
+  point from every neighbour search. `umaplab.embeddings` therefore hands TriMap exact
+  neighbours through its `knn_tuple` argument; a test asserts every method beats
+  chance on a Swiss roll, so a silently broken backend fails `pytest`.
+- **The experiments run outside the render.** `src/run_experiments.py --all` regenerates
+  every cache file (about four hours on 8 cores): the grids, the scaling study, the
+  elephant experiment, and last a `derived` step (`umaplab.derived.run_all`) that
+  writes the graph-fidelity, gap and seed-pair tables from the grids' results. Runs
+  resume by cell id; failed cells are retried on resume, and bumping
+  `benchmark.CODE_VERSION` invalidates all of them. Raw downloads (PBMC 3k, MNIST,
+  Fashion-MNIST) go to the git-ignored `data/`; the render never needs them, because
+  the PBMC reference space Part 1 scores against is cached as
+  `cache/elephant/pbmc_reference.npz`.
+- **Quarto hashes `index.qmd` alone**, so new results in `cache/` re-execute nothing.
+  Re-render every part that reads a changed experiment.
+- **Widget data are exported from the caches** by `src/export_widget_data.py`, run from
+  the repository root before the render that copies them. Parts 2–4 load Part 1's
+  `umapkit.js`, so render with the project render, which recopies it.
+
+Tests: `.venv-umap/bin/python -m pytest posts/when-umap-lies/tests -q`.
+
 ## The AlphaTensor posts run no Python and share one model
 
 `alphatensor-matmul-cube`, `alphatensor-seven-multiplications` and

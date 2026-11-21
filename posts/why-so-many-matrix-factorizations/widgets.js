@@ -458,12 +458,17 @@ const MFCW = (function () {
     function setEq(tex, display) {
       const wrap = display ? "\\[" + tex + "\\]" : "\\(" + tex + "\\)";
       const cls = display ? "math display" : "math inline";
+      // Until MathJax has started, window.MathJax is only the configuration object from
+      // theme/mathjax.html, with no typeset() (Quarto.typesetMath calls it regardless and
+      // throws). The site's maths font loads separately, so startup finishes after this
+      // widget's first draw. Leave that first equation to MathJax's own startup pass,
+      // which typesets the whole page; typeset later redraws here once it is ready,
+      // chained on startup.promise so quick slider moves never overlap.
+      const mj = window.MathJax;
+      const ready = mj && typeof mj.typesetPromise === "function";
+      if (ready) mj.typesetClear([eq]);
       eq.innerHTML = '<span class="' + cls + '">' + wrap + "</span>";
-      if (window.Quarto && window.Quarto.typesetMath) {
-        window.Quarto.typesetMath(eq);
-      } else if (window.MathJax && window.MathJax.typeset) {
-        window.MathJax.typeset([eq]);
-      }
+      if (ready) mj.startup.promise = mj.startup.promise.then(() => mj.typesetPromise([eq]));
     }
 
     function writeCopy(a, b, c, hv, k, rs) {
