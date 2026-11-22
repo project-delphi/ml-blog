@@ -1,12 +1,12 @@
 ---
-title: "Ten Datasets Against UMAP and t-SNE"
-subtitle: "Default maps win on MNIST-like digits and collapse on moons and shells, and neither method has a loss that could have said so in advance"
-description: "PCA minimizes a reconstruction error whose value is comparable across settings. UMAP and t-SNE minimize a graph objective they rebuild from the same settings being tuned, so no loss can choose a setting or flag a bad map. On ten canonical clustering datasets, default UMAP and t-SNE score anywhere from chance to near-perfect, and the ranking flips between datasets."
+title: "Neighbors Right, Picture Wrong"
+subtitle: "On a train/dev/test split, UMAP and t-SNE place held-out points beside their own kind; the arrangement of the groups they draw is arbitrary, and no held-out loss can catch it"
+description: "Five clustering datasets split into train, dev and test sets, with PCA, UMAP and t-SNE fitted on train only. UMAP and t-SNE keep more held-out neighbors and classify held-out points better than PCA, but PCA wins the class-centroid distance correlation on three of five sets — the metric an elephant-shaped fake also passes. Dev-set tuning buys at most 0.003 on test. Neither method has a reconstruction loss or any comparable held-out value, so no setting can be chosen and no failure can be flagged."
 author: "Ravi Kalia"
 date: "2026-11-22"
 categories: [Machine Learning, Statistics]
 image: "./cover.png"
-tags: [UMAP, t-SNE, PCA, clustering, dimensionality reduction, hyperparameters, adjusted Rand index]
+tags: [UMAP, t-SNE, PCA, clustering, train-dev-test, elephant, validation, hyperparameters]
 jupyter: umap-tsne-blog
 resources:
   - requirements.txt
@@ -19,33 +19,31 @@ execute:
   warning: false
 ---
 
-![Ten Datasets Against UMAP and t-SNE](./cover.png)
+![Neighbors Right, Picture Wrong](./cover.png)
 
-This post compares default UMAP and t-SNE with PCA on ten labeled clustering datasets, so the reader can see how much a reported grouping depends on the method that drew it.
+This post splits five clustering datasets into train, dev and test sets, fits PCA, UMAP and t-SNE on the training points only, and asks which parts of the resulting picture survive on points the fit never saw.
 
-A UMAP plot is easy to believe. Points gather into islands, the islands sit apart, and the eye supplies the conclusion: these are groups. The same picture appears when the grouping is an artifact of `n_neighbors=15`, because the picture carries no number that says which it is.
+A held-out point is the simplest check a map can face: a new cell or digit should land beside its own kind. UMAP and t-SNE pass it. The part of the picture people actually read — which groups sit near which, and how far apart — is the part the check cannot see.
 
-## The missing loss
+## The split
 
-PCA minimizes squared reconstruction error over all rank-$k$ subspaces. At a fixed $k$, the target is fixed by the data, so every implementation returns the same subspace.
+Five datasets, all offline and deterministic:
 
-- **PCA**: at fixed $k$, minimizes squared reconstruction error against a target the data alone fixes.
-- **t-SNE**: minimizes KL divergence between pairwise similarities in the original space and in the map. Original-space similarity depends on perplexity, so changing perplexity changes the target.
-- **UMAP**: minimizes fuzzy-set cross-entropy against a neighborhood graph. The graph depends on `n_neighbors` and the metric, so changing either rebuilds the target.
+- **PBMC 3k**: 2,638 cells in 50 principal components with eight annotated types, from the 10x Genomics PBMC tutorial, cached in this repo's [When UMAP Lies series](../when-umap-lies/). Real single-cell data; a wrong grouping changes a cell-type call.
+- **Digits**: 1,797 8×8 handwritten digits in ten classes, scikit-learn's loader. MNIST at lower resolution, where the methods are usually shown at their best.
+- **Noisy clusters**: 3,000 points, five Gaussian clusters in five dimensions plus 45 noise dimensions. Stands in for real data where a small signal sits in a large feature space; a method that follows the noise has found nothing useful.
+- **Branched trajectory**: 3,000 points along a trunk that splits into four branches, in 20 dimensions. Stands in for a differentiation path where branch identity and the shared trunk are both real structure.
+- **Nested clusters**: 3,000 points, three broad groups each holding three subgroups, in 20 dimensions. Stands in for a hierarchy with genuine structure at two scales.
 
-At a fixed number of components, PCA is the only one of the three whose target the data alone fixes. Change $k$ and its error changes with it, so the comparison holds only at fixed $k$; change perplexity or `n_neighbors` and t-SNE and UMAP rebuild their targets. None reports a loss value that makes one setting preferable. There is no reconstruction error to hold data out against, and no dev-set score with a fixed target to pick a setting.
+Each set is split by stratified sampling into 60% train, 20% dev and 20% test. Scaling uses training statistics only. Every method is fitted on the training points alone; dev and test points are placed afterwards with `transform`.
 
-The usual clustering workflow — fit on train, pick settings on dev, confirm on test — needs a target that stays put while settings change. UMAP and t-SNE do not supply one, so the workflow is never run, and plots are read with the confidence it would have earned.
+Three scores read the map:
 
-## Ten datasets
+- **Held-out neighbor recall**: of a test point's ten nearest neighbors in the original space, the fraction that are also among its ten nearest training points on the map.
+- **Held-out 10-NN accuracy**: majority vote of a test point's ten nearest training points on the map, scored against its label.
+- **Centroid distance correlation**: Spearman correlation between pairwise distances of class centroids in the original space and in the full 2-D map. This is the distance metric that an [elephant-shaped fake passes](../when-umap-lies/).
 
-Four sets are real and labeled: iris (Fisher's 1936 measurements of three iris species), wine (178 Italian wines, three cultivars), breast cancer (Wisconsin diagnostic, two classes), and digits (1,797 8×8 handwritten digits, ten classes — the same task as MNIST at lower resolution). They load from scikit-learn's bundled loaders; nothing is fetched at render time. A wrong grouping here is a wrong subgroup in a biological or clinical dataset.
-
-Six sets are synthetic, generated by `sklearn.datasets` with a fixed seed. Three are Gaussian mixtures: well-separated blobs, blobs with unequal variance, and blobs pushed through a random linear map. Two are non-convex — two moons and two concentric circles — standing in for groups a linear projection cannot keep apart. One is concentric Gaussian shells, standing in for nested structure with no obvious cluster count.
-
-All sets except moons and circles are standardized before embedding. The two 2-D sets keep their raw coordinates, whose axes already share a scale; standardizing them would distort the geometry they stand in for. Rescaling changes the neighborhood graph UMAP and t-SNE build, so the defaults below act on preprocessed input for eight of the ten sets.
-
-Embedding to 2-D and running k-means with the known class count gives an adjusted Rand index (ARI) for each map. ARI is 1 for a perfect match and 0 for chance agreement, so a convincing plot with tangled labels scores near zero. The labels are used only to score the map; none of the three methods sees them.
+PCA also reports a squared reconstruction error on held-out points. UMAP and t-SNE report no comparable value.
 
 ```{python}
 #| label: setup
@@ -57,166 +55,217 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from IPython.display import display
-from sklearn.datasets import (
-    load_iris, load_wine, load_breast_cancer, load_digits,
-    make_blobs, make_moons, make_circles, make_gaussian_quantiles,
-)
+from scipy.spatial.distance import cdist, pdist
+from scipy.stats import spearmanr
+from sklearn.datasets import load_digits as sk_load_digits, make_blobs
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
-from sklearn.cluster import KMeans
-from sklearn.metrics import adjusted_rand_score
 import umap
+from openTSNE import TSNE
 
-SEED = 0
+SEED = 42
+K = 10
+COLOURS = {"PCA": "#4c72b0", "UMAP": "#55a868", "t-SNE": "#dd8452"}
 
 
-def make_data():
-    datasets = {}
-    datasets["iris"] = (load_iris().data, load_iris().target)
-    datasets["wine"] = (load_wine().data, load_wine().target)
-    datasets["breast cancer"] = (load_breast_cancer().data, load_breast_cancer().target)
-    datasets["digits"] = (load_digits().data, load_digits().target)
-    datasets["blobs"] = make_blobs(
-        n_samples=1000, centers=5, n_features=20, cluster_std=1.5, random_state=0
+def load_pbmc():
+    d = np.load("../when-umap-lies/cache/elephant/pbmc_reference.npz", allow_pickle=True)
+    return d["X"].astype(np.float32), d["labels"].astype(int), "PBMC 3k"
+
+def load_digits():
+    d = sk_load_digits()
+    return d["data"].astype(np.float32), d["target"].astype(int), "digits"
+
+def load_noisy_clusters():
+    rs = 1234
+    X, y = make_blobs(n_samples=3000, centers=5, n_features=5,
+                      cluster_std=1.0, random_state=rs)
+    noise = np.random.RandomState(rs + 1).normal(0, 3, size=(3000, 45))
+    return np.hstack([X, noise]).astype(np.float32), y.astype(int), "noisy clusters"
+
+def load_branched():
+    rs = np.random.RandomState(7)
+    n, d, nbranch = 3000, 20, 4
+    B = np.linalg.qr(rs.randn(nbranch, d).T)[0][:, :nbranch].T
+    trunk = B.mean(0)
+    trunk /= np.linalg.norm(trunk)
+    y = rs.randint(0, nbranch, size=n)
+    s = rs.rand(n)
+    X = np.zeros((n, d), dtype=np.float32)
+    for i in range(n):
+        pos = trunk * (s[i] * 8.0) if s[i] < 0.5 else trunk * 4.0 + B[y[i]] * ((s[i] - 0.5) * 10.0)
+        X[i] = pos
+    X += rs.normal(0, 0.6, size=(n, d)).astype(np.float32)
+    return X, y.astype(int), "branched"
+
+def load_nested():
+    rs = np.random.RandomState(99)
+    n, d = 3000, 20
+    big = rs.randn(3, d) * 5.0
+    sub_off = rs.randn(3, 3, d) * 1.5
+    y = np.repeat(np.arange(3), n // 3)
+    X = np.zeros((n, d), dtype=np.float32)
+    for b in range(3):
+        for j, grp in enumerate(np.array_split(np.flatnonzero(y == b), 3)):
+            X[grp] = big[b] + sub_off[b, j] + rs.normal(0, 0.5, size=(len(grp), d))
+    return X, y.astype(int), "nested clusters"
+
+DATASETS = [load_pbmc, load_digits, load_noisy_clusters, load_branched, load_nested]
+
+
+def split(X, y):
+    Xtr, Xtmp, ytr, ytmp = train_test_split(
+        X, y, test_size=0.2, stratify=y, random_state=SEED
     )
-    datasets["varied blobs"] = make_blobs(
-        n_samples=1000, centers=4, n_features=10,
-        cluster_std=[1.0, 2.5, 5.0, 8.0], random_state=0,
+    Xdev, Xte, ydev, yte = train_test_split(
+        Xtmp, ytmp, test_size=0.5, stratify=ytmp, random_state=SEED
     )
-    X, y = make_blobs(
-        n_samples=1000, centers=3, n_features=20, cluster_std=1.5, random_state=0
-    )
-    datasets["anisotropic"] = (X @ np.random.default_rng(0).normal(size=(20, 20)), y)
-    datasets["moons"] = make_moons(n_samples=1000, noise=0.08, random_state=0)
-    datasets["circles"] = make_circles(n_samples=1000, noise=0.06, factor=0.5, random_state=0)
-    datasets["gaussian shells"] = make_gaussian_quantiles(
-        n_samples=1000, n_features=10, n_classes=4, random_state=0
-    )
-    two_d = {"moons", "circles"}
-    return {
-        name: (xy if name in two_d else (StandardScaler().fit_transform(xy[0]), xy[1]))
-        for name, xy in datasets.items()
-    }
+    sc = StandardScaler().fit(Xtr)
+    return (sc.transform(Xtr).astype(np.float32), sc.transform(Xdev).astype(np.float32),
+            sc.transform(Xte).astype(np.float32), ytr, ydev, yte)
 
 
-DATA = make_data()
+def knn_acc(Ztr, ytr, Ze, ye, k=K):
+    idx = np.argpartition(cdist(Ze, Ztr), k - 1, axis=1)[:, :k]
+    preds = np.empty(len(ye), dtype=int)
+    for i, row in enumerate(ytr[idx]):
+        vals, cnts = np.unique(row, return_counts=True)
+        preds[i] = vals[np.argmax(cnts)]
+    return float((preds == ye).mean())
 
 
-def ari(embedding, labels, seed=SEED):
-    k = len(np.unique(labels))
-    assigned = KMeans(n_clusters=k, random_state=seed, n_init=10).fit_predict(embedding)
-    return adjusted_rand_score(labels, assigned)
+def neighbor_recall(Xtr, Ztr, Xe, Ze, k=K):
+    io = np.argpartition(cdist(Xe, Xtr), k - 1, axis=1)[:, :k]
+    ie = np.argpartition(cdist(Ze, Ztr), k - 1, axis=1)[:, :k]
+    return float(sum(len(set(a) & set(b)) for a, b in zip(io, ie)) / (len(Xe) * k))
+
+
+def centroid_rho(Xfull, yfull, Zfull):
+    cls = np.unique(yfull)
+    co = np.array([Xfull[yfull == c].mean(0) for c in cls])
+    ce = np.array([Zfull[yfull == c].mean(0) for c in cls])
+    return float(spearmanr(pdist(co), pdist(ce)).statistic)
+
+
+def embed(Xtr, Xdev, Xte, method, **kw):
+    if method == "PCA":
+        m = PCA(n_components=2, random_state=0).fit(Xtr)
+        return [m.transform(Z) for Z in (Xtr, Xdev, Xte)]
+    if method == "UMAP":
+        m = umap.UMAP(n_components=2, random_state=0, n_jobs=1, **kw)
+        Ztr = m.fit_transform(Xtr)
+        return [Ztr, m.transform(Xdev), m.transform(Xte)]
+    e = TSNE(n_components=2, random_state=0, **kw).fit(Xtr)
+    return [np.asarray(e), np.asarray(e.transform(Xdev)), np.asarray(e.transform(Xte))]
 ```
 
 ```{python}
-#| label: fig-ari
-#| fig-cap: "Adjusted Rand index of k-means on each 2-D embedding. Zero is chance agreement with the labels. UMAP and t-SNE run at library defaults on the inputs described above; PCA uses two components."
-rows = {}
-for name, (X, y) in DATA.items():
-    rows[name] = {
-        "PCA": ari(PCA(n_components=2, random_state=SEED).fit_transform(X), y),
-        "t-SNE": ari(TSNE(n_components=2, perplexity=30, random_state=SEED, init="pca").fit_transform(X), y),
-        "UMAP": ari(umap.UMAP(n_components=2, random_state=SEED).fit_transform(X), y),
-    }
-results = pd.DataFrame(rows).T.round(3)
-display(results)
+#| label: fig-heldout
+#| fig-cap: "Two of the three scores, by dataset and method. Held-out neighbor recall rewards local structure; class-centroid distance correlation rewards the global arrangement. UMAP and t-SNE win the first on every set; on the second, PCA wins three of five."
+rows, table, recon, short = {}, [], {}, []
+for loader in DATASETS:
+    X, y, name = loader()
+    Xtr, Xdev, Xte, ytr, ydev, yte = split(X, y)
+    Xfull = np.vstack([Xtr, Xdev, Xte])
+    yfull = np.concatenate([ytr, ydev, yte])
+    scores = {}
+    for method in ("PCA", "UMAP", "t-SNE"):
+        Ztr, Zdev, Zte = embed(Xtr, Xdev, Xte, method)
+        scores[method] = (
+            knn_acc(Ztr, ytr, Zte, yte),
+            neighbor_recall(Xtr, Ztr, Xte, Zte),
+            centroid_rho(Xfull, yfull, np.vstack([Ztr, Zdev, Zte])),
+        )
+    p = PCA(n_components=2, random_state=0).fit(Xtr)
+    recon[name] = float(((Xte - p.inverse_transform(p.transform(Xte))) ** 2).mean())
+    short.append(name)
+    for label, idx in (("10-NN accuracy", 0), ("neighbor recall", 1), ("centroid rho", 2)):
+        table.append({"dataset": name, "score": label,
+                      **{m: round(scores[m][idx], 3) for m in ("PCA", "UMAP", "t-SNE")}})
+    rows[name] = scores
 
-names = list(results.index)
-x = np.arange(len(names))
-width = 0.26
-fig, ax = plt.subplots(figsize=(11, 4.2))
-for i, (method, colour) in enumerate(
-    zip(["PCA", "t-SNE", "UMAP"], ["#4c72b0", "#dd8452", "#55a868"])
-):
-    ax.bar(x + (i - 1) * width, results[method], width, label=method, color=colour)
-ax.axhline(0, color="black", linewidth=0.8)
-ax.set_xticks(x)
-ax.set_xticklabels(names, rotation=30, ha="right")
-ax.set_ylabel("Adjusted Rand index")
-ax.set_ylim(-0.05, 1.05)
-ax.legend(ncol=3, loc="upper center", bbox_to_anchor=(0.5, 1.12), frameon=False)
-ax.spines[["top", "right"]].set_visible(False)
-fig.tight_layout()
+display(pd.DataFrame(table))
+display(pd.Series(recon, name="PCA held-out reconstruction MSE").round(3).to_frame())
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 4.2))
+for ax, (title, idx) in zip(axes, [("Held-out neighbor recall", 1), ("Centroid distance correlation", 2)]):
+    x = np.arange(len(short))
+    for i, (m, colour) in enumerate(COLOURS.items()):
+        ax.bar(x + (i - 1) * 0.26, [rows[n][m][idx] for n in short], 0.26,
+               label=m, color=colour)
+    ax.axhline(0, color="black", linewidth=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(short, rotation=30, ha="right")
+    ax.set_title(title)
+    ax.spines[["top", "right"]].set_visible(False)
+fig.legend(*axes[0].get_legend_handles_labels(), loc="upper center",
+           bbox_to_anchor=(0.5, 1.02), ncol=3, frameon=False)
+fig.tight_layout(rect=(0, 0, 1, 0.93))
+fig.savefig("figures/heldout.png", dpi=150, bbox_inches="tight")
 plt.show()
 ```
 
-No method wins, and the ranking flips between datasets:
+Three results stand out:
 
-- PCA leads on wine, 0.895 against 0.788 for t-SNE and 0.774 for UMAP. UMAP leads on breast cancer, 0.779 against 0.659 for PCA.
-- On digits, UMAP reaches 0.861 and t-SNE 0.771, against 0.326 for PCA. This is the one setting where the nonlinear methods look miraculous.
-- t-SNE's default perplexity of 30 scores 0.002 on moons, chance agreement, while UMAP scores 0.586 on the same points. On circles, UMAP scores 1.000 and both PCA and t-SNE sit at -0.001.
-- All three sit at chance on Gaussian shells: 0.007, 0.001, and 0.002.
+- **Local structure holds.** UMAP and t-SNE keep more of a held-out point's original neighbors on all five sets: on PBMC, t-SNE keeps 0.168 and UMAP 0.045 against PCA's 0.009; on digits, 0.507 and 0.419 against 0.133. Held-out 10-NN accuracy beats PCA on four sets for UMAP and three for t-SNE; on noisy clusters t-SNE falls to 0.917 against PCA's 0.930, and all three reach 1.000 on nested clusters.
+- **Global structure does not.** PCA wins centroid distance correlation on three of five sets: on PBMC it scores 0.831 against UMAP's 0.214 and t-SNE's 0.248; on nested clusters 1.000 against 0.500 and −1.000.
+- **The metric an elephant passes is the one they lose.** Chari and Pachter put cells on an elephant silhouette and found it matched UMAP and t-SNE on distance metrics ([Part 1](../when-umap-lies/)). Centroid correlation is that kind of metric, and UMAP and t-SNE lose it to PCA here.
 
-None of the three embeddings carries a value that predicts this ordering. The only number a reader gets is the picture.
+## No loss to choose
 
-## Hyperparameters
-
-Change `n_neighbors` or `min_dist` in UMAP, or perplexity in t-SNE, and the map changes without ceasing to be a valid output of the algorithm. Because the objective is rebuilt from those settings, none of the resulting embeddings can be rejected by the loss that produced it.
+The routine of fitting on train, choosing on dev and confirming on test needs a score that ranks settings against a fixed target. PCA supplies one: squared reconstruction error on held-out points, 0.969 on PBMC and 1.258 on digits, computed against the same data for every number of components. UMAP and t-SNE supply none, so the nearest substitute is a held-out score of neighbor keeping.
 
 ```{python}
-#| label: settings-sweep
-X, y = DATA["wine"]
-mds = [0.0, 0.1, 0.5, 0.99]
-nns = [5, 15, 50, 100]
-display(pd.DataFrame(
-    [
-        [
-            round(ari(umap.UMAP(n_neighbors=nn, min_dist=md, random_state=SEED)
-                      .fit_transform(X), y), 3)
-            for md in mds
-        ]
-        for nn in nns
-    ],
-    index=pd.Index(nns, name="n_neighbors"),
-    columns=[f"min_dist={md}" for md in mds],
-))
+#| label: dev-choice
+choices = []
+for dataset in (load_digits, load_noisy_clusters):
+    X, y, name = dataset()
+    Xtr, Xdev, Xte, ytr, ydev, yte = split(X, y)
+    Ztr_def, _, Zte_def = embed(Xtr, Xdev, Xte, "UMAP")
+    default_umap = knn_acc(Ztr_def, ytr, Zte_def, yte)
+    Ztr_def, _, Zte_def = embed(Xtr, Xdev, Xte, "t-SNE")
+    default_tsne = knn_acc(Ztr_def, ytr, Zte_def, yte)
 
-X, y = DATA["iris"]
-display(pd.Series(
-    {
-        p: round(ari(TSNE(n_components=2, perplexity=p, random_state=SEED,
-                          init="pca").fit_transform(X), y), 3)
-        for p in [5, 10, 30, 50]
-    },
-    name="ARI",
-).to_frame())
+    for method, grid in (
+        ("UMAP", [(nn, md) for nn in (5, 15, 50, 100) for md in (0.0, 0.1, 0.5, 0.99)]),
+        ("t-SNE", [(p,) for p in (5, 10, 30, 50)]),
+    ):
+        best = (-1, None)
+        for setting in grid:
+            kw = ({"n_neighbors": setting[0], "min_dist": setting[1]}
+                  if method == "UMAP" else {"perplexity": setting[0]})
+            Ztr, Zdev, _ = embed(Xtr, Xdev, Xte, method, **kw)
+            acc = knn_acc(Ztr, ytr, Zdev, ydev)
+            if acc > best[0]:
+                best = (acc, setting)
+        dev_acc, setting = best
+        Ztr_winner, _, Zte_best = embed(Xtr, Xdev, Xte, method, **dict(
+            n_neighbors=setting[0], min_dist=setting[1]) if method == "UMAP"
+            else dict(perplexity=setting[0]))
+        test_acc = knn_acc(Ztr_winner, ytr, Zte_best, yte)
+        default = default_umap if method == "UMAP" else default_tsne
+        choices.append({"dataset": name, "method": method, "dev winner": str(setting),
+                        "dev acc": round(dev_acc, 3), "test acc": round(test_acc, 3),
+                        "default test": round(default, 3),
+                        "gain": round(test_acc - default, 3)})
+display(pd.DataFrame(choices))
 ```
 
-Sixteen UMAP settings on wine score between 0.774 and 0.852; on iris, t-SNE scores between 0.610 at perplexity 50 and 0.818 at perplexity 10. The spread is wide enough to change a conclusion, and every value in it is a legitimate run. There are as many defensible settings as there are values to try.
+Picking the best setting on dev buys at most 0.003 on test, and on digits the t-SNE winner scores 0.972 against the default's 0.978. The default is already as good as the search.
 
-Changing only the seed does the same thing.
-
-```{python}
-#| label: seed-sweep
-X, y = DATA["moons"]
-display(pd.Series(
-    {
-        s: round(ari(umap.UMAP(n_components=2, random_state=s).fit_transform(X), y), 3)
-        for s in range(6)
-    },
-    name="ARI",
-).to_frame())
-```
-
-Six UMAP runs on moons at otherwise identical defaults score between 0.524 and 0.996. One seed finds a near-perfect separation; the others merge the arcs. With no labels there is no way to tell the lucky run from the usual one, and UMAP's own objective does not rank them.
-
-## Digits
-
-Digits is the showcase: ten balanced classes, 64 features, 1,797 samples, and clear separation between digit shapes. It is the closest thing here to MNIST, and it is the dataset on which UMAP and t-SNE look best — 0.861 and 0.771 against PCA's 0.326. Papers illustrate these methods on exactly this kind of data, so the defaults are calibrated for a regime most clustering problems do not have.
-
-Wine has 178 rows and three classes that overlap in feature space. Breast cancer has two classes separated by a handful of features. Moons and circles have two dimensions. On all of them the default map is a guess about scale, neighborhood size, and density that the method cannot check, and on moons the guess lands at chance.
+With no held-out loss, every value of `n_neighbors`, `min_dist` and perplexity produces a valid map, and the dev score itself has a neighborhood size to set. No target stays fixed across settings, so a dev set cannot choose one, and a test set has nothing to confirm. The local win is real, but it is a win about which points sit together — not about the picture drawn around them, and not about a map you could check on new data.
 
 ## Constraints
 
-ARI on a 2-D map is one proxy, not a verdict on the method. Clustering in the original space, or choosing a metric that fits the data, can change every number above; ARI also rewards methods that happen to preserve the class count. The point is not that PCA is always right — it scores -0.001 on circles — but that PCA's failure has a known cause in a linear projection, while a bad UMAP or t-SNE map has no loss that names it.
+The local result is not in doubt: on these splits, UMAP and especially t-SNE place held-out points beside their own kind better than 2-D PCA. The claim here is narrower — the global arrangement those points inherit is not validated by anything in the fit. Centroid correlation over eight PBMC classes is sensitive to the two small classes, and t-SNE's out-of-sample placement is openTSNE's interpolation with its own settings, not a function learned by the fit. Five datasets and one split seed do not settle every dataset.
 
-Plots. Convince. Nothing. Checks. Endless. Knobs. Defaults. Guess. Trust. Nobody.
+Near. Right. Far. Wrong. Held. Out. No. Loss. No. Check.
 
 ## References
 
-- McInnes, L., Healy, J., & Melville, J. (2018). [UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction](https://arxiv.org/abs/1802.03426).
-- van der Maaten, L., & Hinton, G. (2008). [Visualizing Data using t-SNE](https://www.jmlr.org/papers/v9/vandermaaten08a.html).
-- Pedregosa, F., et al. (2011). [Scikit-learn: Machine Learning in Python](https://jmlr.org/papers/v12/pedregosa11a.html).
-- Fisher, R. A. (1936). [The use of multiple measurements in taxonomic problems](https://doi.org/10.1111/j.1469-1809.1936.tb02137.x).
-- [scikit-learn dataset loaders](https://scikit-learn.org/stable/datasets/toy_dataset.html).
+- Chari, T. & Pachter, L. (2023). [The specious art of single-cell genomics](https://doi.org/10.1371/journal.pcbi.1011288). *PLOS Computational Biology* 19(8), e1011288.
+- Lause, J., Berens, P. & Kobak, D. (2024). [The art of seeing the elephant in the room: 2D embeddings of single-cell data do make sense](https://doi.org/10.1371/journal.pcbi.1012403). *PLOS Computational Biology* 20(10), e1012403.
+- McInnes, L., Healy, J. & Melville, J. (2018). [UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction](https://arxiv.org/abs/1802.03426).
+- van der Maaten, L. & Hinton, G. (2008). [Visualizing Data using t-SNE](https://www.jmlr.org/papers/v9/vandermaaten08a.html).
+- [When UMAP Lies, Part 1: The map and the territory](../when-umap-lies/).
