@@ -1,7 +1,7 @@
 """Does default UMAP fail when classes hold fewer points than n_neighbors?
 
 Subsamples scikit-learn's digits to m images per class and scores UMAP at three
-n_neighbors values against PCA and the original space. Writes cache/class_size.parquet.
+n_neighbors values against the original space. Writes cache/class_size.parquet.
 
     ../../.venv-umap-tsne/bin/python src/class_size.py
 """
@@ -32,7 +32,9 @@ SEEDS = (0, 1, 2, 3, 4)
 
 def nn_accuracy(Z, y):
     """Leave-one-out 1-NN accuracy: is each point's nearest neighbour its own class?"""
-    idx = NearestNeighbors(n_neighbors=2).fit(Z).kneighbors(Z)[1][:, 1]
+    idx = NearestNeighbors(n_neighbors=2).fit(Z).kneighbors(Z)[1]
+    # Remove the point by index; an exact duplicate can come back first.
+    idx = np.where(idx[:, 0] == np.arange(len(Z)), idx[:, 1], idx[:, 0])
     return float((y[idx] == y).mean())
 
 

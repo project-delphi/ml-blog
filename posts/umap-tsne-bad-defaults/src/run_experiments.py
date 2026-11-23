@@ -127,15 +127,32 @@ DATASETS = (
 # ------------------------------------------------------------------------ scores
 
 
+def knn_excluding_self(Z, k):
+    """Return the k nearest neighbours of every row, the row itself removed by index.
+
+    Slicing off column 0 assumes the point comes back first, which fails when an
+    exact duplicate ties with it at distance zero.
+    """
+    idx = NearestNeighbors(n_neighbors=k + 1).fit(Z).kneighbors(Z)[1]
+    return np.array([row[row != i][:k] for i, row in enumerate(idx)])
+
+
 class Reference:
     """Everything about the original space that scoring a map needs."""
 
     def __init__(self, X, y, seed):
         self.y = y
         self.k_classes = len(np.unique(y))
-        self.knn = NearestNeighbors(n_neighbors=K + 1).fit(X).kneighbors(X)[1][:, 1:]
+        self.knn = knn_excluding_self(X, K)
         rng = np.random.default_rng(seed)
-        self.trip = rng.integers(0, len(X), size=(N_TRIPLETS, 3))
+        # Distinct i, j, k only: a repeated index agrees in every space.
+        draw = rng.integers(0, len(X), size=(3 * N_TRIPLETS, 3))
+        ok = (
+            (draw[:, 0] != draw[:, 1])
+            & (draw[:, 0] != draw[:, 2])
+            & (draw[:, 1] != draw[:, 2])
+        )
+        self.trip = draw[ok][:N_TRIPLETS]
         self.trip_sign = np.sign(self._d(X, 0, 1) - self._d(X, 0, 2))
         cls = np.unique(y)
         self.centroid_d = pdist(np.array([X[y == c].mean(0) for c in cls]))
@@ -145,7 +162,7 @@ class Reference:
 
     def score(self, Z, seed):
         y = self.y
-        nz = NearestNeighbors(n_neighbors=K + 1).fit(Z).kneighbors(Z)[1][:, 1:]
+        nz = knn_excluding_self(Z, K)
         recall = np.mean([len(set(a) & set(b)) for a, b in zip(self.knn, nz)]) / K
         folds = StratifiedKFold(5, shuffle=True, random_state=seed)
         acc = cross_val_score(KNeighborsClassifier(K), Z, y, cv=folds).mean()

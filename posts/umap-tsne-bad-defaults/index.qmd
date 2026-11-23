@@ -1,7 +1,7 @@
 ---
 title: "Is Default UMAP Bad?"
-subtitle: "Against 30 of its own settings on nine datasets, the default sits near the top; what UMAP gets wrong, no setting fixes"
-description: "Default UMAP (n_neighbors=15, min_dist=0.1) scored against the best of 30 settings picked with hindsight, PCA, default t-SNE and the original space, on nine real and synthetic datasets with three seeds each. Tuning buys at most a few hundredths on class separation, and a new seed moves cluster scores as far as the best setting does. No setting brings UMAP's global layout up to PCA's or its fine neighbourhoods up to t-SNE's. The one clear failure of the default is classes smaller than n_neighbors."
+subtitle: "Against 30 of its own settings on nine datasets, tuning buys a few hundredths; what UMAP gets wrong, no setting fixes"
+description: "Default UMAP (n_neighbors=15, min_dist=0.1) scored against the best of 30 settings picked with hindsight, PCA, default t-SNE and the original space, on nine real and synthetic datasets with three seeds each. Tuning buys at most a few hundredths on class separation, and on five of nine sets a new seed moves cluster scores as far as the best setting does. No setting brings UMAP's global layout up to PCA's or its fine neighbourhoods up to t-SNE's. The one clear failure of the default is classes of about 10 points or fewer."
 author: "Ravi Kalia"
 date: "2026-11-22"
 categories: [Machine Learning, Statistics]
@@ -79,6 +79,10 @@ N_CENT, N_CENT_PCA = len(many), int((pca.loc[many, "centroid rho"] > best.loc[ma
 N_REC_TSNE = int((tsne["neighbor recall"] > best["neighbor recall"]).sum())
 N_NEW_TRIP = int((new["triplet accuracy"] > default["triplet accuracy"]).sum())
 N_NEW_REC = int((new["neighbor recall"] < default["neighbor recall"]).sum())
+_tri_best = grid["triplet accuracy"].groupby("dataset").idxmax()
+N_TRIP_MD99 = int(sum(md == 0.99 for _, _, md in _tri_best))
+TRIP_GAIN_MAX = f3(gain["triplet accuracy"].max())
+TRIP_GAIN_WHERE = gain["triplet accuracy"].idxmax()
 V = lambda frame, d, c: f3(frame.loc[d, c])  # noqa: E731
 ```
 
@@ -115,7 +119,7 @@ Labels are used only to score. No method sees them.
 ```{python}
 #| label: fig-verdict
 #| fig-cap: "Grey bar: range of UMAP's 30 settings (mean over three seeds each). Circle: UMAP default. Square: t-SNE default. Diamond: PCA. Tick: the same score in the original space."
-#| fig-alt: "Four panels, one row per dataset. The UMAP default circle sits near the right end of the grey settings bar in most rows. On triplet accuracy the PCA diamond is right of the whole grey bar on all nine datasets; on neighbour recall the t-SNE square is right of the bar on eight."
+#| fig-alt: "Four panels, one row per dataset. On neighbour recall, class accuracy and k-means ARI the UMAP default circle sits near the right end of the grey settings bar in most rows; on triplet accuracy it sits toward the left end on several. On triplet accuracy the PCA diamond is right of the whole grey bar on all nine datasets; on neighbour recall the t-SNE square is right of the bar on eight."
 PANELS = [
     ("neighbor recall", "Neighbour recall"),
     ("kNN accuracy", "10-NN class accuracy"),
@@ -152,24 +156,24 @@ plt.show()
 
 The default is not the problem:
 
-- **Class separation is already at the ceiling.** Hindsight tuning raises 10-NN accuracy by at most `{python} KNN_GAIN_MAX` (`{python} KNN_GAIN_WHERE`) on eight of nine sets. The default lands within 0.03 of the accuracy in the original space on `{python} N_KNN_NEAR` of nine, and beats PCA on `{python} N_KNN_PCA`. On MNIST it scores `{python} V(default, "MNIST", "kNN accuracy")` against PCA's `{python} V(pca, "MNIST", "kNN accuracy")`.
+- **Class separation is near the ceiling on most sets.** Hindsight tuning raises 10-NN accuracy by at most `{python} KNN_GAIN_MAX` (`{python} KNN_GAIN_WHERE`) on eight of nine sets. The default lands within 0.03 of the accuracy in the original space on `{python} N_KNN_NEAR` of nine, and beats PCA on `{python} N_KNN_PCA`. On MNIST it scores `{python} V(default, "MNIST", "kNN accuracy")` against PCA's `{python} V(pca, "MNIST", "kNN accuracy")`.
 - **Cluster gains are small.** Hindsight tuning raises k-means ARI by at most `{python} ARI_GAIN_HI` outside Olivetti. On `{python} N_SEED_GE` of nine sets, rerunning the default with another seed moves ARI at least as far as the best setting does. On PBMC the default's three seeds span `{python} f3(runs.min().loc["PBMC 3k", "k-means ARI"])` to `{python} f3(runs.max().loc["PBMC 3k", "k-means ARI"])`.
 
 The method is the problem:
 
-- **The global layout trails PCA at every setting.** PCA beats UMAP's best setting on triplet accuracy on `{python} N_TRIP_PCA` of nine sets: `{python} V(pca, "nested clusters", "triplet accuracy")` against `{python} V(best, "nested clusters", "triplet accuracy")` on nested clusters, `{python} V(pca, "Fashion-MNIST", "triplet accuracy")` against `{python} V(best, "Fashion-MNIST", "triplet accuracy")` on Fashion-MNIST. On the rank correlation of class-centroid distances, PCA beats every setting on `{python} N_CENT_PCA` of the `{python} N_CENT` sets with eight or more classes; on PBMC both sit near `{python} V(pca, "PBMC 3k", "centroid rho")`.
+- **The global layout trails PCA at every setting.** PCA beats UMAP's best setting on triplet accuracy on `{python} N_TRIP_PCA` of nine sets: `{python} V(pca, "nested clusters", "triplet accuracy")` against `{python} V(best, "nested clusters", "triplet accuracy")` on nested clusters, `{python} V(pca, "Fashion-MNIST", "triplet accuracy")` against `{python} V(best, "Fashion-MNIST", "triplet accuracy")` on Fashion-MNIST. Tuning helps here more than anywhere: `min_dist=0.99` is the best triplet setting on `{python} N_TRIP_MD99` of nine sets and adds up to `{python} TRIP_GAIN_MAX` (`{python} TRIP_GAIN_WHERE`), still short of PCA. On the rank correlation of class-centroid distances, PCA beats every setting on `{python} N_CENT_PCA` of the `{python} N_CENT` sets with eight or more classes; on PBMC both sit near `{python} V(pca, "PBMC 3k", "centroid rho")`.
 - **t-SNE keeps more fine neighbours at every setting.** Default t-SNE beats UMAP's best setting on neighbour recall on `{python} N_REC_TSNE` of nine sets.
 - **Clustering the map can lose structure the data had.** On PBMC, k-means on the 50 components scores `{python} V(orig, "PBMC 3k", "k-means ARI")`, on the default map `{python} V(default, "PBMC 3k", "k-means ARI")`, and on UMAP's best setting `{python} V(best, "PBMC 3k", "k-means ARI")`. On MNIST the map helps: `{python} V(default, "MNIST", "k-means ARI")` against `{python} V(orig, "MNIST", "k-means ARI")` on raw pixels.
 
 ## Small classes
 
-The one clear failure of the default is Olivetti. Its default 10-NN accuracy is `{python} V(default, "Olivetti faces", "kNN accuracy")`, against `{python} V(best, "Olivetti faces", "kNN accuracy")` at UMAP's best setting and `{python} V(orig, "Olivetti faces", "kNN accuracy")` in the original space. Each person has 10 photos, so at least 6 of a photo's 15 graph neighbours are other people.
+The one clear failure of the default is Olivetti. Its default 10-NN accuracy is `{python} V(default, "Olivetti faces", "kNN accuracy")`, against `{python} V(best, "Olivetti faces", "kNN accuracy")` at UMAP's best setting and `{python} V(orig, "Olivetti faces", "kNN accuracy")` in the original space. Each person has 10 photos, and UMAP's 15 neighbours count the photo itself, so at least 5 of the other 14 are other people.
 
 Subsampling digits to a fixed number of images per class tests that reading. Five seeds per row:
 
 ```{python}
 #| label: tbl-class-size
-#| tbl-cap: "Digits subsampled to m images per class. Leave-one-out 1-NN accuracy and k-means ARI on UMAP maps at three n_neighbors values, and in the original 64 pixels. Mean over five seeds."
+#| tbl-cap: "Digits subsampled to m images per class. Leave-one-out 1-NN accuracy and k-means ARI on UMAP maps at n_neighbors = 5 and 15, and in the original 64 pixels. Mean over five seeds."
 t = CS.groupby(["per_class", "n_neighbors"])[["nn_accuracy", "ari"]].mean().unstack()
 cols = [("nn_accuracy", "5"), ("nn_accuracy", "15"), ("nn_accuracy", "original"),
         ("ari", "5"), ("ari", "15"), ("ari", "original")]
