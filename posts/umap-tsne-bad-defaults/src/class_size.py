@@ -25,7 +25,7 @@ from sklearn.datasets import load_digits
 from sklearn.metrics import adjusted_rand_score
 
 CACHE = Path(__file__).resolve().parent.parent / "cache"
-PER_CLASS = (8, 12, 20, 40, 80, 160)
+PER_CLASS = (8, 10, 12, 15, 20, 40, 80, 160)
 N_NEIGHBORS = (5, 15)
 SEEDS = (0, 1, 2, 3, 4)
 

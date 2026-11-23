@@ -248,11 +248,18 @@ def ceiling(name, seed):
 def main():
     # Workers must import this file as a module: lru_cache'd functions defined in
     # __main__ do not pickle, and a by-value copy would lose the per-process cache.
-    os.environ["PYTHONPATH"] = str(Path(__file__).resolve().parent)
-    sys.path.insert(0, os.environ["PYTHONPATH"])
+    here = str(Path(__file__).resolve().parent)
+    os.environ["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [here, os.environ.get("PYTHONPATH")])
+    )
+    sys.path.insert(0, here)
     import run_experiments as me
 
     CACHE.mkdir(exist_ok=True)
+    # Download once here, so the workers read a finished cache instead of racing
+    # to write ~/scikit_learn_data on a fresh machine.
+    for name in ("MNIST", "Fashion-MNIST", "Olivetti faces"):
+        me.load(name, 0)
     only = set(sys.argv[1:])
     todo = [j for j in jobs() if not only or j[0] in only]
     # Group by dataset+seed so each worker builds a Reference once per block.

@@ -1,7 +1,7 @@
 ---
 title: "Is Default UMAP Bad?"
 subtitle: "Against 30 of its own settings on nine datasets, tuning buys a few hundredths on class and cluster scores outside small classes; what UMAP gets wrong, no setting fixes"
-description: "Default UMAP (n_neighbors=15, min_dist=0.1) scored against the best of 30 settings picked with hindsight, PCA, default t-SNE and the original space, on nine real and synthetic datasets with three seeds each. Outside one small-class set, tuning buys at most a few hundredths on class separation, and on four of the eight sets where tuning moves cluster scores at all, single runs of the default with different seeds spread at least that far apart. No setting brings UMAP's global layout up to PCA's, and on eight of nine sets none brings its fine neighbourhoods up to t-SNE's. The one clear failure of the default is classes of about 10 points or fewer."
+description: "Default UMAP (n_neighbors=15, min_dist=0.1) scored against the best of 30 settings picked with hindsight, PCA, default t-SNE and the original space, on nine real and synthetic datasets with three seeds each. Outside one small-class set, tuning buys at most a few hundredths on class separation and cluster agreement. No setting brings UMAP's global layout up to PCA's, and on eight of nine sets none brings its fine neighbourhoods up to t-SNE's. The one clear failure of the default is classes of about 10 points or fewer."
 author: "Ravi Kalia"
 date: "2026-11-22"
 categories: [Machine Learning, Statistics]
@@ -69,7 +69,9 @@ rest = [d for d in ORDER if d != "Olivetti faces"]
 KNN_GAIN_MAX = f3(gain.loc[rest, "kNN accuracy"].max())
 KNN_GAIN_WHERE = gain.loc[rest, "kNN accuracy"].idxmax()
 ARI_GAIN_HI = f3(gain.loc[rest, "k-means ARI"].max())
-_moved = (best - worst)["k-means ARI"] > 0  # nested clusters scores 1.000 at every setting
+# Sets where tuning moves ARI at all (nested clusters scores 1.000 at every
+# setting), leaving out Olivetti, which the sentence sets aside.
+_moved = ((best - worst)["k-means ARI"] > 0) & (best.index != "Olivetti faces")
 N_MOVED = int(_moved.sum())
 N_SEED_GE = int((seed_range["k-means ARI"] >= gain["k-means ARI"])[_moved].sum())
 N_KNN_NEAR = int(((default["kNN accuracy"] - orig["kNN accuracy"]).abs() <= 0.03).sum())
@@ -88,8 +90,10 @@ TRIP_GAIN_WHERE = gain["triplet accuracy"].idxmax()
 V = lambda frame, d, c: f3(frame.loc[d, c])  # noqa: E731
 # The subtitle, description and fig-alt quote these counts as words; fail the
 # render rather than let them drift from a regenerated cache.
-assert (N_MOVED, N_SEED_GE, N_TRIP_PCA, N_REC_TSNE) == (8, 4, 9, 8), (
+REC_EXCEPT = list(best.index[tsne["neighbor recall"] <= best["neighbor recall"]])
+assert (N_MOVED, N_SEED_GE, N_TRIP_PCA, N_REC_TSNE) == (7, 4, 9, 8), (
     N_MOVED, N_SEED_GE, N_TRIP_PCA, N_REC_TSNE)
+assert REC_EXCEPT == ["Olivetti faces"], REC_EXCEPT
 ```
 
 ## Test
@@ -99,7 +103,7 @@ Nine datasets, each run with three seeds:
 - **PBMC 3k**: 2,638 blood cells in 50 principal components, eight annotated cell types, from the 10x Genomics tutorial cached in [Part 1 of When UMAP Lies](../when-umap-lies/). A wrong grouping here is a wrong cell-type call.
 - **MNIST** and **Fashion-MNIST**: 10,000 images drawn from each 70,000-image set (LeCun et al. 1998; Xiao et al. 2017, via OpenML), raw pixels. A new draw per seed. These are the sets UMAP is usually shown on.
 - **Digits**: 1,797 8×8 handwritten digits, scikit-learn's loader.
-- **Olivetti faces**: 400 photos, 40 people with 10 each, taken at AT&T Laboratories Cambridge (Samaria & Harter 1994). The only set where a class holds fewer points than `n_neighbors`.
+- **Olivetti faces**: 400 photos, 40 people with 10 each, taken at AT&T Laboratories Cambridge (Samaria & Harter 1994). The only set where every class holds fewer points than `n_neighbors`.
 - **Wine** (178 wines, three cultivars) and **breast cancer** (569 Wisconsin biopsies, benign or malignant): small tabular sets, standardised.
 - **Noisy clusters**: synthetic, five Gaussian clusters in 5 dimensions plus 45 noise dimensions. Stands in for a weak signal in a wide feature table.
 - **Nested clusters**: synthetic, three groups of three subgroups in 20 dimensions, labelled by subgroup. Stands in for a hierarchy, such as lineages and their subtypes.
@@ -163,7 +167,7 @@ plt.show()
 The default is not the problem:
 
 - **Class separation is near the ceiling on most sets.** Hindsight tuning raises 10-NN accuracy by at most `{python} KNN_GAIN_MAX` (`{python} KNN_GAIN_WHERE`) on eight of nine sets. The default lands within 0.03 of the accuracy in the original space on `{python} N_KNN_NEAR` of nine, and beats PCA on `{python} N_KNN_PCA`. On MNIST it scores `{python} V(default, "MNIST", "kNN accuracy")` against PCA's `{python} V(pca, "MNIST", "kNN accuracy")`.
-- **Cluster gains are small.** Hindsight tuning raises k-means ARI by at most `{python} ARI_GAIN_HI` outside Olivetti. On `{python} N_SEED_GE` of the `{python} N_MOVED` sets where tuning moves ARI at all, single runs of the default with different seeds spread at least that far apart. On PBMC the default's three seeds span `{python} f3(runs.min().loc["PBMC 3k", "k-means ARI"])` to `{python} f3(runs.max().loc["PBMC 3k", "k-means ARI"])`.
+- **Cluster gains are small.** Hindsight tuning raises k-means ARI by at most `{python} ARI_GAIN_HI` outside Olivetti. On `{python} N_SEED_GE` of the `{python} N_MOVED` other sets where tuning moves ARI, the default's own three seeds spread further apart than the best setting moves it. On PBMC the seeds span `{python} f3(runs.min().loc["PBMC 3k", "k-means ARI"])` to `{python} f3(runs.max().loc["PBMC 3k", "k-means ARI"])`, and tuning gains `{python} V(gain, "PBMC 3k", "k-means ARI")`.
 
 The method is the problem:
 
@@ -194,13 +198,16 @@ Markdown(t.reset_index().to_markdown(index=False, disable_numparse=True))
 #| echo: false
 # One test at every size: do all five paired seeds agree on the winner?
 diff = (w["5"] - w["15"]).groupby(level=0)
-N8_POS, ARI8_MEAN = int(wins.loc[8]), f3(diff.mean().loc[8])
+UNANIMOUS = [int(m) for m in wins.index if wins.loc[m] == 5]
+ARI8_MEAN, ARI10_MEAN = f3(diff.mean().loc[8]), f3(diff.mean().loc[10])
 _big = wins.loc[12:]
 N_BIG, N_SPLIT = len(_big), int(((_big > 0) & (_big < 5)).sum())
 BIG_DIFF = f3(diff.mean().loc[12:].abs().max())
+# The paragraph's wording assumes exactly this pattern.
+assert UNANIMOUS == [8, 10] and N_SPLIT == N_BIG, (UNANIMOUS, N_SPLIT, N_BIG)
 ```
 
-At 8 per class, `n_neighbors=5` beats the default's ARI on `{python} N8_POS` of five seeds, by `{python} ARI8_MEAN` on average. At `{python} N_SPLIT` of the `{python} N_BIG` larger sizes the seeds disagree on the winner, and the average difference is at most `{python} BIG_DIFF`. Lower `n_neighbors` to about 5 when the groups you care about hold 10 or fewer points. Above that, which setting wins depends on the seed.
+At 8 and 10 per class, `n_neighbors=5` beats the default's ARI on all five seeds, by `{python} ARI8_MEAN` and `{python} ARI10_MEAN` on average. At all `{python} N_BIG` larger sizes the seeds disagree on the winner, and the average difference is at most `{python} BIG_DIFF`. Lower `n_neighbors` to about 5 when the groups you care about hold 10 or fewer points. Above that, which setting wins depends on the seed.
 
 ## Constraints
 
