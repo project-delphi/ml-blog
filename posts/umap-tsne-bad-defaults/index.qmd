@@ -1,7 +1,7 @@
 ---
 title: "Is Default UMAP Bad?"
 subtitle: "Against 30 of its own settings on nine datasets, tuning buys a few hundredths on class and cluster scores outside small classes; what UMAP gets wrong, no setting fixes"
-description: "Default UMAP (n_neighbors=15, min_dist=0.1) scored against the best of 30 settings picked with hindsight, PCA, default t-SNE and the original space, on nine real and synthetic datasets with three seeds each. Outside one small-class set, tuning buys at most a few hundredths on class separation and cluster agreement. No setting brings UMAP's global layout up to PCA's, and on eight of nine sets none brings its fine neighbourhoods up to t-SNE's. The one clear failure of the default is classes of about 10 points or fewer."
+description: "Default UMAP (n_neighbors=15, min_dist=0.1) scored against the best of 30 settings picked with hindsight, PCA, default t-SNE and the original space, on nine real and synthetic datasets with three seeds each. Outside one small-class set, tuning buys at most a few hundredths on class separation and cluster agreement. No setting brings UMAP's triplet accuracy up to PCA's, and on eight of nine sets none brings its fine neighbourhoods up to t-SNE's. The one clear failure of the default is small classes: on subsampled digits, 10 images per class or fewer."
 author: "Ravi Kalia"
 date: "2026-11-22"
 categories: [Machine Learning, Statistics]
@@ -97,6 +97,13 @@ REC_EXCEPT = list(best.index[tsne["neighbor recall"] <= best["neighbor recall"]]
 N_TRIP_NEW_PCA = int((pca["triplet accuracy"] > new["triplet accuracy"]).sum())
 NEW_OVER_GRID = list(best.index[new["triplet accuracy"] > best["triplet accuracy"]])
 assert (N_TRIP_PCA, N_REC_TSNE, N_TRIP_NEW_PCA) == (9, 8, 9), (N_TRIP_PCA, N_REC_TSNE, N_TRIP_NEW_PCA)
+# "A few hundredths" outside Olivetti, "matches the data on most sets", "the map helps" on MNIST.
+assert gain.loc[rest, ["kNN accuracy", "k-means ARI"]].max().max() < 0.07
+assert N_KNN_NEAR >= 6
+assert default.loc["MNIST", "k-means ARI"] > orig.loc["MNIST", "k-means ARI"]
+# How much a per-seed pick beats the best three-seed mean, on the four main scores.
+_per_seed = S[S.method == "UMAP"].groupby(["dataset", "seed"])[COLS[:4]].max().groupby("dataset").mean()
+PERSEED_EXTRA = f3((_per_seed - best[COLS[:4]]).max().max())
 assert NEW_OVER_GRID == ["digits", "nested clusters"], NEW_OVER_GRID
 assert REC_EXCEPT == ["Olivetti faces"], REC_EXCEPT
 ```
@@ -116,16 +123,17 @@ Nine datasets, each run with three seeds:
 Methods:
 
 - **UMAP default** (McInnes et al. 2018): `n_neighbors=15`, `min_dist=0.1`, umap-learn 0.6.0.
-- **UMAP grid**: `n_neighbors` ∈ {5, 10, 15, 30, 50, 100} × `min_dist` ∈ {0, 0.1, 0.25, 0.5, 0.99}, 30 settings. The best setting is picked with hindsight on the score being reported. That is the most tuning these two settings could buy; a dev-set search can at best match it.
+- **UMAP grid**: `n_neighbors` ∈ {5, 10, 15, 30, 50, 100} × `min_dist` ∈ {0, 0.1, 0.25, 0.5, 0.99}, 30 settings. The best setting is picked with hindsight on the score being reported. That is a generous estimate of what tuning these two settings buys.
 - **PCA**, two components, and **t-SNE** (van der Maaten & Hinton 2008) at openTSNE's defaults (perplexity 30, PCA initialisation).
 - **Original space**: the same scores on the data itself, where they apply.
 
-Four scores, one per thing a reader takes from a map:
+Five scores, for the things a reader takes from a map:
 
 - **Neighbour recall**: the fraction of each point's 10 nearest neighbours in the data that are also its 10 nearest on the map.
 - **10-NN class accuracy**: 5-fold cross-validated accuracy of a 10-nearest-neighbour vote on the map. Are classes kept apart?
 - **k-means ARI**: adjusted Rand index of k-means with the true class count, run on the map. Do the clusters you would draw match the labels?
 - **Triplet accuracy**: for 20,000 random triplets (i, j, k), how often the map agrees with the data on whether j or k is closer to i (Wang et al. 2021). Is the global layout right?
+- **Centroid correlation**: Spearman correlation between distances of class centroids in the data and on the map. A second global score, reported only for the six sets with eight or more classes, since three classes give three distances to rank.
 
 Labels are used only to score. No method sees them.
 
@@ -182,9 +190,9 @@ The method is the problem:
 
 ## Small classes
 
-The one clear failure of the default is Olivetti. Its default 10-NN accuracy is `{python} V(default, "Olivetti faces", "kNN accuracy")`, against `{python} V(best, "Olivetti faces", "kNN accuracy")` at UMAP's best setting and `{python} V(orig, "Olivetti faces", "kNN accuracy")` in the original space. Each person has 10 photos, and UMAP's 15 neighbours count the photo itself, so at least 5 of the other 14 are other people.
+The one clear failure of the default is class accuracy on Olivetti. Its default 10-NN accuracy is `{python} V(default, "Olivetti faces", "kNN accuracy")`, against `{python} V(best, "Olivetti faces", "kNN accuracy")` at UMAP's best setting and `{python} V(orig, "Olivetti faces", "kNN accuracy")` in the original space. Each person has 10 photos, fewer than the 15 neighbours UMAP links each photo to. On k-means ARI, Olivetti's tuning gain is close to wine's.
 
-That alone does not set the threshold. Subsampling digits to a fixed number of images per class finds where the failure starts. Five seeds per row:
+Having fewer points than `n_neighbors` is not enough on its own. Subsampling digits to a fixed number of images per class finds where the failure starts. Five seeds per row:
 
 ```{python}
 #| label: tbl-class-size
@@ -212,11 +220,11 @@ BIG_DIFF = f3(diff.mean().loc[12:].abs().max())
 assert UNANIMOUS == [8, 10] and N_SPLIT == N_BIG, (UNANIMOUS, N_SPLIT, N_BIG)
 ```
 
-At 8 and 10 per class, `n_neighbors=5` beats the default's ARI on all five seeds, by `{python} ARI8_MEAN` and `{python} ARI10_MEAN` on average. At all `{python} N_BIG` larger sizes the seeds disagree on the winner, and the average difference is at most `{python} BIG_DIFF`. Lower `n_neighbors` to about 5 when the groups you care about hold 10 or fewer points. Above that, which setting wins depends on the seed.
+At 8 and 10 per class, `n_neighbors=5` beats the default's ARI on all five seeds, by `{python} ARI8_MEAN` and `{python} ARI10_MEAN` on average. At all `{python} N_BIG` larger sizes the seeds disagree on the winner, and the average difference is at most `{python} BIG_DIFF`. On digits, then, the failure starts at about 10 images per class, not at 15. Lower `n_neighbors` to about 5 when the groups you care about are that small. Above that, which setting wins depends on the seed.
 
 ## Constraints
 
-- **Hindsight overstates tuning.** The best setting is picked on the score it is judged by, averaged over the same seeds. A search that picks on a dev set and is scored on held-out data can at best match it.
+- **Hindsight is an estimate, not a bound.** The best setting is picked on the score it is judged by, from three-seed means. A dev-set search does not see that score. A search that picked a setting per seed would do slightly better, by up to `{python} PERSEED_EXTRA` here.
 - **Euclidean distance on raw features.** MNIST and Fashion-MNIST are scored on raw pixels, PBMC on its 50 components. Another metric or preprocessing changes what counts as a neighbour, for UMAP and for the scores.
 - **Defaults are moving.** umap-learn 0.6.0 warns that its default pipeline will switch to recursive initialisation and the Adam optimiser. That pipeline, at `n_neighbors=15` and `min_dist=0.1`, moves triplet accuracy by `{python} NEW_TRIP_LO` to `{python} NEW_TRIP_HI` and neighbour recall by `{python} NEW_REC_LO` to `{python} NEW_REC_HI`, set by set. On `{python} NEW_OVER_GRID[0]` and `{python} NEW_OVER_GRID[1]` its triplet accuracy beats the best of the 30-setting grid, still short of PCA on all nine sets. The comparison here uses the current pipeline.
 - **Three seeds, nine datasets.** The seed sets the method's randomness, the triplet sample, the cross-validation folds and the k-means start. For MNIST, Fashion-MNIST and the two synthetic sets it also redraws the data.
@@ -230,7 +238,7 @@ Defaults. Fine. Small. Classes. Excepted. Layout. Trails. PCA. Regardless.
 - McInnes, L., Healy, J. & Melville, J. (2018). [UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction](https://arxiv.org/abs/1802.03426).
 - Samaria, F. & Harter, A. (1994). Parameterisation of a stochastic model for human face identification. *Proceedings of the IEEE Workshop on Applications of Computer Vision*, 138–142.
 - van der Maaten, L. & Hinton, G. (2008). [Visualizing Data using t-SNE](https://www.jmlr.org/papers/v9/vandermaaten08a.html).
-- Wang, Y., Huang, H., Rudin, C. & Shaposhnik, Y. (2021). [Understanding How Dimension Reduction Tools Work](https://jmlr.org/papers/v22/20-1061.html). *JMLR* 22(201), 1–73.
+- Wang, Y., Huang, H., Rudin, C. & Shaposhnik, Y. (2021). [Understanding how dimension reduction tools work: an empirical approach to deciphering t-SNE, UMAP, TriMap, and PaCMAP for data visualization](https://jmlr.org/papers/v22/20-1061.html). *Journal of Machine Learning Research* 22(201), 1–73.
 - Xiao, H., Rasul, K. & Vollgraf, R. (2017). [Fashion-MNIST: a novel image dataset for benchmarking machine learning algorithms](https://arxiv.org/abs/1708.07747).
 - [When UMAP Lies, Part 1: The map and the territory](../when-umap-lies/).
 - [When UMAP Lies, Part 5: Nothing to validate against](../when-umap-limits/).
