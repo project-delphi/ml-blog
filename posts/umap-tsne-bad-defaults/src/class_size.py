@@ -50,7 +50,9 @@ def one(m, seed, nn):
     if nn == "original":
         Z = X
     else:
-        Z = umap.UMAP(n_neighbors=nn, random_state=seed, n_jobs=1).fit_transform(X)
+        Z = umap.UMAP(
+            n_neighbors=nn, random_state=seed, n_jobs=1, compatibility_layout=True
+        ).fit_transform(X)
     km = KMeans(10, n_init=10, random_state=seed).fit_predict(Z)
     return dict(
         per_class=m,

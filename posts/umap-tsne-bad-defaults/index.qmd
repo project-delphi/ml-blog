@@ -1,7 +1,7 @@
 ---
 title: "Is Default UMAP Bad?"
 subtitle: "Against 30 of its own settings on nine datasets, tuning buys a few hundredths on class and cluster scores; what UMAP gets wrong, no setting fixes"
-description: "Default UMAP (n_neighbors=15, min_dist=0.1) scored against the best of 30 settings picked with hindsight, PCA, default t-SNE and the original space, on nine real and synthetic datasets with three seeds each. Tuning buys at most a few hundredths on class separation, and on four of the eight sets where tuning moves cluster scores at all, a new seed moves them as far. No setting brings UMAP's global layout up to PCA's, and on eight of nine sets none brings its fine neighbourhoods up to t-SNE's. The one clear failure of the default is classes of about 10 points or fewer."
+description: "Default UMAP (n_neighbors=15, min_dist=0.1) scored against the best of 30 settings picked with hindsight, PCA, default t-SNE and the original space, on nine real and synthetic datasets with three seeds each. Tuning buys at most a few hundredths on class separation, and on four of the eight sets where tuning moves cluster scores at all, single runs of the default with different seeds spread at least that far apart. No setting brings UMAP's global layout up to PCA's, and on eight of nine sets none brings its fine neighbourhoods up to t-SNE's. The one clear failure of the default is classes of about 10 points or fewer."
 author: "Ravi Kalia"
 date: "2026-11-22"
 categories: [Machine Learning, Statistics]
@@ -121,7 +121,7 @@ Labels are used only to score. No method sees them.
 ```{python}
 #| label: fig-verdict
 #| fig-cap: "Grey bar: range of UMAP's 30 settings (mean over three seeds each). Circle: UMAP default. Square: t-SNE default. Diamond: PCA. Tick: the same score in the original space."
-#| fig-alt: "Four panels, one row per dataset. On neighbour recall, class accuracy and k-means ARI the UMAP default circle sits near the right end of the grey settings bar in most rows; on triplet accuracy it sits toward the left end on several. On triplet accuracy the PCA diamond is right of the whole grey bar on all nine datasets; on neighbour recall the t-SNE square is right of the bar on eight."
+#| fig-alt: "Four panels, one row per dataset. On class accuracy and k-means ARI the UMAP default circle sits near the right end of the grey settings bar in most rows; on neighbour recall it sits mid-bar, and on triplet accuracy toward the left end on several. On triplet accuracy the PCA diamond is right of the whole grey bar on all nine datasets; on neighbour recall the t-SNE square is right of the bar on eight."
 PANELS = [
     ("neighbor recall", "Neighbour recall"),
     ("kNN accuracy", "10-NN class accuracy"),
@@ -159,7 +159,7 @@ plt.show()
 The default is not the problem:
 
 - **Class separation is near the ceiling on most sets.** Hindsight tuning raises 10-NN accuracy by at most `{python} KNN_GAIN_MAX` (`{python} KNN_GAIN_WHERE`) on eight of nine sets. The default lands within 0.03 of the accuracy in the original space on `{python} N_KNN_NEAR` of nine, and beats PCA on `{python} N_KNN_PCA`. On MNIST it scores `{python} V(default, "MNIST", "kNN accuracy")` against PCA's `{python} V(pca, "MNIST", "kNN accuracy")`.
-- **Cluster gains are small.** Hindsight tuning raises k-means ARI by at most `{python} ARI_GAIN_HI` outside Olivetti. On `{python} N_SEED_GE` of the `{python} N_MOVED` sets where tuning moves ARI at all, rerunning the default with another seed moves it at least as far. On PBMC the default's three seeds span `{python} f3(runs.min().loc["PBMC 3k", "k-means ARI"])` to `{python} f3(runs.max().loc["PBMC 3k", "k-means ARI"])`.
+- **Cluster gains are small.** Hindsight tuning raises k-means ARI by at most `{python} ARI_GAIN_HI` outside Olivetti. On `{python} N_SEED_GE` of the `{python} N_MOVED` sets where tuning moves ARI at all, single runs of the default with different seeds spread at least that far apart. On PBMC the default's three seeds span `{python} f3(runs.min().loc["PBMC 3k", "k-means ARI"])` to `{python} f3(runs.max().loc["PBMC 3k", "k-means ARI"])`.
 
 The method is the problem:
 
@@ -175,33 +175,35 @@ Subsampling digits to a fixed number of images per class tests that reading. Fiv
 
 ```{python}
 #| label: tbl-class-size
-#| tbl-cap: "Digits subsampled to m images per class. k-means ARI on UMAP maps at n_neighbors = 5 and 15, and on the original 64 pixels. Mean over five seeds."
+#| tbl-cap: "Digits subsampled to m images per class. k-means ARI on UMAP maps at n_neighbors = 5 and 15, and on the original 64 pixels, as a mean over five seeds; and on how many of the five seeds n_neighbors = 5 scores higher."
+w = CS.pivot_table(index=["per_class", "seed"], columns="n_neighbors", values="ari")
+wins = ((w["5"] - w["15"]) > 0).groupby(level=0).sum()
 t = CS.groupby(["per_class", "n_neighbors"])["ari"].mean().unstack()
 t = t[["5", "15", "original"]].map(f3)
 t.columns = ["nn = 5", "nn = 15", "data"]
+t["nn = 5 wins"] = wins.astype(int).astype(str) + " / 5"
 t.index.name = "m per class"
 Markdown(t.reset_index().to_markdown(index=False, disable_numparse=True))
 ```
 
 ```{python}
 #| echo: false
-w = CS.pivot_table(index=["per_class", "seed"], columns="n_neighbors", values="ari")
-d8 = (w["5"] - w["15"]).loc[8]
-N8_POS, ARI8_MEAN = int((d8 > 0).sum()), f3(d8.mean())
-_big = (w["5"] - w["15"]).groupby(level=0).mean().loc[12:]
-BIG_DIFF = f3(_big.abs().max())
-_spread = w["15"].groupby(level=0).agg(lambda v: v.max() - v.min()).loc[12:]
-SPREAD_LO, SPREAD_HI = f3(_spread.min()), f3(_spread.max())
+# One test at every size: do all five paired seeds agree on the winner?
+diff = (w["5"] - w["15"]).groupby(level=0)
+N8_POS, ARI8_MEAN = int(wins.loc[8]), f3(diff.mean().loc[8])
+_big = wins.loc[12:]
+N_BIG, N_SPLIT = len(_big), int(((_big > 0) & (_big < 5)).sum())
+BIG_DIFF = f3(diff.mean().loc[12:].abs().max())
 ```
 
-At 8 per class, `n_neighbors=5` beats the default's ARI on `{python} N8_POS` of five seeds, by `{python} ARI8_MEAN` on average. From 12 per class up, the two settings differ by at most `{python} BIG_DIFF` on average, less than the default's own spread over five seeds (`{python} SPREAD_LO` to `{python} SPREAD_HI`). Lower `n_neighbors` to about 5 when the groups you care about hold 10 or fewer points. Above that, the setting moves ARI less than a reseed does.
+At 8 per class, `n_neighbors=5` beats the default's ARI on `{python} N8_POS` of five seeds, by `{python} ARI8_MEAN` on average. At `{python} N_SPLIT` of the `{python} N_BIG` larger sizes the seeds disagree on the winner, and the average difference is at most `{python} BIG_DIFF`. Lower `n_neighbors` to about 5 when the groups you care about hold 10 or fewer points. Above that, which setting wins depends on the seed.
 
 ## Constraints
 
 - **Hindsight overstates tuning.** The best setting is picked on the score it is judged by, averaged over the same seeds. A dev-set search, which [Part 5](../when-umap-limits/) runs, buys less.
 - **Euclidean distance on raw features.** MNIST and Fashion-MNIST are scored on raw pixels, PBMC on its 50 components. Another metric or preprocessing changes what counts as a neighbour, for UMAP and for the scores.
 - **Defaults are moving.** umap-learn 0.6.0 warns that its default pipeline will switch to recursive initialisation and the Adam optimiser. That pipeline, at `n_neighbors=15` and `min_dist=0.1`, raises triplet accuracy on `{python} N_NEW_TRIP` of nine sets and lowers neighbour recall on `{python} N_NEW_REC`. The comparison here uses the current pipeline.
-- **Three seeds, nine datasets.** MNIST and Fashion-MNIST change their draw per seed; the other real sets change only the method's seed.
+- **Three seeds, nine datasets.** The seed sets the method's randomness, the triplet sample, the cross-validation folds and the k-means start. For MNIST, Fashion-MNIST and the two synthetic sets it also redraws the data.
 - **Held-out points are a separate question.** Whether a map places new points correctly, and why no held-out loss exists to choose a setting, is [Part 5](../when-umap-limits/).
 
 Defaults. Fine. Small. Classes. Excepted. Layout. Trails. PCA. Regardless.
