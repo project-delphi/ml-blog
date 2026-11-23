@@ -1,12 +1,12 @@
 ---
-title: "Neighbors Right, Picture Wrong"
-subtitle: "On a train/dev/test split, UMAP and t-SNE place held-out points beside their own kind; the arrangement of the groups they draw is arbitrary, and no held-out loss can catch it"
-description: "Five clustering datasets split into train, dev and test sets, with PCA, UMAP and t-SNE fitted on train only. UMAP and t-SNE keep more held-out neighbors and classify held-out points better than PCA, but PCA wins the class-centroid distance correlation on three of five sets — the metric an elephant-shaped fake also passes. Dev-set tuning buys at most 0.003 on test. Neither method has a reconstruction loss or any comparable held-out value, so no setting can be chosen and no failure can be flagged."
+title: "Is Default UMAP Bad?"
+subtitle: "Against 30 of its own settings on nine datasets, the default sits near the top; what UMAP gets wrong, no setting fixes"
+description: "Default UMAP (n_neighbors=15, min_dist=0.1) scored against the best of 30 settings picked with hindsight, PCA, default t-SNE and the original space, on nine real and synthetic datasets with three seeds each. Tuning buys at most a few hundredths on class separation, and a new seed moves cluster scores as far as the best setting does. No setting brings UMAP's global layout up to PCA's or its fine neighbourhoods up to t-SNE's. The one clear failure of the default is classes smaller than n_neighbors."
 author: "Ravi Kalia"
 date: "2026-11-22"
 categories: [Machine Learning, Statistics]
 image: "./cover.png"
-tags: [UMAP, t-SNE, PCA, clustering, train-dev-test, elephant, validation, hyperparameters]
+tags: [UMAP, t-SNE, PCA, defaults, hyperparameters, n_neighbors, min_dist, clustering, triplet accuracy, MNIST, PBMC]
 jupyter: umap-tsne-blog
 resources:
   - requirements.txt
@@ -19,253 +19,192 @@ execute:
   warning: false
 ---
 
-![Neighbors Right, Picture Wrong](./cover.png)
+![Is Default UMAP Bad?](./cover.png)
 
-This post splits five clustering datasets into train, dev and test sets, fits PCA, UMAP and t-SNE on the training points only, and asks which parts of the resulting picture survive on points the fit never saw.
+Most UMAP plots come from `umap.UMAP().fit_transform(X)`, with `n_neighbors=15`, `min_dist=0.1` and nothing tuned. The common worry is that those defaults are bad and a search over settings would fix the picture. If so, some setting should beat the default by a clear margin on the same data. This post checks that on nine datasets.
 
-A held-out point is the simplest check a map can face: a new cell or digit should land beside its own kind. UMAP and t-SNE pass it. The part of the picture people actually read — which groups sit near which, and how far apart — is the part the check cannot see.
-
-## The split
-
-Five datasets, all offline and deterministic:
-
-- **PBMC 3k**: 2,638 cells in 50 principal components with eight annotated types, from the 10x Genomics PBMC tutorial, cached in this repo's [When UMAP Lies series](../when-umap-lies/). Real single-cell data; a wrong grouping changes a cell-type call.
-- **Digits**: 1,797 8×8 handwritten digits in ten classes, scikit-learn's loader. MNIST at lower resolution, where the methods are usually shown at their best.
-- **Noisy clusters**: 3,000 points, five Gaussian clusters in five dimensions plus 45 noise dimensions. Stands in for real data where a small signal sits in a large feature space; a method that follows the noise has found nothing useful.
-- **Branched trajectory**: 3,000 points along a trunk that splits into four branches, in 20 dimensions. Stands in for a differentiation path where branch identity and the shared trunk are both real structure.
-- **Nested clusters**: 3,000 points, three broad groups each holding three subgroups, in 20 dimensions. Stands in for a hierarchy with genuine structure at two scales.
-
-Each set is split by stratified sampling into 60% train, 20% dev and 20% test. Scaling uses training statistics only. Every method is fitted on the training points alone; dev and test points are placed afterwards with `transform`.
-
-Three scores read the map:
-
-- **Held-out neighbor recall**: of a test point's ten nearest neighbors in the original space, the fraction that are also among its ten nearest training points on the map.
-- **Held-out 10-NN accuracy**: majority vote of a test point's ten nearest training points on the map, scored against its label.
-- **Centroid distance correlation**: Spearman correlation between pairwise distances of class centroids in the original space and in the full 2-D map. This is the distance metric that an [elephant-shaped fake passes](../when-umap-lies/).
-
-PCA also reports a squared reconstruction error on held-out points. UMAP and t-SNE report no comparable value.
+Short answer: no. Hindsight tuning buys a few hundredths on most scores, and where UMAP is weak, its best setting is weak too.
 
 ```{python}
 #| label: setup
 #| echo: false
-import warnings
-warnings.filterwarnings("ignore")
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from IPython.display import display
-from scipy.spatial.distance import cdist, pdist
-from scipy.stats import spearmanr
-from sklearn.datasets import load_digits as sk_load_digits, make_blobs
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
-import umap
-from openTSNE import TSNE
+from IPython.display import Markdown
 
-SEED = 42
-K = 10
-COLOURS = {"PCA": "#4c72b0", "UMAP": "#55a868", "t-SNE": "#dd8452"}
+S = pd.read_parquet("cache/scores.parquet")
+CS = pd.read_parquet("cache/class_size.parquet")
 
+ORDER = [
+    "PBMC 3k", "MNIST", "Fashion-MNIST", "digits", "Olivetti faces",
+    "wine", "breast cancer", "noisy clusters", "nested clusters",
+]
+COLS = ["neighbor recall", "kNN accuracy", "k-means ARI", "triplet accuracy", "centroid rho"]
+INK, MUTED, RULE = "#1F2430", "#5F6672", "#D8DBE2"
+C_UMAP, C_TSNE, C_PCA = "#4A3AA7", "#9A5B00", "#009E73"
 
-def load_pbmc():
-    d = np.load("../when-umap-lies/cache/elephant/pbmc_reference.npz", allow_pickle=True)
-    return d["X"].astype(np.float32), d["labels"].astype(int), "PBMC 3k"
-
-def load_digits():
-    d = sk_load_digits()
-    return d["data"].astype(np.float32), d["target"].astype(int), "digits"
-
-def load_noisy_clusters():
-    rs = 1234
-    X, y = make_blobs(n_samples=3000, centers=5, n_features=5,
-                      cluster_std=1.0, random_state=rs)
-    noise = np.random.RandomState(rs + 1).normal(0, 3, size=(3000, 45))
-    return np.hstack([X, noise]).astype(np.float32), y.astype(int), "noisy clusters"
-
-def load_branched():
-    rs = np.random.RandomState(7)
-    n, d, nbranch = 3000, 20, 4
-    B = np.linalg.qr(rs.randn(nbranch, d).T)[0][:, :nbranch].T
-    trunk = B.mean(0)
-    trunk /= np.linalg.norm(trunk)
-    y = rs.randint(0, nbranch, size=n)
-    s = rs.rand(n)
-    X = np.zeros((n, d), dtype=np.float32)
-    for i in range(n):
-        pos = trunk * (s[i] * 8.0) if s[i] < 0.5 else trunk * 4.0 + B[y[i]] * ((s[i] - 0.5) * 10.0)
-        X[i] = pos
-    X += rs.normal(0, 0.6, size=(n, d)).astype(np.float32)
-    return X, y.astype(int), "branched"
-
-def load_nested():
-    rs = np.random.RandomState(99)
-    n, d = 3000, 20
-    big = rs.randn(3, d) * 5.0
-    sub_off = rs.randn(3, 3, d) * 1.5
-    y = np.repeat(np.arange(3), n // 3)
-    X = np.zeros((n, d), dtype=np.float32)
-    for b in range(3):
-        for j, grp in enumerate(np.array_split(np.flatnonzero(y == b), 3)):
-            X[grp] = big[b] + sub_off[b, j] + rs.normal(0, 0.5, size=(len(grp), d))
-    return X, y.astype(int), "nested clusters"
-
-DATASETS = [load_pbmc, load_digits, load_noisy_clusters, load_branched, load_nested]
+# Mean over three seeds for every (dataset, setting); "best" is chosen with hindsight
+# on the score itself, so best - default is the most any tuning could buy.
+grid = S[S.method == "UMAP"].groupby(["dataset", "n_neighbors", "min_dist"])[COLS].mean()
+default = grid.xs((15.0, 0.1), level=("n_neighbors", "min_dist")).reindex(ORDER)
+best = grid.groupby("dataset").max().reindex(ORDER)
+worst = grid.groupby("dataset").min().reindex(ORDER)
+ref = S[S.method != "UMAP"].groupby(["method", "dataset"])[COLS].mean()
+pca, tsne = ref.loc["PCA"].reindex(ORDER), ref.loc["t-SNE"].reindex(ORDER)
+orig = ref.loc["original space"].reindex(ORDER)
+new = ref.loc["UMAP 0.6 layout"].reindex(ORDER)
+gain = best - default
+runs = S[(S.method == "UMAP") & (S.n_neighbors == 15) & (S.min_dist == 0.1)].groupby("dataset")[COLS]
+seed_range = (runs.max() - runs.min()).reindex(ORDER)
 
 
-def split(X, y):
-    Xtr, Xtmp, ytr, ytmp = train_test_split(
-        X, y, test_size=0.2, stratify=y, random_state=SEED
-    )
-    Xdev, Xte, ydev, yte = train_test_split(
-        Xtmp, ytmp, test_size=0.5, stratify=ytmp, random_state=SEED
-    )
-    sc = StandardScaler().fit(Xtr)
-    return (sc.transform(Xtr).astype(np.float32), sc.transform(Xdev).astype(np.float32),
-            sc.transform(Xte).astype(np.float32), ytr, ydev, yte)
+def f3(x):
+    return f"{x:.3f}"
 
 
-def knn_acc(Ztr, ytr, Ze, ye, k=K):
-    idx = np.argpartition(cdist(Ze, Ztr), k - 1, axis=1)[:, :k]
-    preds = np.empty(len(ye), dtype=int)
-    for i, row in enumerate(ytr[idx]):
-        vals, cnts = np.unique(row, return_counts=True)
-        preds[i] = vals[np.argmax(cnts)]
-    return float((preds == ye).mean())
-
-
-def neighbor_recall(Xtr, Ztr, Xe, Ze, k=K):
-    io = np.argpartition(cdist(Xe, Xtr), k - 1, axis=1)[:, :k]
-    ie = np.argpartition(cdist(Ze, Ztr), k - 1, axis=1)[:, :k]
-    return float(sum(len(set(a) & set(b)) for a, b in zip(io, ie)) / (len(Xe) * k))
-
-
-def centroid_rho(Xfull, yfull, Zfull):
-    cls = np.unique(yfull)
-    co = np.array([Xfull[yfull == c].mean(0) for c in cls])
-    ce = np.array([Zfull[yfull == c].mean(0) for c in cls])
-    return float(spearmanr(pdist(co), pdist(ce)).statistic)
-
-
-def embed(Xtr, Xdev, Xte, method, **kw):
-    if method == "PCA":
-        m = PCA(n_components=2, random_state=0).fit(Xtr)
-        return [m.transform(Z) for Z in (Xtr, Xdev, Xte)]
-    if method == "UMAP":
-        m = umap.UMAP(n_components=2, random_state=0, n_jobs=1, **kw)
-        Ztr = m.fit_transform(Xtr)
-        return [Ztr, m.transform(Xdev), m.transform(Xte)]
-    e = TSNE(n_components=2, random_state=0, **kw).fit(Xtr)
-    return [np.asarray(e), np.asarray(e.transform(Xdev)), np.asarray(e.transform(Xte))]
+rest = [d for d in ORDER if d != "Olivetti faces"]
+KNN_GAIN_MAX = f3(gain.loc[rest, "kNN accuracy"].max())
+KNN_GAIN_WHERE = gain.loc[rest, "kNN accuracy"].idxmax()
+ARI_GAIN_HI = f3(gain.loc[rest, "k-means ARI"].max())
+N_SEED_GE = int((seed_range["k-means ARI"] >= gain["k-means ARI"]).sum())
+N_KNN_NEAR = int(((default["kNN accuracy"] - orig["kNN accuracy"]).abs() <= 0.03).sum())
+N_KNN_PCA = int((default["kNN accuracy"] > pca["kNN accuracy"]).sum())
+N_TRIP_PCA = int((pca["triplet accuracy"] > best["triplet accuracy"]).sum())
+# Centroid correlation needs enough classes to rank: these six have 8 to 40.
+many = ["PBMC 3k", "MNIST", "Fashion-MNIST", "digits", "Olivetti faces", "nested clusters"]
+N_CENT, N_CENT_PCA = len(many), int((pca.loc[many, "centroid rho"] > best.loc[many, "centroid rho"]).sum())
+N_REC_TSNE = int((tsne["neighbor recall"] > best["neighbor recall"]).sum())
+N_NEW_TRIP = int((new["triplet accuracy"] > default["triplet accuracy"]).sum())
+N_NEW_REC = int((new["neighbor recall"] < default["neighbor recall"]).sum())
+V = lambda frame, d, c: f3(frame.loc[d, c])  # noqa: E731
 ```
 
+## Test
+
+Nine datasets, each run with three seeds:
+
+- **PBMC 3k**: 2,638 blood cells in 50 principal components, eight annotated cell types, from the 10x Genomics tutorial cached in [Part 1 of When UMAP Lies](../when-umap-lies/). A wrong grouping here is a wrong cell-type call.
+- **MNIST** and **Fashion-MNIST**: 10,000 images drawn from each 70,000-image set (LeCun et al. 1998; Xiao et al. 2017, via OpenML), raw pixels. A new draw per seed. These are the sets UMAP is usually shown on.
+- **Digits**: 1,797 8×8 handwritten digits, scikit-learn's loader.
+- **Olivetti faces**: 400 photos, 40 people with 10 each, taken at AT&T Laboratories Cambridge (Samaria & Harter 1994). The only set where a class holds fewer points than `n_neighbors`.
+- **Wine** (178 wines, three cultivars) and **breast cancer** (569 Wisconsin biopsies, benign or malignant): small tabular sets, standardised.
+- **Noisy clusters**: synthetic, five Gaussian clusters in 5 dimensions plus 45 noise dimensions. Stands in for a weak signal in a wide feature table.
+- **Nested clusters**: synthetic, three groups of three subgroups in 20 dimensions, labelled by subgroup. Stands in for a hierarchy, such as lineages and their subtypes.
+
+Methods:
+
+- **UMAP default**: `n_neighbors=15`, `min_dist=0.1`, umap-learn 0.6.0.
+- **UMAP grid**: `n_neighbors` ∈ {5, 10, 15, 30, 50, 100} × `min_dist` ∈ {0, 0.1, 0.25, 0.5, 0.99}, 30 settings. The best setting is picked with hindsight on the score being reported. That is the most tuning could ever buy; a real dev-set search buys less.
+- **PCA**, two components, and **t-SNE** at openTSNE's defaults (perplexity 30, PCA initialisation).
+- **Original space**: the same scores on the data itself, where they apply.
+
+Four scores, one per thing a reader takes from a map:
+
+- **Neighbour recall**: the fraction of each point's 10 nearest neighbours in the data that are also its 10 nearest on the map.
+- **10-NN class accuracy**: 5-fold cross-validated accuracy of a 10-nearest-neighbour vote on the map. Are classes kept apart?
+- **k-means ARI**: adjusted Rand index of k-means with the true class count, run on the map. Do the clusters you would draw match the labels?
+- **Triplet accuracy**: for 20,000 random triplets (i, j, k), how often the map agrees with the data on whether j or k is closer to i (Wang et al. 2021). Is the global layout right?
+
+Labels are used only to score. No method sees them.
+
+## Results
+
 ```{python}
-#| label: fig-heldout
-#| fig-cap: "Two of the three scores, by dataset and method. Held-out neighbor recall rewards local structure; class-centroid distance correlation rewards the global arrangement. UMAP and t-SNE win the first on every set; on the second, PCA wins three of five."
-rows, table, recon, short = {}, [], {}, []
-for loader in DATASETS:
-    X, y, name = loader()
-    Xtr, Xdev, Xte, ytr, ydev, yte = split(X, y)
-    Xfull = np.vstack([Xtr, Xdev, Xte])
-    yfull = np.concatenate([ytr, ydev, yte])
-    scores = {}
-    for method in ("PCA", "UMAP", "t-SNE"):
-        Ztr, Zdev, Zte = embed(Xtr, Xdev, Xte, method)
-        scores[method] = (
-            knn_acc(Ztr, ytr, Zte, yte),
-            neighbor_recall(Xtr, Ztr, Xte, Zte),
-            centroid_rho(Xfull, yfull, np.vstack([Ztr, Zdev, Zte])),
-        )
-    p = PCA(n_components=2, random_state=0).fit(Xtr)
-    recon[name] = float(((Xte - p.inverse_transform(p.transform(Xte))) ** 2).mean())
-    short.append(name)
-    for label, idx in (("10-NN accuracy", 0), ("neighbor recall", 1), ("centroid rho", 2)):
-        table.append({"dataset": name, "score": label,
-                      **{m: round(scores[m][idx], 3) for m in ("PCA", "UMAP", "t-SNE")}})
-    rows[name] = scores
-
-display(pd.DataFrame(table))
-display(pd.Series(recon, name="PCA held-out reconstruction MSE").round(3).to_frame())
-
-fig, axes = plt.subplots(1, 2, figsize=(12, 4.2))
-for ax, (title, idx) in zip(axes, [("Held-out neighbor recall", 1), ("Centroid distance correlation", 2)]):
-    x = np.arange(len(short))
-    for i, (m, colour) in enumerate(COLOURS.items()):
-        ax.bar(x + (i - 1) * 0.26, [rows[n][m][idx] for n in short], 0.26,
-               label=m, color=colour)
-    ax.axhline(0, color="black", linewidth=0.8)
-    ax.set_xticks(x)
-    ax.set_xticklabels(short, rotation=30, ha="right")
-    ax.set_title(title)
-    ax.spines[["top", "right"]].set_visible(False)
-fig.legend(*axes[0].get_legend_handles_labels(), loc="upper center",
-           bbox_to_anchor=(0.5, 1.02), ncol=3, frameon=False)
-fig.tight_layout(rect=(0, 0, 1, 0.93))
-fig.savefig("figures/heldout.png", dpi=150, bbox_inches="tight")
+#| label: fig-verdict
+#| fig-cap: "Grey bar: range of UMAP's 30 settings (mean over three seeds each). Circle: UMAP default. Square: t-SNE default. Diamond: PCA. Tick: the same score in the original space."
+#| fig-alt: "Four panels, one row per dataset. The UMAP default circle sits near the right end of the grey settings bar in most rows. On triplet accuracy the PCA diamond is right of the whole grey bar on all nine datasets; on neighbour recall the t-SNE square is right of the bar on eight."
+PANELS = [
+    ("neighbor recall", "Neighbour recall"),
+    ("kNN accuracy", "10-NN class accuracy"),
+    ("k-means ARI", "k-means ARI"),
+    ("triplet accuracy", "Triplet accuracy"),
+]
+fig, axes = plt.subplots(2, 2, figsize=(10, 7.2), sharey=True)
+y = np.arange(len(ORDER))
+for ax, (col, title) in zip(axes.flat, PANELS):
+    ax.hlines(y, worst[col], best[col], color=RULE, lw=7, zorder=1, label="UMAP, 30 settings")
+    if col in ("kNN accuracy", "k-means ARI"):
+        ax.scatter(orig[col], y, marker="|", s=160, color=INK, lw=1.6, zorder=2,
+                   label="Original space")
+    ax.scatter(pca[col], y, marker="D", s=34, color=C_PCA, zorder=3, label="PCA")
+    ax.scatter(tsne[col], y, marker="s", s=34, color=C_TSNE, zorder=3, label="t-SNE default")
+    ax.scatter(default[col], y, marker="o", s=46, color=C_UMAP, edgecolor="white", lw=0.8,
+               zorder=4, label="UMAP default")
+    ax.set_title(title, color=INK, fontsize=11, loc="left")
+    ax.set_yticks(y, ORDER)
+    ax.tick_params(colors=MUTED, labelsize=9)
+    ax.spines[["top", "right", "left"]].set_visible(False)
+    ax.spines["bottom"].set_color(RULE)
+    ax.grid(axis="x", color=RULE, lw=0.6)
+    ax.set_axisbelow(True)
+axes[0, 0].invert_yaxis()
+handles, labels = axes[0, 1].get_legend_handles_labels()
+fig.legend(handles, labels, loc="upper center", ncol=5, frameon=False, fontsize=9,
+           bbox_to_anchor=(0.5, 1.0))
+fig.tight_layout(rect=(0, 0, 1, 0.95))
+Path("figures").mkdir(exist_ok=True)
+fig.savefig("figures/verdict.png", dpi=150, bbox_inches="tight")
 plt.show()
 ```
 
-Three results stand out:
+The default is not the problem:
 
-- **Local structure holds.** UMAP and t-SNE keep more of a held-out point's original neighbors on all five sets: on PBMC, t-SNE keeps 0.168 and UMAP 0.045 against PCA's 0.009; on digits, 0.507 and 0.419 against 0.133. Held-out 10-NN accuracy beats PCA on four sets for UMAP and three for t-SNE; on noisy clusters t-SNE falls to 0.917 against PCA's 0.930, and all three reach 1.000 on nested clusters.
-- **Global structure does not.** PCA wins centroid distance correlation on three of five sets: on PBMC it scores 0.831 against UMAP's 0.214 and t-SNE's 0.248; on nested clusters 1.000 against 0.500 and −1.000.
-- **The metric an elephant passes is the one they lose.** Chari and Pachter put cells on an elephant silhouette and found it matched UMAP and t-SNE on distance metrics ([Part 1](../when-umap-lies/)). Centroid correlation is that kind of metric, and UMAP and t-SNE lose it to PCA here.
+- **Class separation is already at the ceiling.** Hindsight tuning raises 10-NN accuracy by at most `{python} KNN_GAIN_MAX` (`{python} KNN_GAIN_WHERE`) on eight of nine sets. The default lands within 0.03 of the accuracy in the original space on `{python} N_KNN_NEAR` of nine, and beats PCA on `{python} N_KNN_PCA`. On MNIST it scores `{python} V(default, "MNIST", "kNN accuracy")` against PCA's `{python} V(pca, "MNIST", "kNN accuracy")`.
+- **Cluster gains are small.** Hindsight tuning raises k-means ARI by at most `{python} ARI_GAIN_HI` outside Olivetti. On `{python} N_SEED_GE` of nine sets, rerunning the default with another seed moves ARI at least as far as the best setting does. On PBMC the default's three seeds span `{python} f3(runs.min().loc["PBMC 3k", "k-means ARI"])` to `{python} f3(runs.max().loc["PBMC 3k", "k-means ARI"])`.
 
-## No loss to choose
+The method is the problem:
 
-The routine of fitting on train, choosing on dev and confirming on test needs a score that ranks settings against a fixed target. PCA supplies one: squared reconstruction error on held-out points, 0.969 on PBMC and 1.258 on digits, computed against the same data for every number of components. UMAP and t-SNE supply none, so the nearest substitute is a held-out score of neighbor keeping.
+- **The global layout trails PCA at every setting.** PCA beats UMAP's best setting on triplet accuracy on `{python} N_TRIP_PCA` of nine sets: `{python} V(pca, "nested clusters", "triplet accuracy")` against `{python} V(best, "nested clusters", "triplet accuracy")` on nested clusters, `{python} V(pca, "Fashion-MNIST", "triplet accuracy")` against `{python} V(best, "Fashion-MNIST", "triplet accuracy")` on Fashion-MNIST. On the rank correlation of class-centroid distances, PCA beats every setting on `{python} N_CENT_PCA` of the `{python} N_CENT` sets with eight or more classes; on PBMC both sit near `{python} V(pca, "PBMC 3k", "centroid rho")`.
+- **t-SNE keeps more fine neighbours at every setting.** Default t-SNE beats UMAP's best setting on neighbour recall on `{python} N_REC_TSNE` of nine sets.
+- **Clustering the map can lose structure the data had.** On PBMC, k-means on the 50 components scores `{python} V(orig, "PBMC 3k", "k-means ARI")`, on the default map `{python} V(default, "PBMC 3k", "k-means ARI")`, and on UMAP's best setting `{python} V(best, "PBMC 3k", "k-means ARI")`. On MNIST the map helps: `{python} V(default, "MNIST", "k-means ARI")` against `{python} V(orig, "MNIST", "k-means ARI")` on raw pixels.
+
+## Small classes
+
+The one clear failure of the default is Olivetti. Its default 10-NN accuracy is `{python} V(default, "Olivetti faces", "kNN accuracy")`, against `{python} V(best, "Olivetti faces", "kNN accuracy")` at UMAP's best setting and `{python} V(orig, "Olivetti faces", "kNN accuracy")` in the original space. Each person has 10 photos, so at least 6 of a photo's 15 graph neighbours are other people.
+
+Subsampling digits to a fixed number of images per class tests that reading. Five seeds per row:
 
 ```{python}
-#| label: dev-choice
-choices = []
-for dataset in (load_digits, load_noisy_clusters):
-    X, y, name = dataset()
-    Xtr, Xdev, Xte, ytr, ydev, yte = split(X, y)
-    Ztr_def, _, Zte_def = embed(Xtr, Xdev, Xte, "UMAP")
-    default_umap = knn_acc(Ztr_def, ytr, Zte_def, yte)
-    Ztr_def, _, Zte_def = embed(Xtr, Xdev, Xte, "t-SNE")
-    default_tsne = knn_acc(Ztr_def, ytr, Zte_def, yte)
-
-    for method, grid in (
-        ("UMAP", [(nn, md) for nn in (5, 15, 50, 100) for md in (0.0, 0.1, 0.5, 0.99)]),
-        ("t-SNE", [(p,) for p in (5, 10, 30, 50)]),
-    ):
-        best = (-1, None)
-        for setting in grid:
-            kw = ({"n_neighbors": setting[0], "min_dist": setting[1]}
-                  if method == "UMAP" else {"perplexity": setting[0]})
-            Ztr, Zdev, _ = embed(Xtr, Xdev, Xte, method, **kw)
-            acc = knn_acc(Ztr, ytr, Zdev, ydev)
-            if acc > best[0]:
-                best = (acc, setting)
-        dev_acc, setting = best
-        Ztr_winner, _, Zte_best = embed(Xtr, Xdev, Xte, method, **dict(
-            n_neighbors=setting[0], min_dist=setting[1]) if method == "UMAP"
-            else dict(perplexity=setting[0]))
-        test_acc = knn_acc(Ztr_winner, ytr, Zte_best, yte)
-        default = default_umap if method == "UMAP" else default_tsne
-        choices.append({"dataset": name, "method": method, "dev winner": str(setting),
-                        "dev acc": round(dev_acc, 3), "test acc": round(test_acc, 3),
-                        "default test": round(default, 3),
-                        "gain": round(test_acc - default, 3)})
-display(pd.DataFrame(choices))
+#| label: tbl-class-size
+#| tbl-cap: "Digits subsampled to m images per class. Leave-one-out 1-NN accuracy and k-means ARI on UMAP maps at three n_neighbors values, and in the original 64 pixels. Mean over five seeds."
+t = CS.groupby(["per_class", "n_neighbors"])[["nn_accuracy", "ari"]].mean().unstack()
+cols = [("nn_accuracy", "5"), ("nn_accuracy", "15"), ("nn_accuracy", "original"),
+        ("ari", "5"), ("ari", "15"), ("ari", "original")]
+t = t[cols].map(f3)
+t.columns = ["1-NN, nn=5", "1-NN, nn=15", "1-NN, data", "ARI, nn=5", "ARI, nn=15", "ARI, data"]
+t.index.name = "m per class"
+Markdown(t.reset_index().to_markdown(index=False, disable_numparse=True))
 ```
 
-Picking the best setting on dev buys at most 0.003 on test, and on digits the t-SNE winner scores 0.972 against the default's 0.978. The default is already as good as the search.
+```{python}
+#| echo: false
+w = CS.pivot_table(index=["per_class", "seed"], columns="n_neighbors", values="ari")
+d8 = (w["5"] - w["15"]).loc[8]
+N8_POS, ARI8_LO, ARI8_HI = int((d8 > 0).sum()), f3(d8.min()), f3(d8.max())
+```
 
-With no held-out loss, every value of `n_neighbors`, `min_dist` and perplexity produces a valid map, and the dev score itself has a neighborhood size to set. No target stays fixed across settings, so a dev set cannot choose one, and a test set has nothing to confirm. The local win is real, but it is a win about which points sit together — not about the picture drawn around them, and not about a map you could check on new data.
+At 8 per class, `n_neighbors=5` beats the default's ARI on `{python} N8_POS` of five seeds, by `{python} ARI8_LO` to `{python} ARI8_HI`. From 12 per class up the two settings trade places from seed to seed. Lower `n_neighbors` to about 5 when the groups you care about hold 10 or fewer points. Otherwise leave it alone.
 
 ## Constraints
 
-The local result is not in doubt: on these splits, UMAP and especially t-SNE place held-out points beside their own kind better than 2-D PCA. The claim here is narrower — the global arrangement those points inherit is not validated by anything in the fit. Centroid correlation over eight PBMC classes is sensitive to the two small classes, and t-SNE's out-of-sample placement is openTSNE's interpolation with its own settings, not a function learned by the fit. Five datasets and one split seed do not settle every dataset.
+- **Hindsight overstates tuning.** The best setting is picked on the score it is judged by, averaged over the same seeds. A dev-set search, which [Part 5](../when-umap-limits/) runs, buys less.
+- **Euclidean distance on raw features.** MNIST and Fashion-MNIST are scored on raw pixels, PBMC on its 50 components. Another metric or preprocessing changes what counts as a neighbour, for UMAP and for the scores.
+- **Defaults are moving.** umap-learn 0.6.0 warns that its default pipeline will switch to recursive initialisation and the Adam optimiser. That pipeline, at `n_neighbors=15` and `min_dist=0.1`, raises triplet accuracy on `{python} N_NEW_TRIP` of nine sets and lowers neighbour recall on `{python} N_NEW_REC`. The comparison here uses the current pipeline.
+- **Three seeds, nine datasets.** MNIST and Fashion-MNIST change their draw per seed; the other real sets change only the method's seed.
+- **Held-out points are a separate question.** Whether a map places new points correctly, and why no held-out loss exists to choose a setting, is [Part 5](../when-umap-limits/).
 
-Near. Right. Far. Wrong. Held. Out. No. Loss. No. Check.
+Defaults. Fine. Small. Classes. Excepted. Layout. Trails. PCA. Regardless.
 
 ## References
 
-- Chari, T. & Pachter, L. (2023). [The specious art of single-cell genomics](https://doi.org/10.1371/journal.pcbi.1011288). *PLOS Computational Biology* 19(8), e1011288.
-- Lause, J., Berens, P. & Kobak, D. (2024). [The art of seeing the elephant in the room: 2D embeddings of single-cell data do make sense](https://doi.org/10.1371/journal.pcbi.1012403). *PLOS Computational Biology* 20(10), e1012403.
+- LeCun, Y., Bottou, L., Bengio, Y. & Haffner, P. (1998). [Gradient-based learning applied to document recognition](https://doi.org/10.1109/5.726791). *Proceedings of the IEEE* 86(11), 2278–2324.
 - McInnes, L., Healy, J. & Melville, J. (2018). [UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction](https://arxiv.org/abs/1802.03426).
+- Samaria, F. & Harter, A. (1994). Parameterisation of a stochastic model for human face identification. *Proceedings of the IEEE Workshop on Applications of Computer Vision*, 138–142.
 - van der Maaten, L. & Hinton, G. (2008). [Visualizing Data using t-SNE](https://www.jmlr.org/papers/v9/vandermaaten08a.html).
+- Wang, Y., Huang, H., Rudin, C. & Shaposhnik, Y. (2021). [Understanding How Dimension Reduction Tools Work](https://jmlr.org/papers/v22/20-1061.html). *JMLR* 22(201), 1–73.
+- Xiao, H., Rasul, K. & Vollgraf, R. (2017). [Fashion-MNIST: a novel image dataset for benchmarking machine learning algorithms](https://arxiv.org/abs/1708.07747).
 - [When UMAP Lies, Part 1: The map and the territory](../when-umap-lies/).
+- [When UMAP Lies, Part 5: Nothing to validate against](../when-umap-limits/).
