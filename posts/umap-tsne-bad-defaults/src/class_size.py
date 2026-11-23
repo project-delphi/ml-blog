@@ -2,8 +2,9 @@
 
 Subsamples scikit-learn's digits to m images per class and scores UMAP maps at
 n_neighbors 5 and 15 against the original pixels, on k-means ARI and on 5-fold
-10-NN class accuracy (the scores the main results use). Writes
-cache/class_size.parquet.
+3-NN class accuracy. The main results vote with 10 neighbours; at 8 per class a
+training fold holds only about 6 points per class, which would cap a 10-NN vote,
+so this test uses 3. Writes cache/class_size.parquet.
 
     ../../.venv-umap-tsne/bin/python src/class_size.py
 """
@@ -55,7 +56,7 @@ def one(m, seed, nn):
         n_neighbors=str(nn),
         ari=adjusted_rand_score(y, km),
         knn_accuracy=cross_val_score(
-            KNeighborsClassifier(10),
+            KNeighborsClassifier(3),
             Z,
             y,
             cv=StratifiedKFold(5, shuffle=True, random_state=seed),
