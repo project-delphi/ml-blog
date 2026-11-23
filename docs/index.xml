@@ -10,7 +10,119 @@
 <atom:link href="https://project-delphi.github.io/ml-blog/index.xml" rel="self" type="application/rss+xml"/>
 <description>Technical write-ups on machine learning, statistics, linear algebra, and the tooling around them, by Ravi Kalia.</description>
 <generator>quarto-1.6.40</generator>
-<lastBuildDate>Sun, 22 Nov 2026 05:00:00 GMT</lastBuildDate>
+<lastBuildDate>Mon, 23 Nov 2026 05:00:00 GMT</lastBuildDate>
+<item>
+  <title>No Reconstruction, No Function: The Case Against UMAP, and the Reply</title>
+  <dc:creator>Ravi Kalia</dc:creator>
+  <link>https://project-delphi.github.io/ml-blog/posts/umap-theory-case-and-reply/</link>
+  <description><![CDATA[ 
+
+
+
+
+
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="https://project-delphi.github.io/ml-blog/posts/umap-theory-case-and-reply/cover.png" class="img-fluid figure-img"></p>
+<figcaption>No Reconstruction, No Function: The Case Against UMAP, and the Reply</figcaption>
+</figure>
+</div>
+<p>UMAP is often called theoretically flawed: it has no reconstruction loss, and it learns no function from data to map. The reply answers most of that charge, but not the part about a target that moves with the settings.</p>
+<p>Fit PCA and you get a number for how much of the data the plot throws away: the variance it leaves out. Fit a regression and you get an error on held-out rows. Fit UMAP and you get a picture with no number attached, and the picture is read with more confidence than either. Whether that missing number is a defect of the method or a wrong question decides how far a UMAP plot can be trusted.</p>
+<section id="the-case-against" class="level2" data-number="1">
+<h2 data-number="1" class="anchored" data-anchor-id="the-case-against"><span class="header-section-number">1</span> The case against</h2>
+<section id="no-reconstruction-loss" class="level3" data-number="1.1">
+<h3 data-number="1.1" class="anchored" data-anchor-id="no-reconstruction-loss"><span class="header-section-number">1.1</span> No reconstruction loss</h3>
+<p>PCA maps each point to <img src="https://latex.codecogs.com/png.latex?k"> coordinates and back, and scores the fit by the squared distance between a point and its reconstruction:</p>
+<p><img src="https://latex.codecogs.com/png.latex?%0A%5Ctext%7Berror%7D(k)%20=%20%5Cfrac%7B1%7D%7Bn%7D%20%5Csum_%7Bi%7D%20%5ClVert%20x_i%20-%20%5Chat%7Bx%7D_i%20%5CrVert%5E2%20.%0A"></p>
+<p>The error can be computed on points the fit never saw, and it is comparable across <img src="https://latex.codecogs.com/png.latex?k">, because every <img src="https://latex.codecogs.com/png.latex?k"> is scored against the same target: the data.</p>
+<p>UMAP (<a href="https://arxiv.org/abs/1802.03426">McInnes, Healy &amp; Melville 2018</a>) minimises a cross-entropy between two weighted graphs: a nearest-neighbour graph built from the data and one built from distances on the map. <code>n_neighbors</code> builds the first graph, so two settings minimise two different objectives, and no number says which map is better. <a href="../when-umap-limits/">Part 5</a> of the When UMAP Lies series runs this on a train/dev/test split.</p>
+</section>
+<section id="no-fitted-function" class="level3" data-number="1.2">
+<h3 data-number="1.2" class="anchored" data-anchor-id="no-fitted-function"><span class="header-section-number">1.2</span> No fitted function</h3>
+<ul>
+<li><strong>The parameters are the points.</strong> A UMAP fit on <img src="https://latex.codecogs.com/png.latex?n"> points has <img src="https://latex.codecogs.com/png.latex?2n"> parameters: each training point’s two map coordinates. PCA learns a projection matrix that applies to any point.</li>
+<li><strong><code>transform</code> is added after the fit.</strong> It finds a new point’s neighbours among the training points, starts it at their weighted average, and optimises it against the frozen map. The fit never learned a function from data to map.</li>
+<li><strong>So there is nothing to generalise.</strong> No function means nothing to cross-validate and no held-out error. umap-learn does not report the loss at the end of a fit.</li>
+</ul>
+</section>
+<section id="stated-and-optimised-loss" class="level3" data-number="1.3">
+<h3 data-number="1.3" class="anchored" data-anchor-id="stated-and-optimised-loss"><span class="header-section-number">1.3</span> Stated and optimised loss</h3>
+<p>UMAP minimises its cross-entropy by stochastic gradient descent. Each step pulls together the two ends of one sampled edge and pushes the first end away from a few randomly drawn points, a shortcut called negative sampling. <a href="https://proceedings.neurips.cc/paper/2021/hash/2de5d16682c3c35007e4e92982f1a2ba-Abstract.html">Damrich &amp; Hamprecht (2021)</a> derived the loss this procedure minimises in closed form:</p>
+<ul>
+<li>It differs from the published loss, and the gap depends on the size of the dataset.</li>
+<li>Its repulsion is much weaker than the published loss implies, which helps explain why UMAP packs clusters tighter.</li>
+<li>In effect, UMAP does not try to reproduce its high-dimensional graph.</li>
+</ul>
+</section>
+</section>
+<section id="the-reply" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="the-reply"><span class="header-section-number">2</span> The reply</h2>
+<section id="neighbour-preservation-loss" class="level3" data-number="2.1">
+<h3 data-number="2.1" class="anchored" data-anchor-id="neighbour-preservation-loss"><span class="header-section-number">2.1</span> Neighbour-preservation loss</h3>
+<p>UMAP’s goal was never to reconstruct the data. It is to keep each point’s nearest neighbours near it on the map. That goal can be scored, and a held-out point placed by <code>transform</code> can be scored like a training point.</p>
+<ul>
+<li><strong>Neighbour recall:</strong> the fraction of a point’s 10 nearest neighbours in the data that are also its 10 nearest on the map.</li>
+<li><strong>Class accuracy:</strong> how often a 10-nearest-neighbour vote on the map gets the point’s label right.</li>
+<li><strong>Trustworthiness:</strong> how few of a point’s map neighbours were far away in the data. Part 5 scores it on dev points.</li>
+</ul>
+</section>
+<section id="reconstruction-as-a-goal" class="level3" data-number="2.2">
+<h3 data-number="2.2" class="anchored" data-anchor-id="reconstruction-as-a-goal"><span class="header-section-number">2.2</span> Reconstruction as a goal</h3>
+<p>PCA’s best 2-D reconstruction keeps the two directions of largest variance. Clusters that differ along other directions can land on top of each other, and the reconstruction error is still the lowest any 2-D linear map can achieve.</p>
+<p>A <a href="../umap-tsne-bad-defaults/">companion post on UMAP’s defaults</a> scores default UMAP against 2-D PCA on nine datasets:</p>
+<ul>
+<li>UMAP keeps more nearest neighbours on 9 of 9.</li>
+<li>UMAP classifies better on 7 of 9.</li>
+<li>PCA keeps the global layout better on 9 of 9: which groups sit near which.</li>
+</ul>
+<p>Each method wins what it optimises. Scored by reconstruction error, PCA could not lose, and the clusters it overlays would never count against it.</p>
+</section>
+<section id="non-parametric-fits" class="level3" data-number="2.3">
+<h3 data-number="2.3" class="anchored" data-anchor-id="non-parametric-fits"><span class="header-section-number">2.3</span> Non-parametric fits</h3>
+<ul>
+<li><strong>Coordinates are the usual fit.</strong> t-SNE, MDS and Isomap also solve for the training points’ positions; a new point needs an extension added after the fit, as with <code>transform</code>. The objection is to the family, not to UMAP.</li>
+<li><strong>Parametric UMAP exists.</strong> <a href="https://doi.org/10.1162/neco_a_01434">Sainburg, McInnes &amp; Gentner (2021)</a> replace the coordinates with a neural network trained on the same loss, so new points pass through a learned function. umap-learn’s <code>ParametricUMAP</code> can also train a decoder with a reconstruction loss beside the UMAP loss (<code>autoencoder_loss=True</code>).</li>
+</ul>
+</section>
+<section id="the-contrastive-spectrum" class="level3" data-number="2.4">
+<h3 data-number="2.4" class="anchored" data-anchor-id="the-contrastive-spectrum"><span class="header-section-number">2.4</span> The contrastive spectrum</h3>
+<p>Damrich &amp; Hamprecht’s derivation answers the third charge as well as stating it.</p>
+<ul>
+<li><a href="https://jmlr.org/papers/v23/21-0055.html">Böhm, Berens &amp; Kobak (2022)</a> place t-SNE, UMAP and Laplacian eigenmaps on one attraction–repulsion spectrum. UMAP behaves like t-SNE with stronger attraction, which shows continuous structure better and keeps fewer exact nearest neighbours.</li>
+<li><a href="https://iclr.cc/virtual/2023/poster/11861">Damrich, Böhm, Hamprecht &amp; Kobak (2023)</a> show that t-SNE and UMAP are both contrastive learning, differing in how they sample the points they push away. A generalised negative sampling interpolates between the two.</li>
+</ul>
+<p>The objective UMAP minimises is understood, even though it differs from the one in the original paper.</p>
+</section>
+</section>
+<section id="the-moving-target" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="the-moving-target"><span class="header-section-number">3</span> The moving target</h2>
+<p>Every score in the reply is a proxy. Part 5 tests four and finds that each misses a failure: class accuracy cannot see where the islands sit, and silhouette rewards exaggerated separation.</p>
+<p>The deeper point survives. <code>n_neighbors</code> builds UMAP’s target, so changing the setting changes what the fit is trying to match. A held-out loss can rank the settings of a model whose target stays fixed. UMAP’s does not stay fixed, parametric or not, and no single loss can say which setting draws the truer map.</p>
+<p>Neighbours. Measurable. Functions. Optional. Target. Still. Moves. Settings. Incomparable.</p>
+</section>
+<section id="references" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="references"><span class="header-section-number">4</span> References</h2>
+<ul>
+<li>McInnes, L., Healy, J. &amp; Melville, J. (2018). <a href="https://arxiv.org/abs/1802.03426">UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction</a>. arXiv:1802.03426.</li>
+<li>Damrich, S. &amp; Hamprecht, F. A. (2021). <a href="https://proceedings.neurips.cc/paper/2021/hash/2de5d16682c3c35007e4e92982f1a2ba-Abstract.html">On UMAP’s true loss function</a>. <em>Advances in Neural Information Processing Systems</em> 34 (NeurIPS 2021).</li>
+<li>Sainburg, T., McInnes, L. &amp; Gentner, T. Q. (2021). <a href="https://doi.org/10.1162/neco_a_01434">Parametric UMAP embeddings for representation and semisupervised learning</a>. <em>Neural Computation</em> 33(11).</li>
+<li>Böhm, J. N., Berens, P. &amp; Kobak, D. (2022). <a href="https://jmlr.org/papers/v23/21-0055.html">Attraction-repulsion spectrum in neighbor embeddings</a>. <em>Journal of Machine Learning Research</em> 23(95).</li>
+<li>Damrich, S., Böhm, J. N., Hamprecht, F. A. &amp; Kobak, D. (2023). <a href="https://iclr.cc/virtual/2023/poster/11861">From t-SNE to UMAP with contrastive learning</a>. <em>International Conference on Learning Representations</em> (ICLR 2023).</li>
+<li>Software: <a href="https://github.com/lmcinnes/umap">umap-learn</a>, <code>ParametricUMAP</code> (<a href="https://umap-learn.readthedocs.io/en/latest/parametric_umap.html">documentation</a>).</li>
+<li><a href="../when-umap-limits/">When UMAP Lies, Part 5: Nothing to Validate Against</a> and <a href="../umap-tsne-bad-defaults/">Neighbors Right, Picture Wrong</a>.</li>
+</ul>
+
+
+</section>
+
+ ]]></description>
+  <category>Machine Learning</category>
+  <category>Statistics</category>
+  <guid>https://project-delphi.github.io/ml-blog/posts/umap-theory-case-and-reply/</guid>
+  <pubDate>Mon, 23 Nov 2026 05:00:00 GMT</pubDate>
+  <media:content url="https://project-delphi.github.io/ml-blog/posts/umap-theory-case-and-reply/cover.png" medium="image" type="image/png" height="76" width="144"/>
+</item>
 <item>
   <title>Neighbors Right, Picture Wrong</title>
   <dc:creator>Ravi Kalia</dc:creator>
@@ -26548,182 +26660,6 @@ Figure&nbsp;3: Left: linear and kNN leakage in the temporal tier. Right: leakage
   <guid>https://project-delphi.github.io/ml-blog/posts/stein-jepa-nuisance-leakage/</guid>
   <pubDate>Sun, 08 Nov 2026 05:00:00 GMT</pubDate>
   <media:content url="https://project-delphi.github.io/ml-blog/posts/stein-jepa-nuisance-leakage/cover.png" medium="image" type="image/png" height="76" width="144"/>
-</item>
-<item>
-  <title>The Thermodynamics of Logistic Regression: Bridging Energy Landscapes, Cross-Entropy, and Probit Models</title>
-  <dc:creator>Ravi Kalia</dc:creator>
-  <link>https://project-delphi.github.io/ml-blog/posts/thermodynamics-of-logistic-regression/</link>
-  <description><![CDATA[ 
-
-
-
-
-
-<div class="quarto-figure quarto-figure-center">
-<figure class="figure">
-<p><img src="https://project-delphi.github.io/ml-blog/posts/thermodynamics-of-logistic-regression/cover.png" class="img-fluid figure-img"></p>
-<figcaption>A two-state energy gap produces a logistic probability.</figcaption>
-</figure>
-</div>
-<p>A binary classifier’s probability can be derived from an energy gap, fitted by an information cost, or obtained by adding noise to a threshold. These three descriptions agree for logistic regression, while the choice of latent noise explains where probit regression differs.</p>
-<section id="physics-a-two-state-energy-model" class="level2" data-number="1">
-<h2 data-number="1" class="anchored" data-anchor-id="physics-a-two-state-energy-model"><span class="header-section-number">1</span> Physics: a two-state energy model</h2>
-<p>Fix an input <img src="https://latex.codecogs.com/png.latex?x%5Cin%5Cmathbb%20R%5Ed"> and a label <img src="https://latex.codecogs.com/png.latex?y%5Cin%5C%7B0,1%5C%7D">. Let <img src="https://latex.codecogs.com/png.latex?%5Ceta(x)=w%5E%5Cmathsf%7BT%7Dx+b">. Give the two states dimensionless energies</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cbegin%7Baligned%7D%0AE(y,x)&amp;=-y%5C,%5Ceta(x),%5C%5C%5B4pt%5D%0AE(0,x)&amp;=0,%5C%5C%5B4pt%5D%0AE(1,x)&amp;=-%5Ceta(x).%0A%5Cend%7Baligned%7D%0A"></p>
-<p>Only their difference affects the probabilities. In the chosen energy gauge,</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5CDelta%20E(x)=E(0,x)-E(1,x)=%5Ceta(x).%0A"></p>
-<p>At inverse temperature <img src="https://latex.codecogs.com/png.latex?%5Cbeta=1">, the partition function sums the two Boltzmann weights:</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0AZ(x)=%5Csum_%7By=0%7D%5E%7B1%7De%5E%7B-E(y,x)%7D=1+e%5E%7B%5Ceta(x)%7D.%0A"></p>
-<p>Normalizing the weight of state 1 gives the logistic sigmoid, step by step:</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cbegin%7Baligned%7D%0AP(y=1%5Cmid%20x)%0A&amp;=%5Cfrac%7Be%5E%7B-E(1,x)%7D%7D%7BZ(x)%7D%5C%5C%5B6pt%5D%0A&amp;=%5Cfrac%7Be%5E%7B%5Ceta(x)%7D%7D%7B1+e%5E%7B%5Ceta(x)%7D%7D%5C%5C%5B6pt%5D%0A&amp;=%5Cfrac%7B1%7D%7B1+e%5E%7B-%5Ceta(x)%7D%7D%5C%5C%5B6pt%5D%0A&amp;=%5Csigma%5Cbigl(%5Ceta(x)%5Cbigr).%0A%5Cend%7Baligned%7D%0A"></p>
-<p>Thus <img src="https://latex.codecogs.com/png.latex?P(1%5Cmid%20x)/P(0%5Cmid%20x)=e%5E%7B%5CDelta%20E(x)%7D">: the linear score is the <strong>log odds</strong> and the energy gap. If we restore <img src="https://latex.codecogs.com/png.latex?%5Cbeta=(k_%5Cmathrm%7BB%7DT)%5E%7B-1%7D">, the sigmoid takes <img src="https://latex.codecogs.com/png.latex?%5Cbeta%5CDelta%20E"> as its argument. Temperature rescales the coefficients; ordinary logistic regression fixes that scale at one.</p>
-<div class="quarto-figure quarto-figure-center">
-<figure class="figure">
-<p><img src="https://project-delphi.github.io/ml-blog/posts/thermodynamics-of-logistic-regression/figures/energy-gap.png" class="img-fluid figure-img" alt="Two-panel plot: class-zero energy stays at zero while class-one energy falls linearly with the score; logistic and scale-matched probit probabilities rise from zero to one."></p>
-<figcaption>The label energies cross at a zero score. Boltzmann normalization maps their gap to the logistic probability; the scale-matched probit curve is shown for comparison.</figcaption>
-</figure>
-</div>
-<p>The conditional Helmholtz free energy in these units is <img src="https://latex.codecogs.com/png.latex?F(x)=-%5Clog%20Z(x)=-%5Clog(1+e%5E%7B%5Ceta(x)%7D)">. The zero of energy is arbitrary: adding the same <img src="https://latex.codecogs.com/png.latex?c(x)"> to both state energies changes <img src="https://latex.codecogs.com/png.latex?F"> by <img src="https://latex.codecogs.com/png.latex?c(x)"> but leaves the energy gap and probabilities fixed. <a href="https://www.physics.rutgers.edu/~coleman/611/lectures/chapter3.pdf">Statistical mechanics derives these relations from the canonical ensemble</a>.</p>
-<p>The two states are the possible <strong>labels at one fixed input</strong>, not two positions that <img src="https://latex.codecogs.com/png.latex?x"> moves between. A physical counterpart is a spin that can point in two directions while an external field is held fixed: the field changes the energy gap, and thermal equilibrium favors the lower-energy direction. Here <img src="https://latex.codecogs.com/png.latex?x"> sets the field through <img src="https://latex.codecogs.com/png.latex?%5Ceta(x)">, and choosing a label corresponds to choosing a spin direction. No motion between states or heat flow is modeled. The classifier’s energies are dimensionless scores unless a physical system supplies an energy scale and temperature; <img src="https://latex.codecogs.com/png.latex?%5Cbeta=1"> alone does not measure a real temperature.</p>
-<section id="an-energy-surface-to-adjust" class="level3" data-number="1.1">
-<h3 data-number="1.1" class="anchored" data-anchor-id="an-energy-surface-to-adjust"><span class="header-section-number">1.1</span> An energy surface to adjust</h3>
-<p>The display uses ten <strong>synthetic</strong> feature pairs, chosen to put both labels on either side of a linear boundary. They stand in for two standardized measurements in a binary classification task; no observed population or sampling claim is attached. A wrong classification would assign high probability to the opposite state, and the two-state model is a useful controlled example because its energy gap is visible directly.</p>
-<p>The colored plane is <img src="https://latex.codecogs.com/png.latex?E(1,x_1,x_2)=-(w_1x_1+w_2x_2+b)">; the faint horizontal plane is <img src="https://latex.codecogs.com/png.latex?E(0,x_1,x_2)=0">. Class-1 points sit on the colored plane and class-0 points sit on the zero-energy plane. Stems show the gap between the two possible label energies at a fixed input. Lower energy means higher Boltzmann probability. A linear plane has lower-energy <strong>regions</strong>, not local wells or peaks.</p>
-<ol type="1">
-<li>Increase <img src="https://latex.codecogs.com/png.latex?w_1">: the colored plane tilts down as <img src="https://latex.codecogs.com/png.latex?x_1"> increases, lowering the class-1 energy there.</li>
-<li>Increase <img src="https://latex.codecogs.com/png.latex?b">: the entire class-1 plane drops while the class-0 plane stays at zero; for <img src="https://latex.codecogs.com/png.latex?%5Cbeta%3E0">, <img src="https://latex.codecogs.com/png.latex?P(1%5Cmid%20x)"> rises at every point.</li>
-<li>Change inverse temperature <img src="https://latex.codecogs.com/png.latex?%5Cbeta">: the energy planes stay in place while the probability at the highlighted input becomes sharper or flatter. At <img src="https://latex.codecogs.com/png.latex?%5Cbeta=0">, both labels have probability <img src="https://latex.codecogs.com/png.latex?0.5"> everywhere, so the drawn zero-gap line is no longer the only equal-probability location.</li>
-<li>Drag to orbit. For <img src="https://latex.codecogs.com/png.latex?%5Cbeta%3E0">, the intersection of the two planes is the <img src="https://latex.codecogs.com/png.latex?P(1%5Cmid%20x)=0.5"> boundary.</li>
-</ol>
-<div id="thermo-energy">
-
-</div>
-<script src="../../widget-kit/stage.js"></script>
-<script src="model.js"></script>
-<script src="widgets.js"></script>
-</section>
-</section>
-<section id="information-likelihood-surprise-and-cross-entropy" class="level2" data-number="2">
-<h2 data-number="2" class="anchored" data-anchor-id="information-likelihood-surprise-and-cross-entropy"><span class="header-section-number">2</span> Information: likelihood, surprise, and cross-entropy</h2>
-<p>The Boltzmann probability becomes a training rule when we observe labeled pairs <img src="https://latex.codecogs.com/png.latex?(x_i,y_i)">. Write <img src="https://latex.codecogs.com/png.latex?%5Ceta_i=w%5E%5Cmathsf%7BT%7Dx_i+b"> and <img src="https://latex.codecogs.com/png.latex?p_i=%5Csigma(%5Ceta_i)">. Conditional independence gives the Bernoulli likelihood</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0AL(w,b)=%5Cprod_%7Bi=1%7D%5E%7Bn%7Dp_i%5E%7By_i%7D(1-p_i)%5E%7B1-y_i%7D.%0A"></p>
-<p>Taking logs turns the product into a sum. Maximum likelihood therefore minimizes the average negative log-likelihood:</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cbegin%7Baligned%7D%0A-%5Cfrac1n%5Clog%20L(w,b)%0A&amp;=-%5Cfrac1n%5Csum_%7Bi=1%7D%5E%7Bn%7D%5Cleft%5By_i%5Clog%20p_i+(1-y_i)%5Clog(1-p_i)%5Cright%5D%5C%5C%5B6pt%5D%0A&amp;=%5Cfrac1n%5Csum_%7Bi=1%7D%5E%7Bn%7D%5Cleft%5B%5Clog(1+e%5E%7B%5Ceta_i%7D)-y_i%5Ceta_i%5Cright%5D%5C%5C%5B6pt%5D%0A&amp;=%5Cfrac1n%5Csum_%7Bi=1%7D%5E%7Bn%7D%5Cleft%5BE(y_i,x_i)+%5Clog%20Z(x_i)%5Cright%5D.%0A%5Cend%7Baligned%7D%0A"></p>
-<p>The first line is <strong>binary cross-entropy</strong> (BCE). The per-example value <img src="https://latex.codecogs.com/png.latex?-%5Clog%20P(y_i%5Cmid%20x_i)"> is the observed label’s <strong>surprisal</strong>, measured in nats. The last line shows the physical terms: lower observed-state energy helps, while the log partition function charges for assigning weight to both possible states. <a href="https://scikit-learn.org/stable/modules/generated/sklearn.metrics.log_loss.html">The standard log-loss definition</a> is this negative log-likelihood.</p>
-<p>The KL statement needs its empirical distribution stated. For a particular training pair, let <img src="https://latex.codecogs.com/png.latex?q_i(y)=%5Cmathbf%201%5C%7By=y_i%5C%7D">, a point mass on the observed label. Since <img src="https://latex.codecogs.com/png.latex?H(q_i)=0">,</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cbegin%7Baligned%7D%0A%5Coperatorname%7BKL%7D%5C!%5Cleft(q_i%5Cmiddle%5C%7CP_%7Bw,b%7D(%5Ccdot%5Cmid%20x_i)%5Cright)%0A&amp;=-%5Clog%20P_%7Bw,b%7D(y_i%5Cmid%20x_i)%5C%5C%5B6pt%5D%0A&amp;=%5Coperatorname%7BBCE%7D(y_i,p_i).%0A%5Cend%7Baligned%7D%0A"></p>
-<p>If an input <img src="https://latex.codecogs.com/png.latex?x"> has repeated observations and an empirical class frequency <img src="https://latex.codecogs.com/png.latex?q(1%5Cmid%20x)">, then <img src="https://latex.codecogs.com/png.latex?H(q,P)=H(q)+%5Coperatorname%7BKL%7D(q%5C%7CP)">. Its entropy <img src="https://latex.codecogs.com/png.latex?H(q)"> does not depend on <img src="https://latex.codecogs.com/png.latex?w,b">, so minimizing cross-entropy and KL still gives the same fit. This is a statement about the observed conditional frequencies; it does not say that an arbitrary finite sample recovers the population distribution.</p>
-<p>Training adjusts the gap <img src="https://latex.codecogs.com/png.latex?%5CDelta%20E(x)"> so observed labels occupy lower-energy states more often. The resulting change in <img src="https://latex.codecogs.com/png.latex?F(x)=-%5Clog%20Z(x)"> follows from the normalization.</p>
-<section id="a-loss-surface-to-adjust" class="level3" data-number="2.1">
-<h3 data-number="2.1" class="anchored" data-anchor-id="a-loss-surface-to-adjust"><span class="header-section-number">2.1</span> A loss surface to adjust</h3>
-<p>The second view plots mean BCE for the same ten synthetic observations over <img src="https://latex.codecogs.com/png.latex?(w_1,w_2)"> while holding <img src="https://latex.codecogs.com/png.latex?b"> fixed and using <img src="https://latex.codecogs.com/png.latex?%5Cbeta=1">. Its height is an average surprisal in nats, not a physical energy. The marked point is the current pair of coefficients. Change either weight to move the point on the surface; change <img src="https://latex.codecogs.com/png.latex?b"> to change the entire surface. These ten labels are linearly separable, so increasing the coefficient magnitudes along a separating direction keeps lowering BCE. Flip the highlighted observation’s label to introduce a conflict and bend the loss surface toward a finite minimum. The loss readout also works when the 3D scene cannot load.</p>
-<div id="thermo-loss">
-
-</div>
-</section>
-<section id="joint-distribution-of-inputs-and-labels" class="level3" data-number="2.2">
-<h3 data-number="2.2" class="anchored" data-anchor-id="joint-distribution-of-inputs-and-labels"><span class="header-section-number">2.2</span> Joint distribution of inputs and labels</h3>
-<p>The energy calculation normalizes over <img src="https://latex.codecogs.com/png.latex?y"> <strong>at fixed <img src="https://latex.codecogs.com/png.latex?x"></strong>. BCE likewise scores labels conditional on the observed inputs. Logistic regression therefore specifies <img src="https://latex.codecogs.com/png.latex?P(y%5Cmid%20x)">, but leaves the distribution of inputs unspecified. If we separately choose a marginal density or mass function <img src="https://latex.codecogs.com/png.latex?q(x)">, then</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cbegin%7Baligned%7D%0Ap(x,y)&amp;=q(x)%5C,P(y%5Cmid%20x)%5C%5C%5B6pt%5D%0A&amp;=q(x)%5C,%5Cfrac%7Be%5E%7B-E(y,x)%7D%7D%7BZ(x)%7D.%0A%5Cend%7Baligned%7D%0A"></p>
-<p>Different choices of <img src="https://latex.codecogs.com/png.latex?q"> give the same logistic conditional probabilities but different joint distributions, and can change the class balance <img src="https://latex.codecogs.com/png.latex?P(y=1)"> and feature distributions within each class <img src="https://latex.codecogs.com/png.latex?p(x%5Cmid%20y)">. In particular, logistic <img src="https://latex.codecogs.com/png.latex?P(y%5Cmid%20x)"> does not imply Gaussian <img src="https://latex.codecogs.com/png.latex?p(x%5Cmid%20y)">; a generative model such as Gaussian discriminant analysis adds assumptions about the feature distributions. <a href="https://see.stanford.edu/materials/aimlcs229/cs229-notes2.pdf">Stanford’s CS229 notes distinguish these directions</a>.</p>
-<p>This also limits the physical picture. <img src="https://latex.codecogs.com/png.latex?Z(x)"> is a <strong>conditional</strong> partition function, not a normalizer over all <img src="https://latex.codecogs.com/png.latex?(x,y)">. A joint Boltzmann model needs an input measure or reference energy. If the raw weights <img src="https://latex.codecogs.com/png.latex?e%5E%7B-E(y,x)%7D"> were integrable over <img src="https://latex.codecogs.com/png.latex?x">, they would imply a feature marginal proportional to <img src="https://latex.codecogs.com/png.latex?Z(x)">; with the chosen gauge <img src="https://latex.codecogs.com/png.latex?E(0,x)=0"> on <img src="https://latex.codecogs.com/png.latex?%5Cmathbb%20R%5Ed">, the integral is infinite. The plotted planes compare labels at each input, not the frequency or physical energy of input locations. A population average of BCE weights conditional errors by how often <img src="https://latex.codecogs.com/png.latex?x"> occurs, but fitting BCE does not fit that input distribution.</p>
-</section>
-</section>
-<section id="statistics-latent-noise-and-the-probit-link" class="level2" data-number="3">
-<h2 data-number="3" class="anchored" data-anchor-id="statistics-latent-noise-and-the-probit-link"><span class="header-section-number">3</span> Statistics: latent noise and the probit link</h2>
-<p>The same classifier can be built as a noisy threshold. Let</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cbegin%7Baligned%7D%0Ay%5E*&amp;=%5Ceta(x)+%5Cepsilon,%5C%5C%5B4pt%5D%0Ay&amp;=%5Cmathbf%201%5C%7By%5E*%3E0%5C%7D.%0A%5Cend%7Baligned%7D%0A"></p>
-<p>For a symmetric error distribution with cumulative distribution function <img src="https://latex.codecogs.com/png.latex?G">,</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0AP(y=1%5Cmid%20x)=P(%5Cepsilon%3E-%5Ceta)=G(%5Ceta).%0A"></p>
-<ul>
-<li><strong>Logit:</strong> <img src="https://latex.codecogs.com/png.latex?%5Cepsilon"> has a standard logistic distribution, <img src="https://latex.codecogs.com/png.latex?G(z)=%5Csigma(z)">. An equivalent random-utility construction adds independent Gumbel errors to the two state utilities and compares them; their difference is logistic. <a href="https://cs.stanford.edu/~ermon/papers/ICML_MIPS_Gumbel.pdf">A derivation of the Gumbel difference</a> gives the same choice probability.</li>
-<li><strong>Probit:</strong> <img src="https://latex.codecogs.com/png.latex?%5Cepsilon%5Csim%5Cmathcal%20N(0,1)">, so <img src="https://latex.codecogs.com/png.latex?G(z)=%5CPhi(z)">, the standard normal CDF. This is the <a href="https://www.statsmodels.org/devel/generated/statsmodels.genmod.families.links.Probit.html">probit link</a>. With a normal error of standard deviation <img src="https://latex.codecogs.com/png.latex?s">, the argument is <img src="https://latex.codecogs.com/png.latex?%5Ceta/s">.</li>
-</ul>
-<p>The normal density can be written as <img src="https://latex.codecogs.com/png.latex?%5Cphi(t)%5Cpropto%20e%5E%7B-E(t)%7D"> with harmonic potential <img src="https://latex.codecogs.com/png.latex?E(t)=t%5E2/2">. This potential belongs to the <strong>latent noise</strong>, not to the two-label energy surface in the first section. Probit and logit share a linear decision boundary at <img src="https://latex.codecogs.com/png.latex?%5Ceta=0">, but their probability tails differ:</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cbegin%7Baligned%7D%0A1-%5Csigma(z)&amp;%5Csim%20e%5E%7B-z%7D,%5C%5C%5B6pt%5D%0A1-%5CPhi(z)&amp;%5Csim%5Cfrac%7Be%5E%7B-z%5E2/2%7D%7D%7Bz%5Csqrt%7B2%5Cpi%7D%7D%0A%5Cend%7Baligned%7D%0A%5Cqquad(z%5Cto+%5Cinfty).%0A"></p>
-<p>The logistic tail is heavier than the Gaussian tail; both decay faster than any power law. Coefficient scales must be matched before comparing curves, since standard logistic noise has variance <img src="https://latex.codecogs.com/png.latex?%5Cpi%5E2/3"> and standard normal noise has variance <img src="https://latex.codecogs.com/png.latex?1">.</p>
-<section id="tail-decay-and-optimization" class="level3" data-number="3.1">
-<h3 data-number="3.1" class="anchored" data-anchor-id="tail-decay-and-optimization"><span class="header-section-number">3.1</span> Tail decay and optimization</h3>
-<p>For a positive observation, the derivative of negative log-likelihood with respect to the score is</p>
-<p><img src="https://latex.codecogs.com/png.latex?%0A%5Cbegin%7Baligned%7D%0A%5Cfrac%7Bd%5Cell_%7B%5Cmathrm%7Blogit%7D%7D%7D%7Bd%5Ceta%7D&amp;=%5Csigma(%5Ceta)-1,%5C%5C%5B6pt%5D%0A%5Cfrac%7Bd%5Cell_%7B%5Cmathrm%7Bprobit%7D%7D%7D%7Bd%5Ceta%7D&amp;=-%5Cfrac%7B%5Cphi(%5Ceta)%7D%7B%5CPhi(%5Ceta)%7D.%0A%5Cend%7Baligned%7D%0A"></p>
-<p>When <img src="https://latex.codecogs.com/png.latex?%5Ceta%5Cto+%5Cinfty">, both gradients vanish, but the probit gradient vanishes on a Gaussian scale. When a positive label is assigned a large <strong>negative</strong> score, the logit gradient approaches <img src="https://latex.codecogs.com/png.latex?-1">, while the probit gradient grows approximately as <img src="https://latex.codecogs.com/png.latex?-%5Ceta">. A confidently wrong or mislabeled example can therefore exert more gradient pressure under probit; logit’s bounded score gradient can be less sensitive to such extremes. This comparison concerns the gradient with respect to <img src="https://latex.codecogs.com/png.latex?%5Ceta">; the parameter gradient also multiplies <img src="https://latex.codecogs.com/png.latex?x">, so neither model is automatically robust to high-leverage feature outliers.</p>
-</section>
-</section>
-<section id="concept-map" class="level2" data-number="4">
-<h2 data-number="4" class="anchored" data-anchor-id="concept-map"><span class="header-section-number">4</span> Concept map</h2>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 33%">
-<col style="width: 33%">
-<col style="width: 33%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>Physics</th>
-<th>Information theory</th>
-<th>Binary classification</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td>Energy gap <img src="https://latex.codecogs.com/png.latex?E_0-E_1=%5Ceta"></td>
-<td>Log odds <img src="https://latex.codecogs.com/png.latex?%5Clog(P_1/P_0)"></td>
-<td>Linear score <img src="https://latex.codecogs.com/png.latex?w%5E%5Cmathsf%7BT%7Dx+b"></td>
-</tr>
-<tr class="even">
-<td>Boltzmann weight <img src="https://latex.codecogs.com/png.latex?e%5E%7B-E_y%7D"></td>
-<td>Probability assigned to a state</td>
-<td>Bernoulli class probability</td>
-</tr>
-<tr class="odd">
-<td>Partition function <img src="https://latex.codecogs.com/png.latex?Z=1+e%5E%5Ceta"></td>
-<td>Normalization inside surprisal</td>
-<td>Log-sum-exp term in BCE</td>
-</tr>
-<tr class="even">
-<td><img src="https://latex.codecogs.com/png.latex?E_y+%5Clog%20Z"></td>
-<td>Surprisal <img src="https://latex.codecogs.com/png.latex?-%5Clog%20P_y"></td>
-<td>Per-example negative log-likelihood</td>
-</tr>
-<tr class="odd">
-<td>Changing the energy gap</td>
-<td>Reducing conditional cross-entropy and KL</td>
-<td>Fitting <img src="https://latex.codecogs.com/png.latex?w,b"> by maximum likelihood</td>
-</tr>
-<tr class="even">
-<td>Holding <img src="https://latex.codecogs.com/png.latex?x"> fixed</td>
-<td>BCE scores <img src="https://latex.codecogs.com/png.latex?P(y%5Cmid%20x)"></td>
-<td>A joint <img src="https://latex.codecogs.com/png.latex?p(x,y)"> also needs a marginal <img src="https://latex.codecogs.com/png.latex?q(x)"></td>
-</tr>
-<tr class="odd">
-<td>Harmonic energy of Gaussian latent noise</td>
-<td>Faster tail decay</td>
-<td>Probit probability <img src="https://latex.codecogs.com/png.latex?%5CPhi(%5Ceta)"></td>
-</tr>
-</tbody>
-</table>
-<p>Energies. Normalize. Probabilities. Observe. Surprise. Fit. Noise. Changes. Tails. Matter.</p>
-</section>
-<section id="references" class="level2" data-number="5">
-<h2 data-number="5" class="anchored" data-anchor-id="references"><span class="header-section-number">5</span> References</h2>
-<ul>
-<li><a href="https://www.physics.rutgers.edu/~coleman/611/lectures/chapter3.pdf">Rutgers University, <em>Statistical Mechanics</em>, chapter 3</a> — canonical probabilities, partition functions, and free energy.</li>
-<li><a href="https://scikit-learn.org/stable/modules/generated/sklearn.metrics.log_loss.html">Scikit-learn, <em>log_loss</em> documentation</a> — Bernoulli negative log-likelihood and cross-entropy.</li>
-<li><a href="https://cs.stanford.edu/~ermon/papers/ICML_MIPS_Gumbel.pdf">Stanford, <em>Learning and Inference via Maximum Inner Product Search</em></a> — Gumbel noise differences and logistic choice probabilities.</li>
-<li><a href="https://www.statsmodels.org/devel/generated/statsmodels.genmod.families.links.Probit.html">Statsmodels, <em>Probit link</em> documentation</a> — the normal-CDF response function.</li>
-<li><a href="https://see.stanford.edu/materials/aimlcs229/cs229-notes2.pdf">Stanford CS229, <em>Generative Learning Algorithms</em></a> — discriminative and generative models and the limits of the logistic conditional form.</li>
-</ul>
-
-
-</section>
-
- ]]></description>
-  <category>Machine Learning</category>
-  <category>Mathematics</category>
-  <category>Statistics</category>
-  <guid>https://project-delphi.github.io/ml-blog/posts/thermodynamics-of-logistic-regression/</guid>
-  <pubDate>Tue, 27 Oct 2026 05:00:00 GMT</pubDate>
-  <media:content url="https://project-delphi.github.io/ml-blog/posts/thermodynamics-of-logistic-regression/cover.png" medium="image" type="image/png" height="76" width="144"/>
 </item>
 </channel>
 </rss>
