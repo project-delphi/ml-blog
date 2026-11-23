@@ -76,19 +76,22 @@ ARI_GAIN_HI = f3(gain.loc[rest, "k-means ARI"].max())
 ARI_GAIN_WHERE = gain.loc[rest, "k-means ARI"].idxmax()
 ARI_GAIN_OLI = f3(gain.loc["Olivetti faces", "k-means ARI"])
 N_KNN_NEAR = int(((default["kNN accuracy"] - orig["kNN accuracy"]).abs() <= 0.03).sum())
-N_KNN_PCA = int((default["kNN accuracy"] > pca["kNN accuracy"]).sum())
 N_TRIP_PCA = int((pca["triplet accuracy"] > best["triplet accuracy"]).sum())
 # Centroid correlation needs enough classes to rank: wine (3) and breast cancer (2)
 # give at most three centroid distances, so they are left out.
 many = [d for d in ORDER if d not in ("wine", "breast cancer")]
 N_CENT, N_CENT_PCA = len(many), int((pca.loc[many, "centroid rho"] > best.loc[many, "centroid rho"]).sum())
-# Default UMAP against PCA, score by score.
-WIN = (default > pca).sum()
-WIN_CENT = int((default.loc[many, "centroid rho"] > pca.loc[many, "centroid rho"]).sum())
+# Default UMAP against PCA, score by score; gaps within TOL on three-seed means are ties.
+TOL = 0.01
+_dp = default - pca
+WIN = (_dp > TOL).sum()
+WIN_CENT = int((_dp.loc[many, "centroid rho"] > -TOL).sum())
 N_WIN_REC, N_WIN_KNN, N_WIN_ARI = int(WIN["neighbor recall"]), int(WIN["kNN accuracy"]), int(WIN["k-means ARI"])
 assert (int(WIN["triplet accuracy"]), WIN_CENT, N_CENT) == (0, 0, 7), (WIN["triplet accuracy"], WIN_CENT)
 assert (N_WIN_REC, N_WIN_KNN, N_WIN_ARI) == (9, 7, 6), (N_WIN_REC, N_WIN_KNN, N_WIN_ARI)
-ARI_PCA_SETS = list(default.index[default["k-means ARI"] < pca["k-means ARI"]])
+ARI_PCA_SETS = list(default.index[_dp["k-means ARI"] < -TOL])
+ARI_TIES = list(default.index[_dp["k-means ARI"].abs() <= TOL])
+assert ARI_TIES == ["noisy clusters"], ARI_TIES
 CENT_GAIN_MAX = f3(gain.loc[many, "centroid rho"].max())
 CENT_GAIN_WHERE = gain.loc[many, "centroid rho"].idxmax()
 assert list(best.loc[many].index[best.loc[many, "centroid rho"] >= pca.loc[many, "centroid rho"]]) == ["PBMC 3k"]
@@ -189,16 +192,16 @@ fig.savefig("figures/verdict.png", dpi=150, bbox_inches="tight")
 plt.show()
 ```
 
-UMAP against PCA:
+UMAP against PCA (@fig-verdict):
 
 - **PCA wins the global layout.** Default UMAP beats PCA on triplet accuracy on none of the nine sets, and on centroid correlation on none of the `{python} N_CENT` with enough classes to rank. No setting rescues triplet accuracy: PCA beats UMAP's best setting on triplet accuracy on `{python} N_TRIP_PCA` of nine sets, `{python} V(pca, "nested clusters", "triplet accuracy")` against `{python} V(best, "nested clusters", "triplet accuracy")` on nested clusters and `{python} V(pca, "Fashion-MNIST", "triplet accuracy")` against `{python} V(best, "Fashion-MNIST", "triplet accuracy")` on Fashion-MNIST. A UMAP plot shows which groups sit near which less faithfully than a PCA plot of the same data.
-- **UMAP wins locally, mostly.** Default UMAP beats PCA on neighbour recall on `{python} N_WIN_REC` of nine sets, on class accuracy on `{python} N_WIN_KNN` and on k-means ARI on `{python} N_WIN_ARI`. PCA clusters better on `{python} ', '.join(ARI_PCA_SETS)`. On MNIST, UMAP's class accuracy is `{python} V(default, "MNIST", "kNN accuracy")` against PCA's `{python} V(pca, "MNIST", "kNN accuracy")`.
+- **UMAP wins locally, mostly.** Default UMAP beats PCA on neighbour recall on `{python} N_WIN_REC` of nine sets, on class accuracy on `{python} N_WIN_KNN` and on k-means ARI on `{python} N_WIN_ARI`. PCA clusters better on `{python} ' and '.join(ARI_PCA_SETS)`; `{python} ARI_TIES[0]` is a tie (gaps within `{python} TOL` count as ties). On MNIST, UMAP's class accuracy is `{python} V(default, "MNIST", "kNN accuracy")` against PCA's `{python} V(pca, "MNIST", "kNN accuracy")`.
 
 Default against tuned UMAP:
 
 - **Class separation matches the data on most sets.** Hindsight tuning raises 10-NN accuracy by at most `{python} KNN_GAIN_MAX` (`{python} KNN_GAIN_WHERE`) on eight of nine sets. The default lands within 0.03 of the accuracy in the original space on `{python} N_KNN_NEAR` of nine.
 - **Cluster gains are small.** Hindsight tuning raises k-means ARI by at most `{python} ARI_GAIN_HI` (`{python} ARI_GAIN_WHERE`) outside Olivetti, and by `{python} ARI_GAIN_OLI` on Olivetti.
-- **Tuning moves the global layout more.** `min_dist=0.99` is the best triplet setting on `{python} N_TRIP_MD99` of nine sets and adds up to `{python} TRIP_GAIN_MAX` (`{python} TRIP_GAIN_WHERE`), still short of PCA. On centroid correlation the best setting adds up to `{python} CENT_GAIN_MAX` (`{python} CENT_GAIN_WHERE`) and passes PCA on one set of `{python} N_CENT`, PBMC: `{python} V(best, "PBMC 3k", "centroid rho")` against `{python} V(pca, "PBMC 3k", "centroid rho")`.
+- **Tuning moves the global layout a little.** `min_dist=0.99` is the best triplet setting on `{python} N_TRIP_MD99` of nine sets and adds up to `{python} TRIP_GAIN_MAX` (`{python} TRIP_GAIN_WHERE`), still short of PCA. On centroid correlation the best setting adds up to `{python} CENT_GAIN_MAX` (`{python} CENT_GAIN_WHERE`) and passes PCA on one set of `{python} N_CENT`, PBMC: `{python} V(best, "PBMC 3k", "centroid rho")` against `{python} V(pca, "PBMC 3k", "centroid rho")`.
 
 Against t-SNE and the data:
 
@@ -209,7 +212,7 @@ Against t-SNE and the data:
 
 Olivetti is the one set where tuning clearly beats the default on class accuracy: `{python} V(default, "Olivetti faces", "kNN accuracy")` at the default, `{python} V(best, "Olivetti faces", "kNN accuracy")` at UMAP's best setting and `{python} V(orig, "Olivetti faces", "kNN accuracy")` in the original space. Each person has 10 photos, fewer than the 15 neighbours UMAP links each photo to.
 
-Subsampling digits to a fixed number of images per class tests whether class size explains it. Five seeds per size:
+Subsampling digits to a fixed number of images per class tests whether class size explains it (@tbl-class-size). Five seeds per size:
 
 ```{python}
 #| label: tbl-class-size
