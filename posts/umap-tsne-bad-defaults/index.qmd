@@ -71,10 +71,9 @@ def s3(x):
 rest = [d for d in ORDER if d != "Olivetti faces"]
 KNN_GAIN_MAX = f3(gain.loc[rest, "kNN accuracy"].max())
 KNN_GAIN_WHERE = gain.loc[rest, "kNN accuracy"].idxmax()
-ARI_GAIN_HI = f3(gain["k-means ARI"].max())
-ARI_GAIN_WHERE = gain["k-means ARI"].idxmax()
-# Sets where tuning moves ARI at all (nested clusters scores 1.000 at every
-# setting), leaving out Olivetti, which the sentence sets aside.
+ARI_GAIN_HI = f3(gain.loc[rest, "k-means ARI"].max())
+ARI_GAIN_WHERE = gain.loc[rest, "k-means ARI"].idxmax()
+ARI_GAIN_OLI = f3(gain.loc["Olivetti faces", "k-means ARI"])
 N_KNN_NEAR = int(((default["kNN accuracy"] - orig["kNN accuracy"]).abs() <= 0.03).sum())
 N_KNN_PCA = int((default["kNN accuracy"] > pca["kNN accuracy"]).sum())
 N_TRIP_PCA = int((pca["triplet accuracy"] > best["triplet accuracy"]).sum())
@@ -93,7 +92,12 @@ V = lambda frame, d, c: f3(frame.loc[d, c])  # noqa: E731
 # The subtitle, description and fig-alt quote these counts as words; fail the
 # render rather than let them drift from a regenerated cache.
 REC_EXCEPT = list(best.index[tsne["neighbor recall"] <= best["neighbor recall"]])
-assert (N_TRIP_PCA, N_REC_TSNE) == (9, 8), (N_TRIP_PCA, N_REC_TSNE)
+# The 0.6 layout is a setting outside the grid; the subtitle's "no setting
+# fixes" holds only while it also stays below PCA on triplet accuracy.
+N_TRIP_NEW_PCA = int((pca["triplet accuracy"] > new["triplet accuracy"]).sum())
+NEW_OVER_GRID = list(best.index[new["triplet accuracy"] > best["triplet accuracy"]])
+assert (N_TRIP_PCA, N_REC_TSNE, N_TRIP_NEW_PCA) == (9, 8, 9), (N_TRIP_PCA, N_REC_TSNE, N_TRIP_NEW_PCA)
+assert NEW_OVER_GRID == ["digits", "nested clusters"], NEW_OVER_GRID
 assert REC_EXCEPT == ["Olivetti faces"], REC_EXCEPT
 ```
 
@@ -112,7 +116,7 @@ Nine datasets, each run with three seeds:
 Methods:
 
 - **UMAP default** (McInnes et al. 2018): `n_neighbors=15`, `min_dist=0.1`, umap-learn 0.6.0.
-- **UMAP grid**: `n_neighbors` ∈ {5, 10, 15, 30, 50, 100} × `min_dist` ∈ {0, 0.1, 0.25, 0.5, 0.99}, 30 settings. The best setting is picked with hindsight on the score being reported. That is the most tuning could ever buy; a real dev-set search buys less.
+- **UMAP grid**: `n_neighbors` ∈ {5, 10, 15, 30, 50, 100} × `min_dist` ∈ {0, 0.1, 0.25, 0.5, 0.99}, 30 settings. The best setting is picked with hindsight on the score being reported. That is the most tuning these two settings could buy; a dev-set search can at best match it.
 - **PCA**, two components, and **t-SNE** (van der Maaten & Hinton 2008) at openTSNE's defaults (perplexity 30, PCA initialisation).
 - **Original space**: the same scores on the data itself, where they apply.
 
@@ -129,7 +133,7 @@ Labels are used only to score. No method sees them.
 
 ```{python}
 #| label: fig-verdict
-#| fig-cap: "Grey bar: range of UMAP's 30 settings (mean over three seeds each). Circle: UMAP default. Square: t-SNE default. Diamond: PCA. Tick: the same score in the original space."
+#| fig-cap: "Grey bar: range of UMAP's 30 settings (mean over three seeds each). Circle: UMAP default. Square: t-SNE default. Diamond: PCA. Tick (class accuracy and k-means ARI only): the same score in the original space."
 #| fig-alt: "Four panels, one row per dataset. On class accuracy and k-means ARI the UMAP default circle sits near the right end of the grey settings bar in most rows; on neighbour recall it sits right of centre in most rows, and on triplet accuracy toward the left end on several. On triplet accuracy the PCA diamond is right of the whole grey bar on all nine datasets; on neighbour recall the t-SNE square is right of the bar on eight."
 PANELS = [
     ("neighbor recall", "Neighbour recall"),
@@ -168,7 +172,7 @@ plt.show()
 The default is not the problem:
 
 - **Class separation matches the data on most sets.** Hindsight tuning raises 10-NN accuracy by at most `{python} KNN_GAIN_MAX` (`{python} KNN_GAIN_WHERE`) on eight of nine sets. The default lands within 0.03 of the accuracy in the original space on `{python} N_KNN_NEAR` of nine, and beats PCA on `{python} N_KNN_PCA`. On MNIST it scores `{python} V(default, "MNIST", "kNN accuracy")` against PCA's `{python} V(pca, "MNIST", "kNN accuracy")`. The map can edge past the data because it is fitted on every point before the cross-validation split.
-- **Cluster gains are small.** Hindsight tuning raises k-means ARI by at most `{python} ARI_GAIN_HI` (`{python} ARI_GAIN_WHERE`).
+- **Cluster gains are small.** Hindsight tuning raises k-means ARI by at most `{python} ARI_GAIN_HI` (`{python} ARI_GAIN_WHERE`) outside Olivetti, and by `{python} ARI_GAIN_OLI` on Olivetti.
 
 The method is the problem:
 
@@ -180,7 +184,7 @@ The method is the problem:
 
 The one clear failure of the default is Olivetti. Its default 10-NN accuracy is `{python} V(default, "Olivetti faces", "kNN accuracy")`, against `{python} V(best, "Olivetti faces", "kNN accuracy")` at UMAP's best setting and `{python} V(orig, "Olivetti faces", "kNN accuracy")` in the original space. Each person has 10 photos, and UMAP's 15 neighbours count the photo itself, so at least 5 of the other 14 are other people.
 
-Subsampling digits to a fixed number of images per class tests that reading. Five seeds per row:
+That alone does not set the threshold. Subsampling digits to a fixed number of images per class finds where the failure starts. Five seeds per row:
 
 ```{python}
 #| label: tbl-class-size
@@ -214,7 +218,7 @@ At 8 and 10 per class, `n_neighbors=5` beats the default's ARI on all five seeds
 
 - **Hindsight overstates tuning.** The best setting is picked on the score it is judged by, averaged over the same seeds. A search that picks on a dev set and is scored on held-out data can at best match it.
 - **Euclidean distance on raw features.** MNIST and Fashion-MNIST are scored on raw pixels, PBMC on its 50 components. Another metric or preprocessing changes what counts as a neighbour, for UMAP and for the scores.
-- **Defaults are moving.** umap-learn 0.6.0 warns that its default pipeline will switch to recursive initialisation and the Adam optimiser. That pipeline, at `n_neighbors=15` and `min_dist=0.1`, moves triplet accuracy by `{python} NEW_TRIP_LO` to `{python} NEW_TRIP_HI` and neighbour recall by `{python} NEW_REC_LO` to `{python} NEW_REC_HI`, set by set. The comparison here uses the current pipeline.
+- **Defaults are moving.** umap-learn 0.6.0 warns that its default pipeline will switch to recursive initialisation and the Adam optimiser. That pipeline, at `n_neighbors=15` and `min_dist=0.1`, moves triplet accuracy by `{python} NEW_TRIP_LO` to `{python} NEW_TRIP_HI` and neighbour recall by `{python} NEW_REC_LO` to `{python} NEW_REC_HI`, set by set. On `{python} NEW_OVER_GRID[0]` and `{python} NEW_OVER_GRID[1]` its triplet accuracy beats the best of the 30-setting grid, still short of PCA on all nine sets. The comparison here uses the current pipeline.
 - **Three seeds, nine datasets.** The seed sets the method's randomness, the triplet sample, the cross-validation folds and the k-means start. For MNIST, Fashion-MNIST and the two synthetic sets it also redraws the data.
 - **Held-out points are a separate question.** Whether a map places new points correctly, and why no held-out loss exists to choose a setting, is [Part 5](../when-umap-limits/).
 
