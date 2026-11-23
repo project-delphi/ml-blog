@@ -57,23 +57,24 @@ pca, tsne = ref.loc["PCA"].reindex(ORDER), ref.loc["t-SNE"].reindex(ORDER)
 orig = ref.loc["original space"].reindex(ORDER)
 new = ref.loc["UMAP 0.6 layout"].reindex(ORDER)
 gain = best - default
-runs = S[(S.method == "UMAP") & (S.n_neighbors == 15) & (S.min_dist == 0.1)].groupby("dataset")[COLS]
-seed_range = (runs.max() - runs.min()).reindex(ORDER)
 
 
 def f3(x):
     return f"{x:.3f}"
 
 
+def s3(x):
+    """Signed, with a true minus sign."""
+    return f"{x:+.3f}".replace("-", "\u2212")
+
+
 rest = [d for d in ORDER if d != "Olivetti faces"]
 KNN_GAIN_MAX = f3(gain.loc[rest, "kNN accuracy"].max())
 KNN_GAIN_WHERE = gain.loc[rest, "kNN accuracy"].idxmax()
-ARI_GAIN_HI = f3(gain.loc[rest, "k-means ARI"].max())
+ARI_GAIN_HI = f3(gain["k-means ARI"].max())
+ARI_GAIN_WHERE = gain["k-means ARI"].idxmax()
 # Sets where tuning moves ARI at all (nested clusters scores 1.000 at every
 # setting), leaving out Olivetti, which the sentence sets aside.
-_moved = ((best - worst)["k-means ARI"] > 0) & (best.index != "Olivetti faces")
-N_MOVED = int(_moved.sum())
-N_SEED_GE = int((seed_range["k-means ARI"] >= gain["k-means ARI"])[_moved].sum())
 N_KNN_NEAR = int(((default["kNN accuracy"] - orig["kNN accuracy"]).abs() <= 0.03).sum())
 N_KNN_PCA = int((default["kNN accuracy"] > pca["kNN accuracy"]).sum())
 N_TRIP_PCA = int((pca["triplet accuracy"] > best["triplet accuracy"]).sum())
@@ -81,8 +82,9 @@ N_TRIP_PCA = int((pca["triplet accuracy"] > best["triplet accuracy"]).sum())
 many = ["PBMC 3k", "MNIST", "Fashion-MNIST", "digits", "Olivetti faces", "nested clusters"]
 N_CENT, N_CENT_PCA = len(many), int((pca.loc[many, "centroid rho"] > best.loc[many, "centroid rho"]).sum())
 N_REC_TSNE = int((tsne["neighbor recall"] > best["neighbor recall"]).sum())
-N_NEW_TRIP = int((new["triplet accuracy"] > default["triplet accuracy"]).sum())
-N_NEW_REC = int((new["neighbor recall"] < default["neighbor recall"]).sum())
+_nd = new - default
+NEW_TRIP_LO, NEW_TRIP_HI = s3(_nd["triplet accuracy"].min()), s3(_nd["triplet accuracy"].max())
+NEW_REC_LO, NEW_REC_HI = s3(_nd["neighbor recall"].min()), s3(_nd["neighbor recall"].max())
 _tri_best = grid["triplet accuracy"].groupby("dataset").idxmax()
 N_TRIP_MD99 = int(sum(md == 0.99 for _, _, md in _tri_best))
 TRIP_GAIN_MAX = f3(gain["triplet accuracy"].max())
@@ -91,8 +93,7 @@ V = lambda frame, d, c: f3(frame.loc[d, c])  # noqa: E731
 # The subtitle, description and fig-alt quote these counts as words; fail the
 # render rather than let them drift from a regenerated cache.
 REC_EXCEPT = list(best.index[tsne["neighbor recall"] <= best["neighbor recall"]])
-assert (N_MOVED, N_SEED_GE, N_TRIP_PCA, N_REC_TSNE) == (7, 4, 9, 8), (
-    N_MOVED, N_SEED_GE, N_TRIP_PCA, N_REC_TSNE)
+assert (N_TRIP_PCA, N_REC_TSNE) == (9, 8), (N_TRIP_PCA, N_REC_TSNE)
 assert REC_EXCEPT == ["Olivetti faces"], REC_EXCEPT
 ```
 
@@ -110,9 +111,9 @@ Nine datasets, each run with three seeds:
 
 Methods:
 
-- **UMAP default**: `n_neighbors=15`, `min_dist=0.1`, umap-learn 0.6.0.
+- **UMAP default** (McInnes et al. 2018): `n_neighbors=15`, `min_dist=0.1`, umap-learn 0.6.0.
 - **UMAP grid**: `n_neighbors` ∈ {5, 10, 15, 30, 50, 100} × `min_dist` ∈ {0, 0.1, 0.25, 0.5, 0.99}, 30 settings. The best setting is picked with hindsight on the score being reported. That is the most tuning could ever buy; a real dev-set search buys less.
-- **PCA**, two components, and **t-SNE** at openTSNE's defaults (perplexity 30, PCA initialisation).
+- **PCA**, two components, and **t-SNE** (van der Maaten & Hinton 2008) at openTSNE's defaults (perplexity 30, PCA initialisation).
 - **Original space**: the same scores on the data itself, where they apply.
 
 Four scores, one per thing a reader takes from a map:
@@ -129,7 +130,7 @@ Labels are used only to score. No method sees them.
 ```{python}
 #| label: fig-verdict
 #| fig-cap: "Grey bar: range of UMAP's 30 settings (mean over three seeds each). Circle: UMAP default. Square: t-SNE default. Diamond: PCA. Tick: the same score in the original space."
-#| fig-alt: "Four panels, one row per dataset. On class accuracy and k-means ARI the UMAP default circle sits near the right end of the grey settings bar in most rows; on neighbour recall it sits mid-bar, and on triplet accuracy toward the left end on several. On triplet accuracy the PCA diamond is right of the whole grey bar on all nine datasets; on neighbour recall the t-SNE square is right of the bar on eight."
+#| fig-alt: "Four panels, one row per dataset. On class accuracy and k-means ARI the UMAP default circle sits near the right end of the grey settings bar in most rows; on neighbour recall it sits right of centre in most rows, and on triplet accuracy toward the left end on several. On triplet accuracy the PCA diamond is right of the whole grey bar on all nine datasets; on neighbour recall the t-SNE square is right of the bar on eight."
 PANELS = [
     ("neighbor recall", "Neighbour recall"),
     ("kNN accuracy", "10-NN class accuracy"),
@@ -166,8 +167,8 @@ plt.show()
 
 The default is not the problem:
 
-- **Class separation is near the ceiling on most sets.** Hindsight tuning raises 10-NN accuracy by at most `{python} KNN_GAIN_MAX` (`{python} KNN_GAIN_WHERE`) on eight of nine sets. The default lands within 0.03 of the accuracy in the original space on `{python} N_KNN_NEAR` of nine, and beats PCA on `{python} N_KNN_PCA`. On MNIST it scores `{python} V(default, "MNIST", "kNN accuracy")` against PCA's `{python} V(pca, "MNIST", "kNN accuracy")`.
-- **Cluster gains are small.** Hindsight tuning raises k-means ARI by at most `{python} ARI_GAIN_HI` outside Olivetti. On `{python} N_SEED_GE` of the `{python} N_MOVED` other sets where tuning moves ARI, the default's own three seeds spread further apart than the best setting moves it. On PBMC the seeds span `{python} f3(runs.min().loc["PBMC 3k", "k-means ARI"])` to `{python} f3(runs.max().loc["PBMC 3k", "k-means ARI"])`, and tuning gains `{python} V(gain, "PBMC 3k", "k-means ARI")`.
+- **Class separation matches the data on most sets.** Hindsight tuning raises 10-NN accuracy by at most `{python} KNN_GAIN_MAX` (`{python} KNN_GAIN_WHERE`) on eight of nine sets. The default lands within 0.03 of the accuracy in the original space on `{python} N_KNN_NEAR` of nine, and beats PCA on `{python} N_KNN_PCA`. On MNIST it scores `{python} V(default, "MNIST", "kNN accuracy")` against PCA's `{python} V(pca, "MNIST", "kNN accuracy")`. The map can edge past the data because it is fitted on every point before the cross-validation split.
+- **Cluster gains are small.** Hindsight tuning raises k-means ARI by at most `{python} ARI_GAIN_HI` (`{python} ARI_GAIN_WHERE`).
 
 The method is the problem:
 
@@ -213,7 +214,7 @@ At 8 and 10 per class, `n_neighbors=5` beats the default's ARI on all five seeds
 
 - **Hindsight overstates tuning.** The best setting is picked on the score it is judged by, averaged over the same seeds. A search that picks on a dev set and is scored on held-out data can at best match it.
 - **Euclidean distance on raw features.** MNIST and Fashion-MNIST are scored on raw pixels, PBMC on its 50 components. Another metric or preprocessing changes what counts as a neighbour, for UMAP and for the scores.
-- **Defaults are moving.** umap-learn 0.6.0 warns that its default pipeline will switch to recursive initialisation and the Adam optimiser. That pipeline, at `n_neighbors=15` and `min_dist=0.1`, raises triplet accuracy on `{python} N_NEW_TRIP` of nine sets and lowers neighbour recall on `{python} N_NEW_REC`. The comparison here uses the current pipeline.
+- **Defaults are moving.** umap-learn 0.6.0 warns that its default pipeline will switch to recursive initialisation and the Adam optimiser. That pipeline, at `n_neighbors=15` and `min_dist=0.1`, moves triplet accuracy by `{python} NEW_TRIP_LO` to `{python} NEW_TRIP_HI` and neighbour recall by `{python} NEW_REC_LO` to `{python} NEW_REC_HI`, set by set. The comparison here uses the current pipeline.
 - **Three seeds, nine datasets.** The seed sets the method's randomness, the triplet sample, the cross-validation folds and the k-means start. For MNIST, Fashion-MNIST and the two synthetic sets it also redraws the data.
 - **Held-out points are a separate question.** Whether a map places new points correctly, and why no held-out loss exists to choose a setting, is [Part 5](../when-umap-limits/).
 
