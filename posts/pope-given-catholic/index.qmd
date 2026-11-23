@@ -1,0 +1,459 @@
+---
+title: "Pope Given Catholic"
+subtitle: "A p-value and a confidence interval answer the question turned around, and only a prior turns it back"
+description: "Every Pope is Catholic, and almost no Catholic is the Pope. P-values and confidence intervals make the same flip: they give the probability of the data given a hypothesis, while the question people ask is the probability of the hypothesis given the data. Conditional probability, the law of total probability and Bayes' theorem built from the Pope up, then a drug screen where 36% of significant results are useless drugs, Berger and Wolpert's two-reading example where a valid 75% confidence procedure is always either certainly right or a coin flip, and a 95% interval for a mass that lies entirely below zero. In each case the missing ingredient is the prior."
+author: "Ravi Kalia"
+date: "2026-11-23"
+draft: true
+categories: [Statistics, Bayesian]
+image: "./cover.png"
+tags: [p-values, confidence intervals, credible intervals, Bayes theorem, conditional probability, law of total probability, priors, base rates, false discovery rate, likelihood principle, Statistical Rethinking]
+jupyter: pope-blog
+resources:
+  - requirements.txt
+format:
+  html:
+    toc: true
+    code-fold: true
+execute:
+  warning: false
+---
+
+![Pope Given Catholic](./cover.png)
+
+```{python}
+#| label: setup
+#| include: false
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from IPython.display import Markdown
+from scipy import stats
+
+INK, MUTED, RULE = "#1F2430", "#5F6672", "#D8DBE2"
+PURPLE, AMBER, GREEN = "#4A3AA7", "#9A5B00", "#009E73"
+plt.rcParams.update({
+    "figure.dpi": 140, "savefig.dpi": 140,
+    "figure.facecolor": "white", "axes.facecolor": "white",
+    "font.size": 9, "axes.titlesize": 9,
+    "axes.labelcolor": INK, "axes.edgecolor": MUTED,
+    "xtick.color": MUTED, "ytick.color": MUTED,
+    "axes.spines.top": False, "axes.spines.right": False,
+    "legend.frameon": False,
+})
+Path("figures").mkdir(exist_ok=True)
+SEED = 20261123
+
+def pct(x, d=0):
+    return f"{100 * x:.{d}f}%"
+
+def md(df):
+    return Markdown(df.to_markdown(index=False, disable_numparse=True))
+
+# World population in 2024: UN, World Population Prospects 2024.
+WORLD = 8.2e9
+# Baptised Catholics in 2024: Annuarium Statisticum Ecclesiae 2024, via Vatican News.
+CATHOLICS = 1.422e9
+POPES = 1
+```
+
+A p-value or a confidence interval gives the probability of the data given a hypothesis. The question people bring to it is the probability of the hypothesis given the data, and the only road from one to the other is Bayes' theorem, which needs a prior.
+
+Start with something nobody gets wrong. Every Pope is Catholic, so the probability that someone is Catholic, given that they are the Pope, is 1. Is a randomly chosen Catholic therefore likely to be the Pope? Obviously not. There is one Pope and about `{python} f"{CATHOLICS / 1e9:.1f}"` billion Catholics, so the probability that a Catholic is the Pope is about 1 in `{python} f"{CATHOLICS / 1e9:.1f}"` billion. The two probabilities use the same two words in opposite order, and they differ by a factor of about `{python} f"{CATHOLICS / 1e9:.1f}"` billion.
+
+Nobody makes this mistake with Popes. Almost everybody makes it with p-values. Richard McElreath points this out in the first chapter of *Statistical Rethinking*: scientists routinely read a p-value as the probability that their hypothesis is true, and a confidence interval as the range where the parameter probably lies. Those are Bayesian readings, about how probable a hypothesis is given the data. The reverse mistake, reading a Bayesian result as a frequentist one, a statement about how a procedure behaves over repeated samples, almost never happens. By the end, "that's Pope given Catholic" should be a phrase you can aim at any statistical claim.
+
+## Turning a condition around changes the question
+
+A conditional probability is a probability computed inside a smaller world. "The probability of A given B", written $P(A \mid B)$, means: keep only the cases where B is true, then ask what fraction of them are also A. With people, that is counting:
+
+$$
+P(\text{Pope} \mid \text{Catholic}) = \frac{\text{number of people who are Pope and Catholic}}{\text{number of Catholics}}.
+$$
+
+Turning the condition around changes the smaller world, and so the denominator. $P(\text{Catholic} \mid \text{Pope})$ divides the same one person by the number of Popes, which is also one.
+
+Rearranging the definition gives the fact that makes a flip possible. The probability that A and B are both true can be built two ways: the chance of B times the chance of A inside B, or the chance of A times the chance of B inside A.
+
+$$
+P(A \text{ and } B) = P(A \mid B)\,P(B) = P(B \mid A)\,P(A).
+$$
+
+Both routes reach the same joint probability, so one conditional can be rewritten in terms of the other. But the rewriting needs $P(A)$ and $P(B)$ on their own, which neither conditional supplies.
+
+## The denominator counts every way to be Catholic
+
+The bottom line of a flipped conditional is the overall probability of the evidence, $P(B)$. The law of total probability builds it by splitting the world into cases that do not overlap and together cover everyone, then adding up how often B happens in each:
+
+$$
+P(B) = P(B \mid A)\,P(A) + P(B \mid \text{not } A)\,P(\text{not } A).
+$$
+
+For the Pope, the two cases are "is the Pope" and "is not". Being Catholic is certain in the first, which holds one person, and has its ordinary frequency in the second, which holds everyone else. More cases mean more terms, one per way that B can happen. This sum is the denominator of Bayes' theorem: the total weight of every route to the evidence.
+
+## Bayes' theorem is those two facts in one line
+
+Divide the two-way factorisation by $P(B)$ and write $P(B)$ out by total probability. That is Bayes' theorem, and it contains nothing else:
+
+$$
+P(A \mid B) = \frac{P(B \mid A)\,P(A)}{P(B \mid A)\,P(A) + P(B \mid \text{not } A)\,P(\text{not } A)}.
+$$
+
+In words: the flipped probability is the share of all routes to B that pass through A.
+
+```{python}
+#| label: pope
+p_pope = POPES / WORLD
+p_cath_given_pope = 1.0
+p_cath_given_other = (CATHOLICS - POPES) / (WORLD - POPES)
+
+# Law of total probability, then Bayes' theorem.
+p_cath = p_cath_given_pope * p_pope + p_cath_given_other * (1 - p_pope)
+p_pope_given_cath = p_cath_given_pope * p_pope / p_cath
+assert np.isclose(p_cath, CATHOLICS / WORLD)
+assert np.isclose(p_pope_given_cath, 1 / CATHOLICS)
+
+WORLD_B = f"{WORLD / 1e9:.1f}"
+CATH_B = f"{CATHOLICS / 1e9:.3f}"
+ONE_IN = f"{1 / p_pope_given_cath / 1e9:.2f}"
+```
+
+Now the real numbers. The UN puts the world's population at `{python} WORLD_B` billion in 2024, and the Vatican's statistical yearbook counts just over `{python} CATH_B` billion baptised Catholics in the same year. So the chance that a person picked at random is the Pope is 1 in `{python} WORLD_B` billion, and the chance that they are Catholic is `{python} pct(p_cath, 1)`.
+
+```{python}
+#| echo: false
+#| output: asis
+tot = (r"$$P(\text{Catholic}) = 1 \times \frac{1}{@W\text{ billion}}"
+       r" + @C \times \Bigl(1 - \frac{1}{@W\text{ billion}}\Bigr) \approx @C$$")
+bayes = (r"$$P(\text{Pope} \mid \text{Catholic}) = \frac{1 \times 1/@W\text{ billion}}{@C}"
+         r" \approx \frac{1}{@N\text{ billion}}$$")
+for s in (tot, bayes):
+    print(s.replace("@W", WORLD_B).replace("@C", f"{p_cath:.3f}").replace("@N", ONE_IN), "\n")
+```
+
+Look at what the calculation needed. The conditional we started with, $P(\text{Catholic} \mid \text{Pope}) = 1$, contributed a factor of one. The answer came from two numbers it does not contain: how rare Popes are, and how common Catholics are. Those are base rates: how probable each possibility is before any evidence about this person. Bayes' theorem calls $P(A)$ the **prior**, and the flipped probability it produces, $P(A \mid B)$, the **posterior**: the probability after the evidence is in. No one finds the prior here subjective or optional. Without it, the question has no answer.
+
+## A p-value is Catholic given Pope
+
+Hypothesis tests invite the same flip, less visibly. The test assumes a **null hypothesis**, written $H_0$: usually "there is no effect", here "this drug does nothing". The p-value is the probability, computed as if $H_0$ were true, of data at least as extreme as what was seen. A result counts as **significant** when the p-value falls below a threshold, conventionally 0.05. So a test gives $P(\text{data} \mid H_0)$. The researcher wants $P(H_0 \mid \text{data})$: given this significant result, how likely is it that the drug does nothing?
+
+To see the gap, take a hypothetical lab. It is synthetic, but it stands in for any programme that tests many candidates, most of which do nothing: a drug screen, a genome-wide scan, a field running many studies.
+
+```{python}
+#| label: screen
+N_DRUGS, N_WORK = 1000, 100
+ALPHA, POWER = 0.05, 0.80        # P(significant | H0) and P(significant | works)
+
+n_useless = N_DRUGS - N_WORK
+false_alarms = round(ALPHA * n_useless)
+true_hits = round(POWER * N_WORK)
+missed = N_WORK - true_hits
+quiet = n_useless - false_alarms
+n_sig = false_alarms + true_hits
+share_useless = false_alarms / n_sig
+
+def p_null_given_sig(prior_null, alpha=ALPHA, power=POWER):
+    """Bayes' theorem with the total-probability denominator written out."""
+    return alpha * prior_null / (alpha * prior_null + power * (1 - prior_null))
+
+assert np.isclose(p_null_given_sig(n_useless / N_DRUGS), share_useless)
+# The figure's caption and alt text quote these counts.
+assert (N_DRUGS, true_hits, false_alarms, missed, quiet, n_sig) == (1000, 80, 45, 20, 855, 125)
+```
+
+The lab screens `{python} f"{N_DRUGS:,}"` candidate drugs, and `{python} N_WORK` of them really work. Its test has a false positive rate of `{python} ALPHA`: a useless drug comes out significant `{python} pct(ALPHA)` of the time. Its **power**, the chance that a working drug comes out significant, is `{python} POWER`. Of the `{python} n_useless` useless drugs, `{python} false_alarms` are false alarms. Of the `{python} N_WORK` that work, `{python} true_hits` are caught. That makes `{python} n_sig` significant results, and `{python} false_alarms` of them, `{python} pct(share_useless)`, are useless drugs. Most people would put that share at `{python} pct(ALPHA)`.
+
+```{python}
+#| label: fig-screen
+#| fig-cap: "The lab's 1,000 candidate drugs, one square each. Filled purple: working drugs the test caught. Amber: useless drugs that came out significant anyway. Hollow purple: working drugs the test missed. Grey: useless drugs correctly passed over. The bracket marks every significant result."
+#| fig-alt: "An icon array of 1,000 squares in 20 rows and 50 columns. The first 80 squares are filled purple, the next 45 are amber, the next 20 are hollow purple outlines, and the remaining 855 are light grey. A bracket over the first six and a quarter columns labels the 125 significant results, of which 45, or 36 percent, are amber useless drugs."
+ROWS = 20
+groups = [
+    (f"works, significant ({true_hits})", true_hits, PURPLE, PURPLE),
+    (f"useless, significant ({false_alarms})", false_alarms, AMBER, AMBER),
+    (f"works, missed ({missed})", missed, "white", PURPLE),
+    (f"useless, not significant ({quiet})", quiet, RULE, RULE),
+]
+fig, ax = plt.subplots(figsize=(7.6, 3.9))
+start = 0
+for label, n, face, edge in groups:
+    i = np.arange(start, start + n)
+    start += n
+    ax.scatter(i // ROWS, ROWS - 1 - i % ROWS, marker="s", s=24, facecolor=face,
+               edgecolor=edge, lw=0.9, label=label)
+right = (n_sig - 1) / ROWS + 0.4
+ax.plot([-0.4, -0.4, right, right], [ROWS, ROWS + 0.5, ROWS + 0.5, ROWS], color=INK, lw=0.9)
+ax.text(-0.4, ROWS + 1.1, f"{n_sig} significant results: {false_alarms} of them "
+        f"({pct(share_useless)}) are useless drugs", color=INK, fontsize=9)
+ax.set_xlim(-1, N_DRUGS / ROWS)
+ax.set_ylim(-1, ROWS + 2.5)
+ax.axis("off")
+ax.legend(loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=2, fontsize=8.5,
+          handletextpad=0.3, columnspacing=1.5)
+plt.show()
+```
+
+Bayes' theorem gives the same answer, with the denominator listing the two routes to a significant result: a useless drug getting lucky, or a working drug being caught.
+
+```{python}
+#| echo: false
+#| output: asis
+prior = n_useless / N_DRUGS
+s = (r"$$P(H_0 \mid \text{sig}) = \frac{P(\text{sig} \mid H_0)\,P(H_0)}"
+     r"{P(\text{sig} \mid H_0)\,P(H_0) + P(\text{sig} \mid H_1)\,P(H_1)}"
+     r" = \frac{@a \times @p}{@a \times @p + @w \times @q} = \frac{@n}{@d} = @r$$")
+for k, v in {"@a": f"{ALPHA:.2f}", "@p": f"{prior:.2f}", "@w": f"{POWER:.2f}",
+             "@q": f"{1 - prior:.2f}", "@n": f"{ALPHA * prior:.3f}",
+             "@d": f"{ALPHA * prior + POWER * (1 - prior):.3f}",
+             "@r": f"{p_null_given_sig(prior):.2f}"}.items():
+    s = s.replace(k, v)
+print(s)
+```
+
+Here $H_1$ means "the drug works", and $P(H_0)$ is the prior: the share of candidates that do nothing before any of them is tested. The significance threshold enters only as $P(\text{sig} \mid H_0)$, one ingredient among four. To see how much the prior controls, hold the false positive rate and the power fixed and change only the share of useless candidates.
+
+```{python}
+#| label: fig-prior
+#| fig-cap: "The chance that a significant drug is useless, against the share of useless candidates going in. The test is the same everywhere on the curve: false positive rate 0.05, power 0.8. The dashed line is the 5% that a p-value is often taken to mean."
+#| fig-alt: "A curve that rises slowly from zero and then steeply as the prior share of useless drugs approaches one. Three marked points: a prior of 0.5 gives about 6 percent, 0.9 gives 36 percent, and 0.99 gives about 86 percent. A dashed horizontal line sits at 5 percent."
+PRIORS = [0.50, 0.90, 0.99]
+POST = {p: p_null_given_sig(p) for p in PRIORS}
+assert [pct(v) for v in POST.values()] == ["6%", "36%", "86%"]  # quoted in the alt text
+grid = np.linspace(0, 0.999, 600)
+fig, ax = plt.subplots(figsize=(6.4, 3.8))
+ax.plot(grid, p_null_given_sig(grid), color=PURPLE, lw=2)
+ax.axhline(ALPHA, color=MUTED, ls="--", lw=0.9)
+ax.text(0.02, ALPHA + 0.02, "what the p-value is often read as: 5%", color=MUTED, fontsize=8.5)
+for p, (dx, dy) in zip(PRIORS, [(0.02, 0.10), (-0.32, 0.12), (-0.38, 0.03)]):
+    ax.scatter(p, POST[p], s=48, color=AMBER, edgecolor="white", lw=1.2, zorder=3)
+    ax.annotate(f"P(H0) = {p:.2f}: {pct(POST[p])}", (p, POST[p]), (p + dx, POST[p] + dy),
+                color=INK, fontsize=8.5, arrowprops=dict(arrowstyle="-", color=MUTED, lw=0.7))
+ax.set_xlabel("prior: share of candidates that are useless, P(H0)")
+ax.set_ylabel("P(useless | significant)")
+ax.set_xlim(0, 1)
+ax.set_ylim(0, 1)
+ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
+ax.grid(color=RULE, lw=0.5)
+fig.savefig("figures/prior-curve.png", dpi=150, bbox_inches="tight")
+plt.show()
+```
+
+With a prior of `{python} f"{PRIORS[0]:.2f}"`, half the candidates useless, a significant result is a useless drug `{python} pct(POST[0.50])` of the time. At `{python} f"{PRIORS[1]:.2f}"` it is `{python} pct(POST[0.90])`. At `{python} f"{PRIORS[2]:.2f}"`, the kind of odds a long-shot field faces, it is `{python} pct(POST[0.99])`. The test is the same in all three. The answer is not, because it depends on a quantity the test never sees.
+
+This is the Pope again. The hypothesis plays the Pope and the data play the Catholic. The p-value is "Catholic given Pope": if the drug is useless, how often does a result like this turn up? The researcher wanted "Pope given Catholic": given a result like this, how often is the drug useless? Going from one to the other takes the base rates, as it did in Rome.
+
+One simplification: a real p-value is a tail probability, the chance of data *at least* as extreme as the observed data, not the chance of "significant" as a yes-or-no event. Counting significant results keeps the arithmetic in whole drugs, and changes nothing about the direction. The p-value still conditions on the hypothesis.
+
+## A confidence interval is a promise about the procedure
+
+Confidence intervals invite the same flip, harder to see because the interval looks like a statement about the parameter. Start by asking which quantity is random. In frequentist statistics the parameter, say a true mean $\mu$, is a fixed unknown number with no probability distribution. What varies from sample to sample is the data, and so the interval computed from them. A 95% confidence procedure is a recipe that, applied to sample after sample with the same fixed $\mu$, produces intervals that contain $\mu$ 95% of the time. The guarantee is $P(\text{interval covers } \mu \mid \mu) = 0.95$ for every $\mu$: a probability about the interval, given the parameter. That is Catholic given Pope.
+
+Once a particular sample is in and the endpoints are numbers $a$ and $b$, nothing random remains. "$\mu$ is between $a$ and $b$" is either true or false, and the frequentist framework does not assign that sentence a probability. The 95% describes the recipe's long-run hit rate, not this interval.
+
+```{python}
+#| label: intervals
+MU, SIGMA, N = 10.0, 2.0, 20
+rng = np.random.default_rng(SEED)
+T = stats.t.ppf(0.975, N - 1)
+
+def t_intervals(n_rep):
+    x = rng.normal(MU, SIGMA, (n_rep, N))
+    m, se = x.mean(1), x.std(1, ddof=1) / np.sqrt(N)
+    return m - T * se, m + T * se
+
+lo, hi = t_intervals(100)
+covers = (lo <= MU) & (MU <= hi)
+assert (MU, N) == (10.0, 20)  # quoted in the caption
+lo_big, hi_big = t_intervals(200_000)
+long_run = ((lo_big <= MU) & (MU <= hi_big)).mean()
+```
+
+A simulation makes the recipe concrete. Draw `{python} N` measurements from a normal distribution with true mean `{python} f"{MU:g}"` and standard deviation `{python} f"{SIGMA:g}"`, a synthetic stand-in for any small set of repeated measurements, and compute the usual 95% interval from the $t$ distribution. Do it 100 times.
+
+```{python}
+#| label: fig-intervals
+#| fig-cap: "One hundred 95% confidence intervals, each from a fresh sample of 20 measurements of a quantity whose true value is 10 (vertical line). Purple intervals contain the true value; amber ones miss it. The 95% is a property of the procedure that made them, not of any one interval."
+#| fig-alt: "One hundred horizontal line segments stacked vertically, scattered around a vertical line at 10. Most are purple and cross the line; a handful are amber and lie wholly to one side of it."
+fig, ax = plt.subplots(figsize=(6.4, 5.2))
+for k in range(100):
+    ax.plot([lo[k], hi[k]], [k, k], color=PURPLE if covers[k] else AMBER,
+            lw=1.6 if not covers[k] else 1.1, solid_capstyle="round")
+ax.axvline(MU, color=INK, lw=1)
+ax.set_yticks([])
+ax.spines["left"].set_visible(False)
+ax.set_xlabel("interval for the mean")
+ax.set_title(f"{covers.sum()} of 100 intervals contain the true value", loc="left", color=INK)
+plt.show()
+```
+
+`{python} covers.sum()` of the 100 intervals contain the true value; another batch of 100 would give a slightly different count. Over `{python} f"{len(lo_big):,}"` repetitions the share is `{python} pct(long_run, 1)`. That 95% is a fact about the pile. A researcher holding a single interval holds one segment from this figure with the vertical line erased.
+
+The usual defence: if 95% of intervals are right, why not be 95% sure of this one? The next example is a case where the data say plainly that the long-run rate is the wrong description.
+
+### A stuck gauge is 75% right on average and never 75% right on the day
+
+Picture a gauge whose needle sticks: each reading lands one unit above the true value or one unit below it, with probability one half each, independently from reading to reading. Take two readings, $x_1$ and $x_2$, and use this rule to report an estimate of the true value $\theta$:
+
+- If the two readings differ, report their midpoint.
+- If they are the same, report that reading minus 1.
+
+This is Example 1 of Berger and Wolpert's *The Likelihood Principle*, told there with abstract variables; the gauge is a costume. There are only four equally likely datasets to check.
+
+```{python}
+#| label: gauge
+THETA = 3                        # the true value; the rule's behaviour does not depend on it
+
+def report(x1, x2):
+    return (x1 + x2) / 2 if x1 != x2 else x1 - 1
+
+def posterior(x1, x2):
+    """Posterior over theta under a flat prior: every candidate starts equal."""
+    cands = sorted({x1 - 1, x1 + 1, x2 - 1, x2 + 1})
+    like = np.array([0.25 if abs(x1 - c) == 1 and abs(x2 - c) == 1 else 0.0 for c in cands])
+    return dict(zip(cands, like / like.sum()))
+
+rows = []
+for e1 in (-1, 1):
+    for e2 in (-1, 1):
+        x1, x2 = THETA + e1, THETA + e2
+        est = report(x1, x2)
+        rows.append({"readings": f"{x1}, {x2}", "probability": "1/4",
+                     "reported value": f"{est:g}", "right?": "yes" if est == THETA else "no",
+                     "posterior P(reported value is θ)": pct(posterior(x1, x2).get(est, 0.0))})
+FOUR = pd.DataFrame(rows)
+exact_coverage = np.mean([r["right?"] == "yes" for r in rows])
+POST_DIFF = posterior(THETA - 1, THETA + 1)[THETA]          # readings differ
+POST_SAME = posterior(THETA + 1, THETA + 1)[THETA]          # readings match
+assert (exact_coverage, POST_DIFF, POST_SAME) == (0.75, 1.0, 0.5)  # heading, captions, alt text
+
+REPS = 200_000
+g = np.random.default_rng(SEED + 1)
+X = THETA + g.choice([-1, 1], size=(REPS, 2))
+differ = X[:, 0] != X[:, 1]
+est = np.where(differ, X.mean(1), X[:, 0] - 1)
+hit = est == THETA
+cov_all, cov_diff, cov_same = hit.mean(), hit[differ].mean(), hit[~differ].mean()
+share_diff = differ.mean()
+post_on_est = np.where(differ, 1.0, 0.5)          # what the posterior says, dataset by dataset
+assert abs(cov_all - 0.75) < 0.01 and cov_diff == 1.0 and abs(cov_same - 0.5) < 0.01
+md(FOUR)
+```
+
+With a true value of `{python} THETA`, the rule names it in three of the four datasets, `{python} pct(exact_coverage)` of the time, and that holds whatever the true value is. So it is a valid `{python} pct(exact_coverage)` confidence procedure.
+
+Now look at what you know once the readings are in. If they differ, one is the true value plus 1 and the other is the true value minus 1, so their midpoint is the true value. You are certain. If they match, both readings sat on the same side, and nothing says which. The true value is the reading minus 1 or plus 1, and you are flipping a coin. A confidence of `{python} pct(exact_coverage)` describes neither situation. It is the average of `{python} pct(POST_DIFF)` and `{python} pct(POST_SAME)`, weighted by how often each occurs, and no dataset you could ever see is the average one.
+
+```{python}
+#| label: fig-gauge
+#| fig-cap: "The two-reading rule run 200,000 times. Bars: how often the reported value is the true value, over all runs and split by whether the two readings differed or matched. Dashed line: the 75% the confidence statement reports in every case. Green diamonds: the probability the flat-prior posterior gives the reported value, which matches the hit rate in each group."
+#| fig-alt: "Three bars. All runs: 75 percent. Readings differ: 100 percent. Readings match: 50 percent. A dashed horizontal line at 75 percent crosses all three. Green diamonds sit at the top of each bar, at 75, 100 and 50 percent."
+labels = ["all runs\n(100%)", f"readings differ\n({pct(share_diff)} of runs)",
+          f"readings match\n({pct(1 - share_diff)} of runs)"]
+rates = [cov_all, cov_diff, cov_same]
+said = [post_on_est.mean(), POST_DIFF, POST_SAME]
+fig, ax = plt.subplots(figsize=(6.0, 3.6))
+ax.bar(range(3), rates, width=0.55, color=[MUTED, PURPLE, PURPLE])
+for k, r in enumerate(rates):
+    ax.text(k, r + 0.05, pct(r, 1), ha="center", color=INK, fontsize=9)
+ax.scatter(range(3), said, marker="D", s=46, color=GREEN, edgecolor="white", lw=1.2, zorder=3,
+           label="posterior probability of the reported value")
+ax.axhline(0.75, color=AMBER, ls="--", lw=1.1, label="75% confidence, reported for every dataset")
+ax.set_xticks(range(3), labels)
+ax.set_ylim(0, 1.18)
+ax.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
+ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
+ax.set_ylabel("share of runs where the reported\nvalue is the true value")
+ax.legend(loc="upper right", fontsize=8, bbox_to_anchor=(1.0, 1.12))
+plt.show()
+```
+
+The simulation agrees with the counting. Over `{python} f"{REPS:,}"` runs the rule is right `{python} pct(cov_all, 1)` of the time. In the `{python} pct(share_diff)` of runs where the readings differ, it is right `{python} pct(cov_diff, 1)` of the time. Where they match, `{python} pct(cov_same, 1)`.
+
+A Bayesian answer starts from a prior over the true value, here a flat one that favours no candidate. Bayes' theorem then weighs each candidate by how probable it makes the two readings. When the readings differ, only the midpoint could have produced both, so the posterior puts `{python} pct(POST_DIFF)` on it. When they match, two candidates fit equally well, so the posterior puts `{python} pct(POST_SAME)` on each. The posterior reports certainty when you have it and a coin flip when you have one. The green diamonds show it is right about itself: in each group, the probability it states is the rate at which it is correct.
+
+The confidence procedure answered the question "how often does this rule work, over all the datasets it might meet?" The question in hand was "given the readings I got, what is the true value?" That is Pope given Catholic, and the `{python} pct(exact_coverage)` is Catholic given Pope.
+
+### A valid interval can be certainly wrong
+
+The gauge shows a confidence level that misdescribes the data in hand. Prior knowledge can expose something starker: an interval that is certainly wrong. Weigh a tiny sample on a balance whose readings scatter around the true mass with a known standard deviation. A mass cannot be negative, but the standard interval, the reading plus or minus a fixed multiple of the standard deviation, does not know that.
+
+```{python}
+#| label: mass
+SD, Z = 0.1, stats.norm.ppf(0.975)      # balance noise (mg) and the 95% multiplier
+READING = -0.3                           # one unlucky reading
+ci = (READING - Z * SD, READING + Z * SD)
+
+# Prior: any positive mass equally plausible, negative masses impossible.
+post = stats.truncnorm(a=(0 - READING) / SD, b=np.inf, loc=READING, scale=SD)
+cred_hi = post.ppf(0.95)                 # density falls from zero, so the 95% interval is [0, cred_hi]
+
+TRUE_MASS = 0.05
+w = np.random.default_rng(SEED + 2).normal(TRUE_MASS, SD, 200_000)
+mass_cov = ((w - Z * SD <= TRUE_MASS) & (TRUE_MASS <= w + Z * SD)).mean()
+all_negative = (w + Z * SD < 0).mean()
+```
+
+With a standard deviation of `{python} f"{SD:g}"` mg, an unlucky reading of `{python} f"{READING:g}"` mg gives a 95% confidence interval from `{python} f"{ci[0]:.2f}"` to `{python} f"{ci[1]:.2f}"` mg. The procedure is still valid: over `{python} f"{len(w):,}"` simulated weighings of a `{python} f"{TRUE_MASS:g}"` mg sample, its intervals contain the truth `{python} pct(mass_cov, 1)` of the time. But `{python} pct(all_negative, 1)` of them lie entirely below zero, and whoever holds one knows for certain that it misses. A prior that says "mass is positive" cannot produce such an interval. Its answer is a **credible interval**: a range that holds the parameter with the stated probability, given the data and the prior. For the same reading, it runs from 0 to `{python} f"{cred_hi:.2f}"` mg: the mass is small, and that is all the reading can say.
+
+## The prior is the missing ingredient every time
+
+Every example has one structure. We have a probability with the hypothesis or parameter held fixed. We want a probability about the hypothesis or parameter, with the data held fixed. Getting from one to the other takes a prior.
+
+```{python}
+#| label: tbl-summary
+#| tbl-cap: "What each example hands us, what we want from it, and what it takes to get there."
+md(pd.DataFrame({
+    "example": ["Pope", "drug screen", "stuck gauge", "negative mass"],
+    "what we have": [
+        "P(Catholic | Pope) = 1",
+        f"P(significant | useless drug) = {ALPHA}",
+        f"the rule names θ {pct(exact_coverage)} of the time, for any θ",
+        f"95% of intervals contain the mass, for any mass",
+    ],
+    "what we want": [
+        f"P(Pope | Catholic) ≈ 1 in {ONE_IN} billion",
+        f"P(useless | significant): {pct(POST[0.5])}, {pct(POST[0.9])} or {pct(POST[0.99])}",
+        f"P(θ = reported value | these readings): {pct(cov_diff)} or {pct(cov_same)}",
+        f"where the mass is, given a reading of {READING:g} mg",
+    ],
+    "missing ingredient": [
+        "prior: how rare Popes are",
+        "prior: the share of useless candidates",
+        "prior over θ (flat)",
+        "prior: mass is positive",
+    ],
+}))
+```
+
+None of the mathematics in the table is contested. Conditional probability, total probability and Bayes' theorem are theorems that every statistician accepts. When the prior is a frequency, as with a lab that knows roughly what share of its candidates pan out, a strict frequentist will run the drug-screen calculation too; the share of false discoveries is a standard frequentist quantity. The disagreement starts when the hypothesis is one fixed fact, this drug works or it does not, or the parameter is one fixed number. A Bayesian will put a probability on it, to express what is known. A frequentist will not, and so can answer "Catholic given Pope" about the procedure but not "Pope given Catholic" about the hypothesis.
+
+## Plenty of data hides the difference
+
+If the misreading is so common, why does it rarely cause trouble? Because the two answers often agree in number. With a flat prior and a well-behaved model, credible and confidence intervals are often numerically the same, and with lots of data they tend to converge. The balance shows it once the reading sits far from zero.
+
+```{python}
+#| label: agree
+FAR = 2.0                                    # a reading far from the boundary at zero
+ci_far = (FAR - Z * SD, FAR + Z * SD)
+post_far = stats.truncnorm(a=(0 - FAR) / SD, b=np.inf, loc=FAR, scale=SD)
+cred_far = (post_far.ppf(0.025), post_far.ppf(0.975))
+far_gap = max(abs(ci_far[0] - cred_far[0]), abs(ci_far[1] - cred_far[1]))
+```
+
+For a reading of `{python} f"{FAR:g}"` mg, the 95% confidence interval runs from `{python} f"{ci_far[0]:.3f}"` to `{python} f"{ci_far[1]:.3f}"` mg, and the positive-prior credible interval from `{python} f"{cred_far[0]:.3f}"` to `{python} f"{cred_far[1]:.3f}"` mg. A researcher who reads one as the other gets the right numbers by luck. The luck runs out with thin data, near a boundary, or in the drug screen, where the prior is far from flat: at a prior of `{python} f"{PRIORS[2]:.2f}"`, a drug significant at the `{python} f"{ALPHA}"` level is useless `{python} pct(POST[0.99])` of the time.
+
+The Bayesian answer has real costs. Someone has to choose a prior and defend it, and when the data are thin the answer can move a lot with that choice. Frequentist guarantees have real uses too. A regulator approving drugs, or a factory testing every batch, applies one procedure thousands of times and cares how often it errs over all of them. A long-run error rate answers that question.
+
+But most scientists asking about one experiment want to know how likely their hypothesis is, given their data, or where their parameter probably lies. Those are Pope-given-Catholic questions. For them, the Bayesian answer is the one they wanted, and the prior is not an add-on to it. Without the prior, the question has no answer.
+
+Popes. Are. Catholic. Catholics. Are. Rarely. Popes. Only. Priors. Flip.
+
+## References
+
+- Berger, J. O. & Wolpert, R. L. (1988). [*The Likelihood Principle*](https://doi.org/10.1214/lnms/1215466210), 2nd ed. IMS Lecture Notes–Monograph Series, vol. 6. Institute of Mathematical Statistics. The two-reading example is Example 1, §2.1, pp. 5–6.
+- McElreath, R. (2020). [*Statistical Rethinking: A Bayesian Course with Examples in R and Stan*](https://doi.org/10.1201/9780429029608), 2nd ed. Chapman & Hall/CRC. Chapter 1.
+- Morey, R. D., Hoekstra, R., Rouder, J. N., Lee, M. D. & Wagenmakers, E.-J. (2016). [The fallacy of placing confidence in confidence intervals](https://doi.org/10.3758/s13423-015-0947-8). *Psychonomic Bulletin & Review* 23(1), 103–123. Further reading: more examples of confidence intervals that misdescribe the data in hand.
+- United Nations, Department of Economic and Social Affairs, Population Division (2024). [World Population Prospects 2024](https://population.un.org/wpp/). World population of 8.2 billion in 2024.
+- Vatican News (28 March 2026). [New data of Annuario Pontificio 2026 shows Catholics growing in Africa](https://www.vaticannews.va/en/vatican-city/news/2026-03/new-data-from-annuario-pontificio-2026-shows-catholics-growing.html). Reports the *Annuarium Statisticum Ecclesiae 2024* count of just over 1.422 billion Catholics in 2024.
