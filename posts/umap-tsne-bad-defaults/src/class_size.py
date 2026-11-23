@@ -1,7 +1,8 @@
 """Does default UMAP fail when classes hold fewer points than n_neighbors?
 
-Subsamples scikit-learn's digits to m images per class and scores UMAP at three
-n_neighbors values against the original space. Writes cache/class_size.parquet.
+Subsamples scikit-learn's digits to m images per class and scores k-means on UMAP
+maps at n_neighbors 5 and 15 against k-means on the original pixels. Writes
+cache/class_size.parquet.
 
     ../../.venv-umap-tsne/bin/python src/class_size.py
 """
@@ -22,20 +23,11 @@ from joblib import Parallel, delayed
 from sklearn.cluster import KMeans
 from sklearn.datasets import load_digits
 from sklearn.metrics import adjusted_rand_score
-from sklearn.neighbors import NearestNeighbors
 
 CACHE = Path(__file__).resolve().parent.parent / "cache"
 PER_CLASS = (8, 12, 20, 40, 80, 160)
-N_NEIGHBORS = (5, 15, 50)
+N_NEIGHBORS = (5, 15)
 SEEDS = (0, 1, 2, 3, 4)
-
-
-def nn_accuracy(Z, y):
-    """Leave-one-out 1-NN accuracy: is each point's nearest neighbour its own class?"""
-    idx = NearestNeighbors(n_neighbors=2).fit(Z).kneighbors(Z)[1]
-    # Remove the point by index; an exact duplicate can come back first.
-    idx = np.where(idx[:, 0] == np.arange(len(Z)), idx[:, 1], idx[:, 0])
-    return float((y[idx] == y).mean())
 
 
 def one(m, seed, nn):
@@ -58,7 +50,6 @@ def one(m, seed, nn):
         per_class=m,
         seed=seed,
         n_neighbors=str(nn),
-        nn_accuracy=nn_accuracy(Z, y),
         ari=adjusted_rand_score(y, km),
     )
 
@@ -69,12 +60,7 @@ def main():
     df = pd.DataFrame(rows)
     CACHE.mkdir(exist_ok=True)
     df.to_parquet(CACHE / "class_size.parquet", index=False)
-    print(
-        df.groupby(["per_class", "n_neighbors"])[["nn_accuracy", "ari"]]
-        .mean()
-        .unstack()
-        .round(3)
-    )
+    print(df.groupby(["per_class", "n_neighbors"]).ari.mean().unstack().round(3))
 
 
 if __name__ == "__main__":

@@ -152,8 +152,11 @@ class Reference:
             & (draw[:, 0] != draw[:, 2])
             & (draw[:, 1] != draw[:, 2])
         )
-        self.trip = draw[ok][:N_TRIPLETS]
-        self.trip_sign = np.sign(self._d(X, 0, 1) - self._d(X, 0, 2))
+        self.trip = draw[ok]
+        # Drop ties in the data (j and k equidistant from i): no map can match a 0.
+        sign = np.sign(self._d(X, 0, 1) - self._d(X, 0, 2))
+        self.trip = self.trip[sign != 0][:N_TRIPLETS]
+        self.trip_sign = sign[sign != 0][:N_TRIPLETS]
         cls = np.unique(y)
         self.centroid_d = pdist(np.array([X[y == c].mean(0) for c in cls]))
 
