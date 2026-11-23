@@ -80,7 +80,7 @@ N_TRIP_PCA = int((pca["triplet accuracy"] > best["triplet accuracy"]).sum())
 # Centroid correlation needs enough classes to rank: wine (3) and breast cancer (2)
 # give at most three centroid distances, so they are left out.
 many = [d for d in ORDER if d not in ("wine", "breast cancer")]
-N_CENT, N_CENT_PCA = len(many), int((pca.loc[many, "centroid rho"] > best.loc[many, "centroid rho"]).sum())
+N_CENT = len(many)
 # Default UMAP against PCA, score by score; gaps within TOL on three-seed means are ties.
 TOL = 0.01
 _dp = default - pca
@@ -88,13 +88,14 @@ WIN = (_dp > TOL).sum()
 WIN_CENT = int((_dp.loc[many, "centroid rho"] > -TOL).sum())
 N_WIN_REC, N_WIN_KNN, N_WIN_ARI = int(WIN["neighbor recall"]), int(WIN["kNN accuracy"]), int(WIN["k-means ARI"])
 assert (int(WIN["triplet accuracy"]), WIN_CENT, N_CENT) == (0, 0, 7), (WIN["triplet accuracy"], WIN_CENT)
+assert (_dp["triplet accuracy"] < -TOL).all() and (pca["triplet accuracy"] - best["triplet accuracy"] > TOL).all()
 assert (N_WIN_REC, N_WIN_KNN, N_WIN_ARI) == (9, 7, 6), (N_WIN_REC, N_WIN_KNN, N_WIN_ARI)
 ARI_PCA_SETS = list(default.index[_dp["k-means ARI"] < -TOL])
 ARI_TIES = list(default.index[_dp["k-means ARI"].abs() <= TOL])
 assert ARI_TIES == ["noisy clusters"], ARI_TIES
 CENT_GAIN_MAX = f3(gain.loc[many, "centroid rho"].max())
 CENT_GAIN_WHERE = gain.loc[many, "centroid rho"].idxmax()
-assert list(best.loc[many].index[best.loc[many, "centroid rho"] >= pca.loc[many, "centroid rho"]]) == ["PBMC 3k"]
+assert list(best.loc[many].index[best.loc[many, "centroid rho"] > pca.loc[many, "centroid rho"] - TOL]) == ["PBMC 3k"]
 N_REC_TSNE = int((tsne["neighbor recall"] > best["neighbor recall"]).sum())
 _nd = new - default
 NEW_TRIP_LO, NEW_TRIP_HI = s3(_nd["triplet accuracy"].min()), s3(_nd["triplet accuracy"].max())
@@ -201,7 +202,7 @@ Default against tuned UMAP:
 
 - **Class separation matches the data on most sets.** Hindsight tuning raises 10-NN accuracy by at most `{python} KNN_GAIN_MAX` (`{python} KNN_GAIN_WHERE`) on eight of nine sets. The default lands within 0.03 of the accuracy in the original space on `{python} N_KNN_NEAR` of nine.
 - **Cluster gains are small.** Hindsight tuning raises k-means ARI by at most `{python} ARI_GAIN_HI` (`{python} ARI_GAIN_WHERE`) outside Olivetti, and by `{python} ARI_GAIN_OLI` on Olivetti.
-- **Tuning moves the global layout a little.** `min_dist=0.99` is the best triplet setting on `{python} N_TRIP_MD99` of nine sets and adds up to `{python} TRIP_GAIN_MAX` (`{python} TRIP_GAIN_WHERE`), still short of PCA. On centroid correlation the best setting adds up to `{python} CENT_GAIN_MAX` (`{python} CENT_GAIN_WHERE`) and passes PCA on one set of `{python} N_CENT`, PBMC: `{python} V(best, "PBMC 3k", "centroid rho")` against `{python} V(pca, "PBMC 3k", "centroid rho")`.
+- **Tuning moves the global layout a little.** `min_dist=0.99` is the best triplet setting on `{python} N_TRIP_MD99` of nine sets and adds up to `{python} TRIP_GAIN_MAX` (`{python} TRIP_GAIN_WHERE`), still short of PCA. On centroid correlation the best setting adds up to `{python} CENT_GAIN_MAX` (`{python} CENT_GAIN_WHERE`) and reaches PCA on one set of `{python} N_CENT`, PBMC: `{python} V(best, "PBMC 3k", "centroid rho")` against `{python} V(pca, "PBMC 3k", "centroid rho")`.
 
 Against t-SNE and the data:
 
@@ -244,7 +245,7 @@ K8, K10, KNN_REST = s3(knn_d.loc[8]), s3(knn_d.loc[10]), f3(knn_d.loc[12:].abs()
 K8_15, K8_5, K8_D = (f3(m8.loc[n, "knn_accuracy"]) for n in ("15", "5", "original"))
 A8_15, A8_D = f3(m8.loc["15", "ari"]), f3(m8.loc["original", "ari"])
 # The bullets' wording assumes this pattern.
-assert list(ari_w[ari_w == 5].index) == [8, 10] and (ari_w.loc[12:] < 5).all()
+assert list(ari_w[ari_w == 5].index) == [8, 10] and ((ari_w.loc[12:] > 0) & (ari_w.loc[12:] < 5)).all()
 assert knn_w.loc[8] == 5 and knn_d.loc[8] > 0.05 and knn_d.loc[10:].abs().max() < 0.02
 assert m8.loc["15", "ari"] > m8.loc["original", "ari"]
 ```
@@ -258,7 +259,7 @@ Even at 8 per class the default map clusters better than the raw pixels (`{pytho
 
 - **Hindsight is an estimate, not a bound.** The best setting is picked on the score it is judged by, from three-seed means. A dev-set search does not see that score. A search that picked a setting per seed would do slightly better, by up to `{python} PERSEED_EXTRA` here.
 - **The 10-NN vote is capped on Olivetti.** A training fold holds 8 photos per person, so at most 8 of 10 votes can come from the right person, in the original space as on the maps.
-- **Class accuracy is optimistic for UMAP and t-SNE.** Both maps are fitted on every point before the cross-validation split, so test points helped shape the map they are scored on. PCA, being linear, gains little from this. The map can therefore edge past the original space.
+- **Class accuracy is optimistic for UMAP and t-SNE.** Both maps are fitted on every point before the cross-validation split, so test points helped shape the map they are scored on. The same holds for PCA, also fitted on every point. The maps can therefore edge past the original space.
 - **Euclidean distance on raw features.** MNIST and Fashion-MNIST are scored on raw pixels, PBMC on its 50 components. Another metric or preprocessing changes what counts as a neighbour, for UMAP and for the scores.
 - **Defaults are moving.** umap-learn 0.6.0 warns that its default pipeline will switch to recursive initialisation and the Adam optimiser. That pipeline, at `n_neighbors=15` and `min_dist=0.1`, moves triplet accuracy by `{python} NEW_TRIP_LO` to `{python} NEW_TRIP_HI` and neighbour recall by `{python} NEW_REC_LO` to `{python} NEW_REC_HI`, set by set. On `{python} NEW_OVER_GRID[0]` and `{python} NEW_OVER_GRID[1]` its triplet accuracy beats the best of the 30-setting grid, still short of PCA on all nine sets. The comparison here uses the current pipeline.
 - **Three seeds, nine datasets.** The seed sets the method's randomness, the triplet sample, the cross-validation folds and the k-means start. For MNIST, Fashion-MNIST and the two synthetic sets it also redraws the data.
