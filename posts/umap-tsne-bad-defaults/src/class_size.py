@@ -1,7 +1,8 @@
 """Does default UMAP fail when classes hold fewer points than n_neighbors?
 
-Subsamples scikit-learn's digits to m images per class and scores k-means on UMAP
-maps at n_neighbors 5 and 15 against k-means on the original pixels. Writes
+Subsamples scikit-learn's digits to m images per class and scores UMAP maps at
+n_neighbors 5 and 15 against the original pixels, on k-means ARI and on 5-fold
+10-NN class accuracy (the scores the main results use). Writes
 cache/class_size.parquet.
 
     ../../.venv-umap-tsne/bin/python src/class_size.py
@@ -23,6 +24,8 @@ from joblib import Parallel, delayed
 from sklearn.cluster import KMeans
 from sklearn.datasets import load_digits
 from sklearn.metrics import adjusted_rand_score
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.neighbors import KNeighborsClassifier
 
 CACHE = Path(__file__).resolve().parent.parent / "cache"
 PER_CLASS = (8, 10, 12, 15, 20, 40, 80, 160)
@@ -51,6 +54,12 @@ def one(m, seed, nn):
         seed=seed,
         n_neighbors=str(nn),
         ari=adjusted_rand_score(y, km),
+        knn_accuracy=cross_val_score(
+            KNeighborsClassifier(10),
+            Z,
+            y,
+            cv=StratifiedKFold(5, shuffle=True, random_state=seed),
+        ).mean(),
     )
 
 
@@ -60,7 +69,12 @@ def main():
     df = pd.DataFrame(rows)
     CACHE.mkdir(exist_ok=True)
     df.to_parquet(CACHE / "class_size.parquet", index=False)
-    print(df.groupby(["per_class", "n_neighbors"]).ari.mean().unstack().round(3))
+    print(
+        df.groupby(["per_class", "n_neighbors"])[["ari", "knn_accuracy"]]
+        .mean()
+        .unstack()
+        .round(3)
+    )
 
 
 if __name__ == "__main__":
